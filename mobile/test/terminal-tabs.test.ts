@@ -7,6 +7,8 @@
  */
 import { describe, expect, test } from "bun:test";
 import { bestSession, paneTabs } from "../src/terminal/tabs.ts";
+import { seeTab, tabWord, unread } from "../src/terminal/windows.ts";
+import type { WindowStatus } from "../../shared/windowStatus.ts";
 import type { AgentPane } from "../../shared/types.ts";
 
 const sessionsOf = (tabs: readonly { session: string }[]): string[] => [...new Set(tabs.map((t) => t.session))];
@@ -317,5 +319,69 @@ describe("servers that are not ours", () => {
       { ...base, session: "agx-phone-%9-abc", sessionId: "$4", paneId: "%4", own: true },
     ]);
     expect(tabs.map((t) => t.session)).toEqual(["work"]);
+  });
+});
+
+/*
+ * What a tab says about its window, in the strip's own words.
+ *
+ * The strip used to carry a colour and nothing else, so "which one is finished
+ * and which one is waiting" was a question only a person who could tell amber
+ * from green could answer. A word is the same answer for everybody.
+ */
+describe("the words on a tab", () => {
+  const NONE: ReadonlySet<string> = new Set();
+  const withStatus = (status: WindowStatus | undefined) => paneTabs([pane({ status })])[0]!;
+
+  test("working · finished · waiting · idle, one word each", () => {
+    const tabs = [
+      withStatus("working"), withStatus("done"), withStatus("waiting"), withStatus("idle"),
+    ];
+    expect(tabs.map((t) => tabWord(t, NONE))).toEqual(["working", "finished", "waiting", "idle"]);
+  });
+
+  test("a window with no agent reads idle, because nothing is running in it", () => {
+    expect(tabWord(withStatus(undefined), NONE)).toBe("idle");
+  });
+
+  test("a gate waiting on you is waiting ahead of the poll", () => {
+    const tab = withStatus("working");
+    expect(tabWord(tab, new Set([tab.paneId]))).toBe("waiting");
+  });
+});
+
+/*
+ * The dot is "there is something here you have not looked at", not the state
+ * itself: a window that is working is not news, and one that finished while you
+ * were in another tab is. Tapping the tab is how it goes.
+ */
+describe("the dot on a tab", () => {
+  const NONE: ReadonlySet<string> = new Set();
+  const withStatus = (status: WindowStatus | undefined) => paneTabs([pane({ status })])[0]!;
+
+  test("stands on finished and waiting, and not on working or idle", () => {
+    expect(unread(withStatus("done"), NONE, {})).toBe(true);
+    expect(unread(withStatus("waiting"), NONE, {})).toBe(true);
+    expect(unread(withStatus("error"), NONE, {})).toBe(true);
+    expect(unread(withStatus("working"), NONE, {})).toBe(false);
+    expect(unread(withStatus("idle"), NONE, {})).toBe(false);
+  });
+
+  test("goes when the tab is tapped", () => {
+    const done = withStatus("done");
+    expect(unread(done, NONE, seeTab({}, done, NONE))).toBe(false);
+  });
+
+  test("and comes back when the window works again and then finishes", () => {
+    const working = withStatus("working");
+    const seen = seeTab({}, working, NONE);
+    expect(unread(withStatus("done"), NONE, seen)).toBe(true);
+  });
+
+  test("seeing one window does not clear another's", () => {
+    const first = withStatus("done");
+    const second = paneTabs([pane({ status: "done", paneId: "%2" })])[0]!;
+    const seen = seeTab({}, first, NONE);
+    expect(unread(second, NONE, seen)).toBe(true);
   });
 });

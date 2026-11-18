@@ -28,6 +28,7 @@
  * the person, not by closing its alerts on the desk.
  */
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
+import { heldByQuiet, type QuietPref } from "../model/quietHours.ts";
 import { oneLine } from "../../../shared/notifyPayload.ts";
 import type { CardNote, PrWatchFire } from "../../../shared/types.ts";
 import { SAME_ALERT_MS } from "./policy.ts";
@@ -48,7 +49,7 @@ export interface WatchItem {
   /** Server time it was raised; only set for an alert read back from the server. */
   at?: number;
   pr?: { repo: string; number: number; root?: string };
-  card?: { id: string };
+  card?: { id: string; jira?: boolean };
 }
 
 /** What `notify.ts` draws. `tag` replaces: the same tag is the same notification. */
@@ -58,7 +59,7 @@ export interface WatchRaise {
   body: string;
   urgent: boolean;
   /** Rides in the notification and comes back on a tap, as untrusted data. */
-  data: { kind: "watch"; pr?: number; repo?: string; root?: string; card?: string; alertId?: string; summary?: true };
+  data: { kind: "watch"; pr?: number; repo?: string; root?: string; card?: string; jira?: true; alertId?: string; summary?: true };
 }
 
 /** Frame text is data of unknown type: anything that is not a string is nothing. */
@@ -104,24 +105,30 @@ export function itemFromAsked(a: AskedAlert): WatchItem | null {
 }
 
 /**
- * A card of yours that moved. Only what somebody SAID: a comment or a mention.
- * A status or assignment note carries no author, so it includes the person's
- * own moves, and the desk draws those in the bell without an OS pop-up too.
- * Jira cards have no screen on the phone.
+ * A card of yours that moved. What somebody SAID (a comment or a mention), and
+ * a move somebody ELSE made: a status note counts only when the server read the
+ * author from the provider and it was not this account (`byMe === false`).
+ * Without that (ClickUp names nobody; an unread changelog) it could be the
+ * person's own move, and the desk draws those in the bell without an OS pop-up.
+ * An assignment note carries no author, so it stays out.
+ * A Jira card rides with `jira: true`, because its tap goes to `/jira/[key]`
+ * and a ClickUp custom id has the same shape.
  */
 export function itemFromCard(c: CardNote): WatchItem | null {
-  if (!c || c.tracker === "jira" || !validCardId(c.id)) return null;
-  if (c.kind !== "comment" && c.kind !== "mention") return null;
+  if (!c || !validCardId(c.id)) return null;
+  const moved = c.kind === "status" && c.byMe === false && !!str(c.who);
+  if (c.kind !== "comment" && c.kind !== "mention" && !moved) return null;
   const label = oneLine(str(c.label) || c.id, 40);
   const who = oneLine(str(c.who) || "Somebody", 40);
-  const title = c.kind === "mention" ? `${who} mentioned you on ${label}` : `${who} commented on ${label}`;
-  const body = oneLine(str(c.said) || str(c.title), BODY_MAX);
+  const title = moved ? `${who} moved ${label} to ${oneLine(str(c.status), 40)}`
+    : c.kind === "mention" ? `${who} mentioned you on ${label}` : `${who} commented on ${label}`;
+  const body = oneLine(moved ? str(c.title) : str(c.said) || str(c.title), BODY_MAX);
   return {
-    id: `card:${c.id}:${c.kind}:${str(c.status)}:${str(c.said)}`,
-    group: `card:${c.id}`,
+    id: `card:${c.tracker === "jira" ? "jira:" : ""}${c.id}:${c.kind}:${str(c.status)}:${str(c.said)}`,
+    group: `card:${c.tracker === "jira" ? "jira:" : ""}${c.id}`,
     title: oneLine(title, TITLE_MAX), body,
     urgent: c.kind === "mention",
-    card: { id: c.id },
+    card: { id: c.id, ...(c.tracker === "jira" ? { jira: true } : null) },
   };
 }
 
@@ -133,7 +140,7 @@ const raiseOf = (i: WatchItem): WatchRaise => ({
   data: {
     kind: "watch",
     ...(i.pr ? { pr: i.pr.number, repo: i.pr.repo, ...(i.pr.root ? { root: i.pr.root } : {}) } : {}),
-    ...(i.card ? { card: i.card.id } : {}),
+    ...(i.card ? { card: i.card.id, ...(i.card.jira ? { jira: true as const } : null) } : {}),
     ...(i.alertId ? { alertId: i.alertId } : {}),
   },
 });
@@ -147,11 +154,15 @@ export interface WatchContext {
    *  the one that arrives second finds the first. */
   handled: Map<string, number>;
   now: number;
+  /** This phone's quiet hours; absent is "asked nothing". */
+  quiet?: QuietPref;
+  /** The computer's own Do Not Disturb is on. Absent or false is "not asked, or off". */
+  dnd?: boolean;
 }
 
 export type WatchVerdict =
   | { notify: true; raise: WatchRaise }
-  | { notify: false; because: "off" | "foreground" | "repeat" | "empty" };
+  | { notify: false; because: "off" | "foreground" | "repeat" | "empty" | "quiet" | "dnd" };
 
 /**
  * Should this one fire buzz?
@@ -163,6 +174,8 @@ export type WatchVerdict =
  *   * `repeat` — the same event inside `SAME_ALERT_MS`: a live frame and the
  *     catch-up after a reconnect can carry one fire between them.
  *   * `empty` — nothing to say.
+ *   * `dnd` — the computer's Do Not Disturb is on: the person silenced the
+ *     desk, and a phone in the same pocket does not undo that.
  */
 export function decideLive(item: WatchItem | null, ctx: WatchContext): WatchVerdict {
   if (!item || !item.title.trim()) return { notify: false, because: "empty" };
@@ -170,6 +183,10 @@ export function decideLive(item: WatchItem | null, ctx: WatchContext): WatchVerd
   const at = ctx.handled.get(item.id);
   if (at !== undefined && ctx.now - at < SAME_ALERT_MS) return { notify: false, because: "repeat" };
   if (ctx.foreground) return { notify: false, because: "foreground" };
+  if (ctx.dnd) return { notify: false, because: "dnd" };
+  // A watch fire is news, never a stopped agent, so quiet hours hold all of it:
+  // the fire is already in the Inbox, with the time it happened.
+  if (ctx.quiet && heldByQuiet(ctx.quiet, 1, new Date(ctx.now))) return { notify: false, because: "quiet" };
   return { notify: true, raise: raiseOf(item) };
 }
 
@@ -226,7 +243,13 @@ export function decideCatchUp(items: (WatchItem | null)[], cursor: Cursor, ctx: 
   const next = after.reduce((c, i) => advanceCursor(c, i.at ?? 0, i.id), cursor);
   const fresh = after.filter((i) => !ctx.handled.has(i.id));
   const seen = fresh.map((i) => i.id);
-  if (!fresh.length || !ctx.enabled || ctx.foreground) return { raise: null, seen, cursor: next };
+  // DND, like the switch and an open screen, counts as told: `seen` and the cursor
+  // move on, so a fire raised during DND is dropped on purpose and never replayed
+  // when DND ends (it stays in the Inbox). Same choice as quiet hours below.
+  if (!fresh.length || !ctx.enabled || ctx.foreground || ctx.dnd) return { raise: null, seen, cursor: next };
+  // Held by quiet hours: `seen` still carries them, so the night's fires are
+  // not replayed at 07:00 as a pile of notifications. They are in the Inbox.
+  if (ctx.quiet && heldByQuiet(ctx.quiet, 1, new Date(ctx.now))) return { raise: null, seen, cursor: next };
 
   const latest = new Map<string, WatchItem>();
   for (const i of [...fresh].sort((a, b) => (a.at ?? 0) - (b.at ?? 0))) latest.set(i.group, i);

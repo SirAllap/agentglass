@@ -10,23 +10,19 @@
 import { useEffect, useState } from "react";
 import { View } from "react-native";
 import { Redirect } from "expo-router";
-import { BAR, launchRoute, taskDestinations, type TabRoute } from "../../src/nav/bar.ts";
+import { BAR, launchRoute, type TabRoute } from "../../src/nav/bar.ts";
 import { readLastTab } from "../../src/nav/last.ts";
-import { useAgentglass } from "../../src/state/host-context.tsx";
-import { useTracksWork } from "../../src/state/use-tracks-work.ts";
 import { C } from "../../src/theme.ts";
 
 export default function Launch(): React.ReactNode {
-  const { host } = useAgentglass();
-  const offered = taskDestinations(BAR, useTracksWork(host));
   const [to, setTo] = useState<TabRoute | null>(null);
 
   useEffect(() => {
     let alive = true;
-    void readLastTab().then((stored) => { if (alive) setTo(launchRoute(stored, offered)); });
+    void readLastTab().then((stored) => { if (alive) setTo(launchRoute(stored, BAR)); });
     return () => { alive = false; };
-    // Read once. `offered` changing later (the providers answering) must not
-    // move somebody off a screen they have already started using.
+    // Read once. A destination added to the bar later must not move somebody
+    // off a screen they have already started using.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

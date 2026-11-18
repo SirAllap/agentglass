@@ -6,33 +6,47 @@
  */
 import { Pressable, Text, View } from "react-native";
 import type { PrSummary } from "../../../shared/types.ts";
+import type { JiraReach } from "../../../shared/taskref.ts";
 import type { Host } from "../lib/host.ts";
+import { ago } from "../model/cardStatus.ts";
 import { usePrCard } from "../state/pr-cards.ts";
 import { Avatar, AvatarStack, AVATAR } from "../Avatar.tsx";
-import type { MergeBanner, ReviewerRow } from "../model/prOverview.ts";
+import type { ReviewerRow } from "../model/prOverview.ts";
+import type { Tone } from "../model/prLook.ts";
 import type { CardLine } from "../model/prCard.ts";
 import { Glyph, type GlyphName } from "../nav/glyphs.tsx";
-import { Group, GroupTitle, toneInk } from "../ui.tsx";
+import { Card, Chip, GroupTitle } from "../ui.tsx";
 import { CardChip } from "./PrCard.tsx";
 import { RoleBadge } from "./Bubble.tsx";
 import { C, RADIUS, SPACE, T, tint } from "../theme.ts";
 
-const BANNER_GLYPH = { bad: "x_circle", warn: "alert", good: "ok_circle", neutral: "merge", accent: "merge" } as const satisfies Record<string, GlyphName>;
-
 /** "Merging is blocked", and why. It is the door to the merge sheet on an open
- *  pull request, so it is a button only then. */
-export function MergeBannerCard({ banner, onPress }: { banner: MergeBanner; onPress?: () => void }): React.ReactNode {
-  const ink = banner.tone === "neutral" ? C.text2 : toneInk(banner.tone);
+ *  pull request, so it is a button only then.
+ *
+ *  The mock's strip (32) leads with the run — "2 of 3 jobs passed", and which
+ *  job you are waiting for — and says the merge situation underneath. The
+ *  surface is the accent's wash whichever way the verdict went: this is the
+ *  screen's lead, and a red block on a phone is the whole top of the page. */
+export function MergeBannerCard({ chip, when, text, onPress }: {
+  chip: { label: string; tone: Tone; icon?: React.ReactNode };
+  when?: string | null;
+  text: string;
+  onPress?: () => void;
+}): React.ReactNode {
   const body = (
     <View style={{
-      gap: SPACE.xs, padding: SPACE.lg, borderRadius: RADIUS.lg, borderWidth: 1,
-      borderColor: tint(ink, 0.4), backgroundColor: tint(ink, 0.12),
+      gap: SPACE.sm, paddingVertical: 12, paddingHorizontal: 13, borderRadius: 16,
+      backgroundColor: tint(C.primary, 0.14),
     }}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}>
-        <Glyph name={BANNER_GLYPH[banner.tone]} color={ink} size={20} weight={2} />
-        <Text style={{ color: ink, fontSize: T.body + 1, fontWeight: "700", flex: 1 }}>{banner.title}</Text>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+        <Chip label={chip.label} tone={chip.tone} icon={chip.icon} />
+        {when ? (
+          <Text numberOfLines={1} style={{ marginLeft: "auto", color: C.text3, fontSize: T.small }}>
+            {when}
+          </Text>
+        ) : null}
       </View>
-      <Text style={{ color: C.text, fontSize: T.body, lineHeight: 20 }}>{banner.text}</Text>
+      <Text style={{ color: C.text2, fontSize: 13, lineHeight: 19 }}>{text}</Text>
     </View>
   );
   if (!onPress) return body;
@@ -44,38 +58,45 @@ export function MergeBannerCard({ banner, onPress }: { banner: MergeBanner; onPr
 }
 
 /** Each reviewer with where they stand. Automation is shown and tagged: it can
- *  approve, and a reader should see that it was a machine that did. */
-export function ReviewersCard({ rows }: { rows: readonly ReviewerRow[] }): React.ReactNode {
+ *  approve, and a reader should see that it was a machine that did. The row is
+ *  the mock's (32): a 34-point face, the name over when they last said
+ *  something, and the verdict as a chip on the right.
+ *
+ *  The section head is the screen's, because it carries a button ("Request")
+ *  that opens a sheet the screen owns; this draws only the card. */
+export function ReviewersCard({ rows, now }: { rows: readonly ReviewerRow[]; now: number }): React.ReactNode {
   if (!rows.length) return null;
   return (
-    <View>
-      <GroupTitle text="Reviewers" />
-      <Group inset={SPACE.lg + AVATAR.rail + SPACE.md}>
-        {rows.map((r) => {
-          const ink = r.tone === "neutral" ? C.text3 : toneInk(r.tone);
+      <Card style={{ padding: 0, gap: 0 }}>
+        {rows.map((r, i) => {
+          const when = r.at ? `${r.said} ${ago(r.at, now)}` : r.said;
           return (
             <View
               key={r.key}
               accessibilityLabel={`${r.login}${r.bot ? ", automation" : ""}: ${r.word}`}
-              style={{ flexDirection: "row", alignItems: "center", gap: SPACE.md, minHeight: 56, paddingHorizontal: SPACE.lg, paddingVertical: SPACE.sm }}
+              style={{
+                flexDirection: "row", alignItems: "center", gap: SPACE.md, minHeight: 54,
+                paddingHorizontal: 12, paddingVertical: 10,
+                borderTopWidth: i ? 1 : 0, borderTopColor: C.border,
+              }}
             >
               {r.team
                 ? <View style={{ width: AVATAR.rail, height: AVATAR.rail, borderRadius: AVATAR.rail / 2, backgroundColor: C.bg3, alignItems: "center", justifyContent: "center" }}>
                     <Glyph name="people" color={C.text2} size={18} />
                   </View>
                 : <Avatar name={r.login} login={r.login} bot={r.bot} size={AVATAR.rail} />}
-              <Text numberOfLines={1} style={{ color: C.text, fontSize: 15, fontWeight: "500", flexShrink: 1 }}>{r.login}</Text>
-              {r.bot ? <RoleBadge text="BOT" /> : null}
-              <View style={{ flex: 1 }} />
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                <Glyph name={r.glyph} color={ink} size={16} weight={2.2} />
-                <Text style={{ color: ink, fontSize: T.small, fontWeight: "700" }}>{r.word}</Text>
+              <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  <Text numberOfLines={1} style={{ color: C.text, fontSize: 13.5, fontWeight: "600" }}>{r.login}</Text>
+                  {r.bot ? <RoleBadge text="BOT" /> : null}
+                </View>
+                <Text numberOfLines={1} style={{ color: C.text3, fontSize: T.small }}>{when}</Text>
               </View>
+              <Chip label={r.chip} tone={r.tone} />
             </View>
           );
         })}
-      </Group>
-    </View>
+      </Card>
   );
 }
 
@@ -106,12 +127,23 @@ export function LinkedCardRow({ card, onOpen }: { card: CardLine; onOpen?: () =>
  * already hold, which costs no request. Nothing is drawn until there is a card
  * to show; the title's chip is the door for one that has to be looked up,
  * because a lookup that costs a tracker request is the person's to ask for.
+ *
+ * The card names its own tracker, so a tap opens the screen that can draw it:
+ * a Jira key is not a ClickUp id even when the two strings look alike.
  */
-export function LinkedCard({ host, pr, tracked, onOpen }: {
-  host: Host; pr: PrSummary; tracked: boolean | null; onOpen?: (id: string) => void;
+export function LinkedCard({ host, pr, tracked, jira, onOpen }: {
+  host: Host; pr: PrSummary; tracked: boolean | null; jira?: JiraReach | null;
+  onOpen?: (id: string, tracker: "clickup" | "jira") => void;
 }): React.ReactNode {
-  const { state } = usePrCard(host, pr, tracked);
+  const { state } = usePrCard(host, pr, tracked, jira);
   if (state.kind !== "card") return null;
-  const id = state.card.id;
-  return <LinkedCardRow card={state.card} onOpen={onOpen ? () => onOpen(id) : undefined} />;
+  const jiraCard = state.card.tracker === "jira";
+  // Jira's own key is the human one; ClickUp keeps its plain task id.
+  const id = jiraCard ? state.card.customId ?? state.card.id : state.card.id;
+  return (
+    <LinkedCardRow
+      card={state.card}
+      onOpen={onOpen ? () => onOpen(id, jiraCard ? "jira" : "clickup") : undefined}
+    />
+  );
 }

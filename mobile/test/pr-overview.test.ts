@@ -6,7 +6,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { PrCheckRollup, PrReview, PrThread } from "../../shared/types.ts";
-import { mergeBanner, reviewerRows } from "../src/model/prOverview.ts";
+import { lastSaid, mergeBanner, reviewerRows } from "../src/model/prOverview.ts";
 
 const checks = (over: Partial<PrCheckRollup> = {}): PrCheckRollup =>
   ({ total: 4, success: 4, failure: 0, skipped: 0, pending: 0, allDone: true, verdict: "green", failing: [], ...over });
@@ -90,7 +90,51 @@ describe("reviewerRows", () => {
     expect(r.find((x) => x.login === "core")).toMatchObject({ team: true, word: "Team pending" });
   });
 
+  test("each row carries the mock's chip word and when they last said it", () => {
+    expect(rows[0]).toMatchObject({ chip: "changes", said: "asked for changes" });
+    expect(rows[0]!.at).toBe(Date.parse("2026-09-30T10:00:00Z"));
+    expect(rows[1]).toMatchObject({ chip: "waiting", at: undefined });
+  });
+
   test("nobody asked, nobody reviewed: no rows, so no empty card", () => {
     expect(reviewerRows({ ...d, reviews: [], reviewers: [] })).toEqual([]);
+  });
+});
+
+/* The Overview's Talk preview (mock 32): the newest thing anybody wrote. */
+const said = (over: Record<string, unknown>) => lastSaid({
+  comments: [], reviews: [], threads: [], ...over,
+} as Parameters<typeof lastSaid>[0]);
+
+describe("the last thing said", () => {
+  test("nothing said draws nothing", () => {
+    expect(said({})).toBeNull();
+  });
+
+  test("the newest remark wins, whichever kind it is", () => {
+    const out = said({
+      comments: [{ id: "c1", author: "ada", body: "first", createdAt: "2026-09-01T10:00:00Z" }],
+      reviews: [{ author: "bob", isBot: false, state: "APPROVED", body: "later", submittedAt: "2026-09-01T11:00:00Z" }],
+    });
+    expect(out).toMatchObject({ who: "bob", text: "later" });
+    expect(out!.when).toBe(Date.parse("2026-09-01T11:00:00Z"));
+  });
+
+  test("a thread is dated and quoted by its first remark", () => {
+    const out = said({
+      threads: [{ id: "t9", isResolved: false, comments: [
+        { author: "cy", body: "on this line", createdAt: "2026-09-01T09:00:00Z" },
+        { author: "ada", body: "answered", createdAt: "2026-09-01T12:00:00Z" },
+      ] }],
+    });
+    expect(out).toMatchObject({ who: "cy", text: "on this line" });
+  });
+
+  test("a review that says nothing is not the last word", () => {
+    const out = said({
+      comments: [{ id: "c1", author: "ada", body: "the only words", createdAt: "2026-09-01T10:00:00Z" }],
+      reviews: [{ author: "bob", isBot: false, state: "COMMENTED", body: "", submittedAt: "2026-09-01T11:00:00Z" }],
+    });
+    expect(out).toMatchObject({ who: "ada", text: "the only words" });
   });
 });

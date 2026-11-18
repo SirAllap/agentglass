@@ -21,7 +21,7 @@ describe("sumIssueCounts", () => {
   });
 });
 
-const src = (await Bun.file(new URL("../app/(tabs)/issues.tsx", import.meta.url)).text())
+const src = (await Bun.file(new URL("../src/issues/IssueList.tsx", import.meta.url)).text())
   .split("\n").filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*")).join("\n");
 
 describe("the Issues screen", () => {

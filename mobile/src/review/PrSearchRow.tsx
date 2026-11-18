@@ -12,10 +12,13 @@ import { C, ink, RADIUS, SPACE, T } from "../theme.ts";
 const H = 48;
 
 export function PrSearchRow({
-  value, onChange, active = 0, onFilters, placeholder = "Search title, #number, author, branch", label = "Search pull requests",
+  value, onChange, active = 0, onFilters, onClose, placeholder = "Search title, #number, author, branch", label = "Search pull requests",
 }: {
   value: string;
   onChange: (text: string) => void;
+  /** Put the field away again. Without it the row is the only way to search,
+   *  so it stays open. */
+  onClose?: () => void;
   /** How many facets are on. */
   active?: number;
   /** Without it there is no filter button: the card list's sheet uses this row
@@ -45,6 +48,11 @@ export function PrSearchRow({
         />
         {value ? (
           <Pressable accessibilityRole="button" accessibilityLabel="Clear search" onPress={() => onChange("")}
+            style={{ width: H, height: H, alignItems: "center", justifyContent: "center" }}>
+            <Glyph name="close" color={C.text3} size={18} />
+          </Pressable>
+        ) : onClose ? (
+          <Pressable accessibilityRole="button" accessibilityLabel="Close search" onPress={onClose}
             style={{ width: H, height: H, alignItems: "center", justifyContent: "center" }}>
             <Glyph name="close" color={C.text3} size={18} />
           </Pressable>

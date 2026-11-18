@@ -17,7 +17,7 @@ const code = (s: string): string =>
 describe("one surface", () => {
   test("the pane screen draws nothing in the phone's palette before its sheets", () => {
     const start = src.indexOf("const K = paneColours;");
-    const sheets = src.indexOf("<Sheet open={more}");
+    const sheets = src.search(/<ThisWindowSheet\s+more=\{more\}/);
     expect(start).toBeGreaterThan(-1);
     expect(sheets).toBeGreaterThan(start);
     const drawn = code(src.slice(start, sheets));

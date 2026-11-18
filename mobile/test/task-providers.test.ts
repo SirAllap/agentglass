@@ -1,20 +1,20 @@
 /*
- * Whether this machine tracks work anywhere, and what the bar does about it.
+ * Whether this machine tracks work anywhere, and which tracker the Tasks tab
+ * reads.
  *
  * The question this app was getting wrong is not "is ClickUp connected". It is
  * the general one — ClickUp is one task provider of several, and a phone that
- * offers a Cards row to somebody who tracks work in Taskwarrior, or in nothing
- * at all, is showing them somebody else's product.
+ * reads ClickUp's board for somebody who tracks work in Taskwarrior, or in
+ * nothing at all, is showing them somebody else's product.
  *
- * Two failures are guarded here and they fail in opposite directions. Showing
- * the row when there is no board costs a tap to learn nothing. HIDING it on an
- * answer that never arrived costs the row itself, and there is no way to get it
- * back from the phone: providers are connected at the computer.
+ * The bar's own answer to this question went away with the Issues fold: Tasks
+ * is a destination for every machine now, because GitHub issues need no
+ * provider. What the answer still decides is which SOURCE the pill offers —
+ * see test/tasks-sources.test.ts.
  */
 import { describe, expect, test } from "bun:test";
 import type { ProviderId, ProviderState, ProviderStatus } from "../../shared/providers.ts";
 import { providerTitle, taskProvider, tracksWork } from "../src/model/taskProviders.ts";
-import { BAR, taskDestinations, type Destination } from "../src/nav/bar.ts";
 
 const at = (id: ProviderId, state: ProviderState): ProviderStatus => ({ id, state });
 
@@ -24,9 +24,10 @@ describe("tracksWork", () => {
     expect(tracksWork([at("taskwarrior", "connected")])).toBe(true);
   });
 
-  test("a connected Jira does not switch the Cards tab on: nothing here can show its cards yet", () => {
-    expect(tracksWork([at("clickup", "needs-auth"), at("jira", "connected")])).toBe(false);
-    expect(taskProvider([at("clickup", "needs-auth"), at("jira", "connected")])).toBeNull();
+  test("a connected Jira is a tracker now that the phone reads its board", () => {
+    expect(tracksWork([at("clickup", "needs-auth"), at("jira", "connected")])).toBe(true);
+    expect(taskProvider([at("clickup", "needs-auth"), at("jira", "connected")])?.id).toBe("jira");
+    // A non-Jira tracker still wins the generic `tracker` slot, where the list is.
     expect(taskProvider([at("clickup", "connected"), at("jira", "connected")])?.id).toBe("clickup");
   });
 
@@ -62,46 +63,6 @@ describe("tracksWork", () => {
        recoverable by ignoring it. */
     expect(tracksWork([])).toBe(null);
     expect(tracksWork([at("github", "connected")])).toBe(null);
-  });
-});
-
-describe("taskDestinations", () => {
-  const all: Destination[] = BAR;
-
-  test("keeps cards when something is tracked", () => {
-    expect(taskDestinations(all, true).map((d) => d.route)).toContain("tasks");
-  });
-
-  test("keeps cards while the answer is unknown", () => {
-    // The recoverable direction, and the same one the desk takes.
-    expect(taskDestinations(all, null).map((d) => d.route)).toContain("tasks");
-  });
-
-  test("drops cards when nothing is tracked", () => {
-    expect(taskDestinations(all, false).map((d) => d.route)).not.toContain("tasks");
-  });
-
-  test("drops cards and nothing else", () => {
-    /* There is nothing to promote in its place: four is not an arithmetic
-       the bar needs to keep, the way the odd count that centred the star was. */
-    const before = all.map((d) => d.route);
-    const after = taskDestinations(all, false).map((d) => d.route);
-    expect(after).toEqual(before.filter((r) => r !== "tasks"));
-  });
-
-  test("the order is never rearranged", () => {
-    for (const answer of [true, false, null]) {
-      const got = taskDestinations(all, answer).map((d) => d.route);
-      expect(got).toEqual(all.map((d) => d.route).filter((r) => got.includes(r)));
-    }
-  });
-
-  test("BAR itself is untouched — it is the claim, not the drawing", () => {
-    // Every other reader of BAR (the launch route, keyLayout's ordering)
-    // still sees the four this app is for.
-    taskDestinations(all, false);
-    expect(BAR.map((d) => d.route)).toContain("tasks");
-    expect(BAR.length).toBe(4);
   });
 });
 

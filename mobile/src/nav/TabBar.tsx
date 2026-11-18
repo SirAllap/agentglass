@@ -1,5 +1,5 @@
 /*
- * The bar: four destinations, the terminal first.
+ * The bar: three destinations, the terminal first.
  *
  * Written by hand rather than configured, because the stock bar pads each item
  * and centres a label under an icon, and this one draws the active destination
@@ -12,7 +12,7 @@
  * For a while there was no bar: the Inbox was where the app arrived and every
  * other screen was a place it sent you, with a way back in each header. That
  * made every move between two destinations two moves, through a screen nobody
- * came for. The four are peers, and a bar is 64 points plus the gesture inset
+ * came for. The three are peers, and a bar is 64 points plus the gesture inset
  * well spent on peers — and handed back while typing, below.
  *
  * ── the keyboard ─────────────────────────────────────────────────────────
@@ -23,48 +23,41 @@
  * this app draws its own, so the option is a no-op here and the rule has to be
  * in this file. While a keyboard is up the bar is not drawn at all.
  *
- * ── the two numbers, and the two it does not carry ────────────────────────
- * Terminal counts the gates held on you and PRs counts the reviews requested
- * of you. Both are lists the store already holds for every screen, so the
- * numbers cost nothing to keep current and cannot go stale on one screen while
- * another is right.
- *
- * Issues and cards carry none. Each would be another request on a component
- * that is mounted on every screen, and a number built from what happens to be
- * loaded would UNDERCOUNT silently, by exactly the rows it could not see — and
- * the one thing a badge cannot afford is to be a number nobody believes.
+ * ── it draws no numbers ──────────────────────────────────────────────────
+ * The bar used to carry gates on Terminal and reviews on PRs. One count has one
+ * home, and it is the bell in the header (app/(tabs)/_layout.tsx), which counts
+ * the Inbox's rows. A number here would be a second answer to the same
+ * question, computed from a different list — the kind of badge that is wrong
+ * exactly once and never trusted again. `test/bar-counts-gone.test.ts` reads
+ * this file to keep it that way.
  */
 import { useEffect } from "react";
 import { Pressable, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { BottomTabBarProps } from "expo-router/build/react-navigation/bottom-tabs";
-import { useAgentglass } from "../state/host-context.tsx";
 import { useKeyboardShown } from "../state/use-keyboard.ts";
-import { useTracksWork } from "../state/use-tracks-work.ts";
-import { C, RADIUS, SPACE, T, ink, tint } from "../theme.ts";
-import { BAR, taskDestinations, type TabRoute } from "./bar.ts";
+import { C, RADIUS, SPACE, T, tint } from "../theme.ts";
+import { BOARD_FRAME } from "../model/boardChrome.ts";
+import { BAR, type TabRoute } from "./bar.ts";
 import { rememberTab } from "./last.ts";
 import { useTerminalPalette } from "./barPalette.ts";
-import { IssuesIcon, PrsIcon, TasksIcon, TerminalIcon, type IconProps } from "./icons.tsx";
+import { PrsIcon, TasksIcon, TerminalIcon, type IconProps } from "./icons.tsx";
 
-/** Only the four the bar draws — the compiler is what keeps this in step with
+/** Only the three the bar draws — the compiler is what keeps this in step with
  *  BAR, so a destination added there without a mark does not build. */
-const ICON: Record<"terminal" | "prs" | "issues" | "tasks", (p: IconProps) => React.ReactNode> = {
+const ICON: Record<"terminal" | "prs" | "tasks", (p: IconProps) => React.ReactNode> = {
   terminal: TerminalIcon,
   prs: PrsIcon,
-  issues: IssuesIcon,
   tasks: TasksIcon,
 };
 
-/** The bar's own height above the gesture inset: a 32-point indicator, its
- *  label, and the breathing room Material gives both. */
-export const BAR_HEIGHT = 64;
+/** The bar's own height above the gesture inset (52, the mock's): the icon,
+ *  its label, and the breathing room Material gives both. */
+export const BAR_HEIGHT = BOARD_FRAME.nav;
 
 export function TabBar({ state, navigation }: BottomTabBarProps): React.ReactNode {
   const insets = useSafeAreaInsets();
   const typing = useKeyboardShown();
-  const { host, fleet } = useAgentglass();
-  const offered = taskDestinations(BAR, useTracksWork(host));
   const here = state.routes[state.index]?.name as TabRoute | undefined;
   /* Under the terminal the bar is the last strip of the pane's surface — see
      barPalette.ts. Everywhere else, the phone's. */
@@ -77,15 +70,6 @@ export function TabBar({ state, navigation }: BottomTabBarProps): React.ReactNod
 
   if (typing) return null;
 
-  const counts: Partial<Record<TabRoute, number>> = {
-    terminal: fleet.gates.length,
-    prs: new Set(
-      fleet.prs
-        .filter((r) => r.scope === "review" && r.pr.author !== fleet.me)
-        .map((r) => `${r.repo}#${r.pr.number}`),
-    ).size,
-  };
-
   return (
     <View
       accessibilityRole="tablist"
@@ -97,12 +81,11 @@ export function TabBar({ state, navigation }: BottomTabBarProps): React.ReactNod
         paddingBottom: insets.bottom,
       }}
     >
-      {offered.map((dest) => {
+      {BAR.map((dest) => {
         const route = state.routes.find((r) => r.name === dest.route);
         if (!route) return null;
         const on = here === dest.route;
         const Icon = ICON[dest.route as keyof typeof ICON];
-        const n = counts[dest.route] ?? 0;
         const onPress = (): void => {
           const event = navigation.emit({ type: "tabPress", target: route.key, canPreventDefault: true });
           if (!on && !event.defaultPrevented) navigation.navigate(route.name, route.params);
@@ -112,7 +95,7 @@ export function TabBar({ state, navigation }: BottomTabBarProps): React.ReactNod
             key={dest.route}
             accessibilityRole="tab"
             accessibilityState={{ selected: on }}
-            accessibilityLabel={n > 0 ? `${dest.label}, ${n} waiting on you` : dest.label}
+            accessibilityLabel={dest.label}
             onPress={onPress}
             style={({ pressed }) => ({
               flex: 1, height: BAR_HEIGHT, alignItems: "center", justifyContent: "center", gap: SPACE.xs,
@@ -120,22 +103,10 @@ export function TabBar({ state, navigation }: BottomTabBarProps): React.ReactNod
             })}
           >
             <View style={{
-              width: 56, height: 32, borderRadius: RADIUS.lg, alignItems: "center", justifyContent: "center",
+              width: 56, height: 28, borderRadius: RADIUS.lg, alignItems: "center", justifyContent: "center",
               backgroundColor: on ? tint(K.primary, 0.22) : "transparent",
             }}>
               {Icon ? <Icon color={on ? K.text : K.text3} size={22} /> : null}
-              {n > 0 ? (
-                <View style={{
-                  position: "absolute", top: 0, left: 32, minWidth: 16, height: 16, borderRadius: 8,
-                  paddingHorizontal: 4, alignItems: "center", justifyContent: "center",
-                  backgroundColor: dest.route === "terminal" ? K.warning : K.primary,
-                }}>
-                  <Text style={{
-                    color: ink(dest.route === "terminal" ? K.warning : K.primary),
-                    fontSize: T.eyebrow, fontWeight: "700", lineHeight: 14,
-                  }}>{n > 99 ? "99+" : n}</Text>
-                </View>
-              ) : null}
             </View>
             <Text style={{
               color: on ? K.text : K.text3, fontSize: T.small, lineHeight: 16,

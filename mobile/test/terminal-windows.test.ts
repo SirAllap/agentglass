@@ -10,7 +10,8 @@ import { describe, expect, test } from "bun:test";
 import type { AgentPane } from "../../shared/types.ts";
 import { paneTabs, readStrip, type Tab } from "../src/terminal/tabs.ts";
 import {
-  dotOf, groupOf, isDirty, rowSub, statusOf, stripFor, subline, switcherGroups, worstOf,
+  dotOf, finishedNotice, groupOf, isDirty, keepNotice, rowSub, statusOf, stripFor, subline,
+  switcherGroups, worstOf,
 } from "../src/terminal/windows.ts";
 
 const pane = (over: Partial<AgentPane>): AgentPane => ({
@@ -188,5 +189,36 @@ describe("the poll notices a window change state", () => {
     expect(readStrip(shape, { canAttach: true, panes: turned }).changed).toBe(true);
     const regrouped = machine.map((p) => (p.windowName === "scratch" ? { ...p, group: "orbit" } : p));
     expect(readStrip(shape, { canAttach: true, panes: regrouped }).changed).toBe(true);
+  });
+});
+
+/*
+ * The finished banner.
+ *
+ * A window that stops working is news, once: the banner names it and offers its
+ * output. tmux reuses a window's NAME, so the banner has to fall when the
+ * strip stops listing the name it was about — a banner that outlives its window
+ * is pointing at somebody else's.
+ */
+describe("the finished banner", () => {
+  const tabOf = (over: Partial<AgentPane>) =>
+    paneTabs([win(2, { windowName: "api-tests", status: "working", ...over })]);
+
+  test("appears when a window finishes, and names the window", () => {
+    const notice = finishedNotice(tabOf({}), tabOf({ status: "done" }), 1000);
+    expect(notice).toEqual({ paneId: "%2", name: "api-tests", at: 1000 });
+  });
+
+  test("does not appear on the first read, or for a window that was already finished", () => {
+    expect(finishedNotice(null, tabOf({ status: "done" }), 1000)).toBeNull();
+    expect(finishedNotice(tabOf({ status: "done" }), tabOf({ status: "done" }), 1000)).toBeNull();
+  });
+
+  test("falls when the strip stops listing that pane", () => {
+    const notice = { paneId: "%2", name: "api-tests", at: 1000 };
+    expect(keepNotice(notice, tabOf({ status: "done" }))).toEqual(notice);
+    expect(keepNotice(notice, [])).toBeNull();
+    // The name came back on another pane: tmux reuses names.
+    expect(keepNotice(notice, paneTabs([win(3, { windowName: "api-tests", status: "done" })]))).toBeNull();
   });
 });

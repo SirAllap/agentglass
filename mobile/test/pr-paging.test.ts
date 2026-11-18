@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { mergeFresh, mergeFreshGroup, nextPageCount } from "../src/model/prPaging.ts";
+import { keepLoadedChecks } from "../../shared/prMerge.ts";
 
 const pr = (number: number, title = `pr ${number}`) => ({ number, title });
 const group = (nums: number[], over: Record<string, unknown> = {}) =>
   ({ root: "/w/orbit", items: nums.map((n) => pr(n)), hasNext: true, cursor: "p1", ...over } as {
     root: string; items: { number: number; title: string }[]; hasNext: boolean; cursor: string | null; total?: number;
   });
+
+const groupOf = <T extends { number: number }>(items: T[], over: Record<string, unknown> = {}) =>
+  ({ root: "/w/orbit", items, hasNext: true, cursor: "p1", ...over });
 
 describe("a refresh with pages already loaded", () => {
   test("keeps the rows of later pages, fresh data wins, order kept", () => {
@@ -88,5 +92,81 @@ describe("the label of the next page", () => {
     const a = group(Array.from({ length: 20 }, (_, i) => i), { total: 23 });
     const b = { ...group([1], { hasNext: false, cursor: null, total: 1 }), root: "/w/other" };
     expect(nextPageCount([a, b], 20)).toBe(3);
+  });
+});
+
+/*
+ * The list arrives in two passes: rows first, the check rollups and the diff
+ * stats seconds behind. A refresh starts at the fast pass again, so without the
+ * carry the card blanked to `checksLoaded: false` and `+0 −0` on every poll —
+ * which the desktop does not do, because it keeps the last complete pass.
+ */
+describe("a refresh does not un-know the second pass", () => {
+  const green = { total: 3, success: 3, failure: 0, skipped: 0, pending: 0, allDone: true, verdict: "green", failing: [] as string[] };
+  type Row = {
+    number: number; title: string; checksLoaded: boolean; additions: number; deletions: number;
+    reviewDecision?: string | null; humanReview?: { kind: string; who: string[] } | null;
+    checks: typeof green;
+  };
+  const loaded = (n: number): Row => ({
+    number: n, title: `pr ${n}`, checks: green, checksLoaded: true, additions: 12, deletions: 3,
+    reviewDecision: "APPROVED", humanReview: { kind: "approved", who: ["cy"] },
+  });
+  const fast = (n: number): Row => ({
+    number: n, title: `pr ${n}`, checksLoaded: false,
+    checks: { total: 0, success: 0, failure: 0, skipped: 0, pending: 0, allDone: false, verdict: null, failing: [] } as unknown as typeof green,
+    additions: 0, deletions: 0,
+  });
+
+  test("a first pass after a loaded answer keeps checks, size, review and merge state", () => {
+    const got = mergeFreshGroup(groupOf([loaded(1)]), groupOf([fast(1)]));
+    expect(got.items[0]).toMatchObject({
+      checksLoaded: true, additions: 12, deletions: 3, reviewDecision: "APPROVED",
+      humanReview: { kind: "approved" }, checks: { verdict: "green" },
+    });
+  });
+
+  test("a real second pass replaces what was carried, empty answers included", () => {
+    const answered = { ...loaded(1), additions: 0, deletions: 0, humanReview: null, reviewDecision: null };
+    const got = mergeFreshGroup(groupOf([loaded(1)]), groupOf([answered]));
+    expect(got.items[0]).toMatchObject({ checksLoaded: true, additions: 0, humanReview: null, reviewDecision: null });
+  });
+});
+
+/*
+ * The board is the screen the two-pass merge was written for, and it was the
+ * one place that did not use it: a pull to refresh replaced all three lists
+ * with the fast pass, so every card read checks "…", review "reading…" and
+ * branch "checking" until the second pass came back. The list kept its carry;
+ * the board did not.
+ */
+describe("the board keeps the second pass", () => {
+  type Row = { number: number; checksLoaded?: boolean; additions: number; reviewDecision?: string | null; humanReview?: { kind: string } | null };
+  const loaded = (n: number): Row => ({ number: n, checksLoaded: true, additions: 12, reviewDecision: "APPROVED", humanReview: { kind: "approved" } });
+  const fast = (n: number): Row => ({ number: n, checksLoaded: false, additions: 0 });
+
+  test("all three lists a board is filed from carry what the second pass filled", () => {
+    const was = { mine: [loaded(1)], review: [loaded(2)], all: [loaded(3)] };
+    const next = { mine: [fast(1)], review: [fast(2)], all: [fast(3)] };
+    const merged = {
+      mine: keepLoadedChecks(was.mine, next.mine),
+      review: keepLoadedChecks(was.review, next.review),
+      all: keepLoadedChecks(was.all, next.all),
+    };
+    for (const rows of Object.values(merged)) {
+      expect(rows[0]).toMatchObject({ checksLoaded: true, additions: 12, reviewDecision: "APPROVED", humanReview: { kind: "approved" } });
+    }
+  });
+
+  test("the screen merges into what it already had, and re-reads after a fast answer", async () => {
+    const src = await Bun.file(new URL("../app/(tabs)/prs.tsx", import.meta.url)).text();
+    expect(src).toContain("setBoardData((was) => ({");
+    expect(src).toContain("keepLoadedChecks(was?.mine ?? [], rowsOf(askedMine))");
+    expect(src).toContain("keepLoadedChecks(was?.review ?? [], rowsOf(askedReview))");
+    // The list re-reads 2.5 s after a fast pass; the board had no re-read at
+    // all, so a board read that landed first-pass stayed first-pass until the
+    // next tick or another pull.
+    const reread = src.slice(src.indexOf("if (!boardReading) return;"));
+    expect(reread.slice(0, 160)).toContain("loadBoard(true)");
   });
 });

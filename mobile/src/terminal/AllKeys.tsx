@@ -6,7 +6,6 @@
  * send one thing from here and another from there.
  */
 import { Pressable, Text, View } from "react-native";
-import { Glyph } from "../nav/glyphs.tsx";
 import { C, MONO, RADIUS, SPACE, T } from "../theme.ts";
 import { Sheet, TAP } from "../ui.tsx";
 import { ALL_KEYS } from "./allKeys.ts";
@@ -29,8 +28,8 @@ export function AllKeysSheet({ open, onClose, held, onKey, onEdit }: {
     <Sheet
       open={open}
       onClose={onClose}
-      title="All keys"
-      subtitle="Tap once to send. Modifiers apply to the next key."
+      title="More keys"
+      subtitle="Every key, in four groups. A modifier applies to the next key."
       footer={(
         <Pressable
           onPress={onEdit}
@@ -42,7 +41,6 @@ export function AllKeysSheet({ open, onClose, held, onKey, onEdit }: {
             backgroundColor: pressed ? C.bg4 : C.bg3,
           })}
         >
-          <Glyph name="sliders" color={C.text} size={20} />
           <Text style={{ color: C.text, fontSize: T.body, fontWeight: "600" }}>Edit the key bar</Text>
         </Pressable>
       )}
@@ -50,9 +48,17 @@ export function AllKeysSheet({ open, onClose, held, onKey, onEdit }: {
       {tip ? <Text style={{ color: C.primary, fontSize: T.small, paddingBottom: SPACE.sm }}>{tip}</Text> : null}
       {ALL_KEYS.map((group) => (
         <View key={group.id} style={{ gap: SPACE.sm, paddingBottom: SPACE.md }}>
-          <Text accessibilityRole="header" style={{ color: C.text3, fontSize: T.eyebrow, fontWeight: "700", letterSpacing: 0.6, textTransform: "uppercase", paddingTop: SPACE.xs }}>
-            {group.title}
-          </Text>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingTop: SPACE.xs }}>
+            <Text accessibilityRole="header" style={{ color: C.text3, fontSize: T.eyebrow, fontWeight: "700", letterSpacing: 0.6, textTransform: "uppercase" }}>
+              {group.title}
+            </Text>
+            <View style={{
+              height: 24, minWidth: 24, paddingHorizontal: SPACE.xs, justifyContent: "center", alignItems: "center",
+              borderRadius: RADIUS.sm, backgroundColor: C.bg3,
+            }}>
+              <Text style={{ color: C.text3, fontSize: T.eyebrow, fontWeight: "700" }}>{group.keys.length}</Text>
+            </View>
+          </View>
           {chunks(group.keys, COLUMNS).map((row, i) => (
             <View key={i} style={{ flexDirection: "row", gap: SPACE.sm }}>
               {row.map((key) => {

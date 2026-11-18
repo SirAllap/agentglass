@@ -115,6 +115,10 @@ function Gate(): React.ReactNode {
       >
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="pair" options={{ title: "Add this phone", headerShown: false }} />
+        {/* Agents and Past sessions draw their own header (the mock's: back,
+            title, subtitle, one chip), so the stack's would be a second one. */}
+        <Stack.Screen name="agents" options={{ headerShown: false }} />
+        <Stack.Screen name="sessions" options={{ headerShown: false }} />
         {/* The conversation is NOT declared here on purpose.
          *
          * expo-router registers every file under `app/` by itself, and a

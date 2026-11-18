@@ -10,16 +10,19 @@
  */
 import { forwardRef, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  ActivityIndicator, KeyboardAvoidingView, Modal, Pressable, ScrollView, Text, TextInput, View,
-  type StyleProp, type TextStyle, type ViewStyle,
+  ActivityIndicator, Animated, Easing, KeyboardAvoidingView, Modal, Pressable, ScrollView, Text,
+  TextInput, View, type StyleProp, type TextStyle, type ViewStyle,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
-import { C, MONO, RADIUS, SCRIM, SPACE, T, ink, tint } from "./theme.ts";
+import { C, MONO, RADIUS, SCRIM, SPACE, T, ink, tint, type Palette } from "./theme.ts";
+import { HOLD_MS, holdsToConfirm, settle, type ConfirmAction } from "./model/confirmPolicy.ts";
 import { ChevronIcon } from "./nav/icons.tsx";
 import { listErrorText } from "./lib/listError.ts";
-import { Glyph } from "./nav/glyphs.tsx";
+import { chipPick } from "./model/chipSelect.ts";
+import { Glyph, type GlyphName } from "./nav/glyphs.tsx";
+import { reducesMotion, rowRoom } from "./uiPrefs.ts";
 
 /**
  * The floor for anything you tap.
@@ -112,6 +115,117 @@ export function Btn({ label, onPress, tone = "plain", busy, disabled, style }: {
       {busy
         ? <ActivityIndicator color={faceInk} />
         : <Text style={{ color: faceInk, fontSize: T.body, fontWeight: "600" }}>{label}</Text>}
+    </Pressable>
+  );
+}
+
+/**
+ * The one hold on this phone: finger down, a fill, 1.4 s, and only then does it
+ * act. Letting go sooner decides nothing and says so.
+ *
+ * The duration and which actions hold live in model/confirmPolicy.ts — one
+ * table, because the alternative is a duration re-decided per screen. This is
+ * the drawing, and the reason it is a hold at all is written there.
+ *
+ * The fill is a width in percent with the JS driver: a native-driven transform
+ * would be smoother, but the one thing this has to show is that the time is
+ * passing, and it lives inside a pill whose width is not fixed.
+ */
+export function HoldButton({ action, label, spoken, onConfirm, onRelease, colors = C, disabled, style }: {
+  action: ConfirmAction;
+  /** What the button says. `Hold to allow` on a gate. */
+  label: string;
+  /** What it acts on, for a screen reader — the command line, the branch. */
+  spoken?: string;
+  onConfirm: () => void;
+  /** A hold let go too early: the line to say, handed to the card that has room
+   *  for it. Absent is a button that cancels silently, which is not a choice
+   *  this screen makes. */
+  onRelease?: (said: string) => void;
+  colors?: Palette;
+  disabled?: boolean;
+  style?: StyleProp<ViewStyle>;
+}): ReactNode {
+  const K = colors;
+  const [holding, setHolding] = useState(false);
+  const fill = useRef(new Animated.Value(0)).current;
+  const started = useRef(0);
+  const confirmed = useRef(false);
+  const hold = holdsToConfirm(action);
+
+  useEffect(() => () => { fill.stopAnimation(); }, [fill]);
+
+  const finish = (): void => {
+    if (confirmed.current) return;
+    confirmed.current = true;
+    started.current = 0;
+    setHolding(false);
+    fill.setValue(0);
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    onConfirm();
+  };
+
+  const begin = (): void => {
+    if (disabled) return;
+    // One press is one hold: a write the computer refused leaves the sheet up,
+    // and the next press has to be able to try again. The parent's own `busy`
+    // is what stops a second press while the first is out.
+    confirmed.current = false;
+    started.current = Date.now();
+    setHolding(true);
+    fill.setValue(0);
+    Animated.timing(fill, {
+      toValue: 1, duration: HOLD_MS, easing: Easing.linear, useNativeDriver: false,
+    }).start(({ finished }) => { if (finished) finish(); });
+  };
+
+  const end = (): void => {
+    if (!started.current || confirmed.current) return;
+    const settled = settle(action, Date.now() - started.current);
+    fill.stopAnimation();
+    fill.setValue(0);
+    if (settled.decided) { finish(); return; }
+    started.current = 0;
+    setHolding(false);
+    if (settled.said) onRelease?.(settled.said);
+  };
+
+  const face = tint(K.primary, holding ? 0.2 : 0.12);
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${label}${spoken ? `: ${spoken}` : ""}`}
+      accessibilityHint={hold
+        ? `Hold for ${HOLD_MS / 1000} seconds. Letting go sooner sends nothing.`
+        : undefined}
+      accessibilityState={{ disabled: !!disabled, busy: holding }}
+      disabled={!!disabled}
+      onPressIn={hold ? begin : undefined}
+      onPressOut={hold ? end : undefined}
+      onPress={hold ? undefined : onConfirm}
+      style={({ pressed }) => [{
+        minHeight: TAP, minWidth: 88, paddingHorizontal: SPACE.lg, borderRadius: RADIUS.pill,
+        alignItems: "center", justifyContent: "center", overflow: "hidden",
+        backgroundColor: hold ? face : K.primary,
+        borderWidth: hold ? 1 : 0, borderColor: K.primary,
+        opacity: disabled ? 0.45 : 1,
+        transform: [{ scale: pressed ? 0.97 : 1 }],
+      }, style]}
+    >
+      {hold ? (
+        <Animated.View
+          pointerEvents="none"
+          style={{
+            position: "absolute", left: 0, top: 0, bottom: 0,
+            width: fill.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] }),
+            backgroundColor: tint(K.primary, 0.32),
+          }}
+        />
+      ) : null}
+      <Text style={{
+        color: hold ? K.primary : ink(K.primary),
+        fontSize: T.body, fontWeight: "600",
+      }}>{label}</Text>
     </Pressable>
   );
 }
@@ -512,7 +626,7 @@ export function Sheet({ open, onClose, title, subtitle, footer, tall, children }
 }): ReactNode {
   const insets = useSafeAreaInsets();
   return (
-    <Modal visible={open} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible={open} transparent animationType={reducesMotion() ? "none" : "slide"} onRequestClose={onClose}>
       {/* `KeyboardAvoidingView` inside the Modal, not on the screen behind it:
           a `Modal` mounts into its own native root, so a screen-level avoider
           never moves this subtree. Measured on a Pixel 7 emulator (Android 15,
@@ -554,10 +668,30 @@ export function Sheet({ open, onClose, title, subtitle, footer, tall, children }
           <View style={{
             width: 36, height: 4, borderRadius: 2, backgroundColor: C.border2, alignSelf: "center",
           }} />
-          <View style={{ paddingHorizontal: SPACE.lg, paddingTop: SPACE.md, paddingBottom: SPACE.sm }}>
-            <Text style={{ color: C.text, fontSize: T.title, fontWeight: "700" }}>{title}</Text>
-            {subtitle ? <Text numberOfLines={1} style={{ color: C.text3, fontSize: T.small }}>{subtitle}</Text> : null}
+          <View style={{
+            paddingHorizontal: SPACE.lg, paddingTop: SPACE.md, paddingBottom: SPACE.sm,
+            paddingRight: SPACE.lg + 44,
+          }}>
+            {/* 20 rather than `title`'s 17: every sheet in the mock is titled at
+                the head size, and the sheet is the one place on a screen where
+                the title is not competing with a page. */}
+            <Text style={{ color: C.text, fontSize: T.head, fontWeight: "700" }}>{title}</Text>
+            {subtitle ? <Text numberOfLines={2} style={{ color: C.text3, fontSize: T.small }}>{subtitle}</Text> : null}
           </View>
+          {/* The mock's X, which every sheet has: the scrim closes too, but a
+              sheet with no drawn way out reads as a page. */}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Close ${title}`}
+            onPress={onClose}
+            style={({ pressed }) => ({
+              position: "absolute", right: SPACE.md, top: SPACE.md + 20,
+              width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center",
+              backgroundColor: pressed ? C.bg4 : C.bg3,
+            })}
+          >
+            <Glyph name="close" color={C.text2} size={17} />
+          </Pressable>
           <ScrollView
             contentContainerStyle={{ paddingHorizontal: SPACE.lg, paddingBottom: SPACE.sm }}
             keyboardShouldPersistTaps="handled"
@@ -584,15 +718,23 @@ export function Sheet({ open, onClose, title, subtitle, footer, tall, children }
  * hyphenated, a dozen board views all called a noun — so the second line is
  * what actually tells two of them apart.
  */
-export function SheetRow({ label, sub, on, disabled, onPress }: {
+export function SheetRow({ label, sub, on, disabled, danger, glyph, leadColor, trail, onPress }: {
   label: string;
   sub?: string;
   on?: boolean;
   /** Drawn dimmed and inert. Say WHY in `sub`: a row that is off with no
    *  reason is a row somebody presses again. */
   disabled?: boolean;
+  /** The one destructive row in a sheet: red lead, red label. */
+  danger?: boolean;
+  /** The mock's lead square. Absent for rows that are only words. */
+  glyph?: GlyphName;
+  leadColor?: string;
+  /** A chip, a switch or a chevron at the end of the row. */
+  trail?: ReactNode;
   onPress: () => void;
 }): ReactNode {
+  const labelColor = danger ? C.error : C.text;
   return (
     <Pressable
       accessibilityRole="button"
@@ -600,7 +742,7 @@ export function SheetRow({ label, sub, on, disabled, onPress }: {
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => ({
-        minHeight: 60,
+        minHeight: 60 + rowRoom(),
         flexDirection: "row",
         alignItems: "center",
         gap: SPACE.md,
@@ -610,15 +752,24 @@ export function SheetRow({ label, sub, on, disabled, onPress }: {
         opacity: disabled ? 0.45 : pressed ? 0.6 : 1,
       })}
     >
+      {glyph ? (
+        <View style={{
+          width: 34, height: 34, borderRadius: RADIUS.md, alignItems: "center", justifyContent: "center",
+          backgroundColor: leadColor ? tint(leadColor, 0.14) : C.bg3,
+        }}>
+          <Glyph name={glyph} color={leadColor ?? C.text2} size={17} />
+        </View>
+      ) : null}
       <View style={{ flex: 1, gap: 2 }}>
         <Text
-          numberOfLines={1}
-          style={{ color: C.text, fontSize: T.body, fontWeight: on ? "700" : "400" }}
+          numberOfLines={2}
+          style={{ color: labelColor, fontSize: T.body, fontWeight: on ? "700" : "600" }}
         >{label}</Text>
         {sub ? (
-          <Text numberOfLines={1} style={{ color: C.text3, fontSize: T.small }}>{sub}</Text>
+          <Text numberOfLines={2} style={{ color: C.text3, fontSize: T.small, lineHeight: 17 }}>{sub}</Text>
         ) : null}
       </View>
+      {trail}
       {/* A tick, not a highlighted row. The selected one has to be findable in
           a list of twenty without reading every line, and a mark at a fixed
           x-position is what the eye can run down. */}
@@ -628,6 +779,7 @@ export function SheetRow({ label, sub, on, disabled, onPress }: {
           transform: [{ rotate: "-45deg" }], marginTop: -3, marginRight: 4,
         }} />
       ) : null}
+      {trail === undefined && !on ? <ChevronIcon color={danger ? C.error : C.text4} size={18} /> : null}
     </Pressable>
   );
 }
@@ -670,6 +822,23 @@ export function Switch({ on, disabled }: { on: boolean; disabled?: boolean }): R
           }} />
         ) : null}
       </View>
+    </View>
+  );
+}
+
+/**
+ * The name of a block, in the mock's own type: 12 points, caps, tracked, in
+ * the quiet colour. `GroupTitle` is the sentence-case version the app moved
+ * to; the two exist because a settings page and a list answer different
+ * questions — one says "this group of settings", the other names a set of
+ * rows — and the mock draws them differently.
+ */
+export function Eyebrow({ text, style }: { text: string; style?: StyleProp<ViewStyle> }): ReactNode {
+  return (
+    <View style={[{ paddingHorizontal: SPACE.xs, paddingTop: SPACE.md, paddingBottom: SPACE.xs }, style]}>
+      <Text accessibilityRole="header" style={{
+        color: C.text3, fontSize: 12, fontWeight: "700", letterSpacing: 0.8, textTransform: "uppercase",
+      }}>{text}</Text>
     </View>
   );
 }
@@ -726,32 +895,41 @@ export function Group({ children, inset = SPACE.lg }: { children: ReactNode; ins
  * something. 56 points tall with a line under the title, 48 without: both
  * over the floor, and the height a list row is on Android.
  */
-export function Row({ title, sub, lead, trail, chevron, onPress, disabled, tone, checked }: {
+export function Row({ title, sub, live, liveInk, lead, trail, chevron, onPress, disabled, tone, checked, mono }: {
   title: string;
   /** Set when the row IS a switch: TalkBack then says "switch, on" rather
    *  than "button", and the trailing Switch is only the drawing of it. */
   checked?: boolean;
   sub?: string;
+  /** A third line, in its own ink: what a switch is doing right now, under
+   *  the sentence that says what it is for (mock 40). */
+  live?: string;
+  liveInk?: string;
   lead?: ReactNode;
   trail?: ReactNode;
   chevron?: boolean;
   onPress?: () => void;
   disabled?: boolean;
   tone?: "danger";
+  /** A row whose title is a path or a branch: the same monospace the rest of
+   *  the app gives those two things. */
+  mono?: boolean;
 }): ReactNode {
   const body = (pressed: boolean): ReactNode => (
     <View style={{
       flexDirection: "row", alignItems: "center", gap: 14,
-      minHeight: sub ? 56 : 48, paddingHorizontal: SPACE.lg, paddingVertical: SPACE.md,
+      minHeight: (sub ? 56 : 48) + rowRoom(), paddingHorizontal: SPACE.lg, paddingVertical: SPACE.md,
       backgroundColor: pressed ? C.bg3 : "transparent",
       opacity: disabled ? 0.45 : 1,
     }}>
       {lead}
       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
         <Text numberOfLines={1} style={{
-          color: tone === "danger" ? C.error : C.text, fontSize: 15, fontWeight: "500",
+          color: tone === "danger" ? C.error : C.text, fontSize: mono ? 12.5 : 15, fontWeight: "500",
+          fontFamily: mono ? MONO : undefined,
         }}>{title}</Text>
         {sub ? <Text numberOfLines={2} style={{ color: C.text3, fontSize: T.small, lineHeight: 17 }}>{sub}</Text> : null}
+        {live ? <Text numberOfLines={2} style={{ color: liveInk ?? C.text2, fontSize: T.small, fontWeight: "600" }}>{live}</Text> : null}
       </View>
       {trail}
       {chevron ? <ChevronIcon color={C.text3} size={18} /> : null}
@@ -776,6 +954,61 @@ export type ChipTone = "neutral" | "accent" | "good" | "warn" | "bad";
 export function toneInk(tone: ChipTone): string {
   return tone === "accent" ? C.primary : tone === "good" ? C.success : tone === "warn" ? C.warning
     : tone === "bad" ? C.error : C.text2;
+}
+
+/**
+ * One thing you can do, in the mock's sheet shape: a tinted 30-point tile, a
+ * 14.5-point title, a line under it, and what trails.
+ *
+ * `Row` is the same idea for a page — settings, a repository list — where the
+ * leading mark IS the icon. A sheet that offers five actions reads better with
+ * the mark on a tile: the tile is what the eye runs down, and its tint is the
+ * row's tone said twice (green approve, red request changes).
+ */
+export function ActionRow({ title, sub, lead, tone = "neutral", trail, chevron, onPress, disabled, danger }: {
+  title: string;
+  sub?: string;
+  lead: ReactNode;
+  tone?: ChipTone;
+  trail?: ReactNode;
+  chevron?: boolean;
+  onPress?: () => void;
+  disabled?: boolean;
+  /** The one row that stops work on somebody's branch: written in the error ink,
+   *  as the mock draws Close. */
+  danger?: boolean;
+}): ReactNode {
+  const ink_ = toneInk(tone);
+  const body = (pressed: boolean): ReactNode => (
+    <View style={{
+      flexDirection: "row", alignItems: "center", gap: 14,
+      minHeight: 60, paddingVertical: 10, paddingHorizontal: 2,
+      opacity: disabled ? 0.45 : 1,
+      backgroundColor: pressed ? C.bg3 : "transparent",
+    }}>
+      <View style={{
+        width: 30, height: 30, borderRadius: 10, alignItems: "center", justifyContent: "center",
+        backgroundColor: tone === "neutral" ? C.bg3 : tint(ink_, 0.14),
+      }}>{lead}</View>
+      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+        <Text numberOfLines={1} style={{ color: danger ? C.error : C.text, fontSize: 14.5, fontWeight: "600" }}>{title}</Text>
+        {sub ? <Text numberOfLines={2} style={{ color: C.text3, fontSize: T.small, lineHeight: 17 }}>{sub}</Text> : null}
+      </View>
+      {trail}
+      {chevron ? <ChevronIcon color={danger ? C.error : C.text4} size={18} /> : null}
+    </View>
+  );
+  if (!onPress) return body(false);
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ disabled: !!disabled }}
+      disabled={disabled}
+      onPress={onPress}
+    >
+      {({ pressed }) => body(pressed)}
+    </Pressable>
+  );
 }
 
 /**
@@ -809,7 +1042,9 @@ export function Chip({ label, tone = "neutral", icon }: {
  *
  * A scrolling row rather than the full-width `Segmented`, because this list
  * grows with the machine and a segmented control cannot. The selected one is
- * filled and ticked, so it is findable without reading every label.
+ * filled and ticked, so it is findable without reading every label — and
+ * tapping it again is the way back to the first option, which may be a dozen
+ * chips off screen.
  */
 export function FilterChips<V extends string>({ options, value, onChange, label }: {
   options: { id: V; label: string }[];
@@ -837,7 +1072,8 @@ export function FilterChips<V extends string>({ options, value, onChange, label 
             key={o.id}
             accessibilityRole="radio"
             accessibilityState={{ checked: on }}
-            onPress={() => onChange(o.id)}
+            accessibilityHint={on ? "Tap again to show everything" : undefined}
+            onPress={() => onChange(chipPick(options, value, o.id))}
             hitSlop={{ top: 8, bottom: 8 }}
             style={({ pressed }) => ({
               flexDirection: "row", alignItems: "center", gap: 6, height: 32,

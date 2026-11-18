@@ -22,6 +22,7 @@ import * as Haptics from "expo-haptics";
 import { askHeadline, isPolarisSend, type SettingRequestView } from "../../../shared/settingClass.ts";
 import { ask } from "../lib/api.ts";
 import type { Host } from "../lib/host.ts";
+import { answerGone } from "../model/inboxStale.ts";
 import { decideBody, requestLines, requestsInOrder, requestTitle } from "../model/settingsRequests.ts";
 import { MONO, RADIUS, SPACE, T, ink, tint, type Palette } from "../theme.ts";
 import { TAP } from "../ui.tsx";
@@ -99,6 +100,8 @@ function SettingsRequestCard({ request, host, colors, onDone }: {
       body: decideBody(request, approve),
     });
     setBusy(null);
+    // Answered at the desk, or expired: the card leaves instead of staying with an error.
+    if (answerGone("settings", taken)) { onDone(); return; }
     if (!taken.ok) { setFailed(taken.error); return; }
     if (!taken.value.ok) {
       // Somebody at the desk, or the request's own expiry, got there first.

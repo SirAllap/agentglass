@@ -25,13 +25,23 @@ test("a Log row opens the commit it names, carrying what the screen can show at 
   expect(log).toContain("subject: c.subject");
 });
 
-test("all five tabs can be pulled to refresh, each through the one helper", () => {
-  for (const view of ["changes", "log", "branches", "stash", "pr"]) {
+test("every view can be pulled to refresh, each through the one helper", () => {
+  for (const view of ["changes", "log", "branches", "more", "stash", "pr"]) {
     const src = view === "changes" ? repos.slice(0, repos.indexOf('view === "log" ? (')) : tab(view);
     expect(src, view).toContain("refreshControl={pullWith(");
   }
   // And none of them builds its own, which is how a sixth goes without a hint.
   expect(repos.match(/<RefreshControl\s/g)?.length).toBe(1);
+});
+
+test("Stash and Pull requests are still reachable, one tap inside More", () => {
+  const more = tab("more");
+  expect(more).toContain('setView("stash")');
+  expect(more).toContain('setView("pr")');
+  // Fetch every remote is a fetch, not a re-read of the counts.
+  expect(more).toContain('"/git/fetch"');
+  // The two views behind More keep More lit, so nothing looks unselected.
+  expect(repos).toContain("const tab = tabOf(view);");
 });
 
 test("every tab says it can be pulled", () => {

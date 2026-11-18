@@ -147,8 +147,9 @@ describe("what a press says back", () => {
 
   test("a row that cannot be used is disabled, not a silent no-op", () => {
     expect(bodyOf(ui, "SheetRow")).toMatch(/disabled/);
-    expect(terminal).toMatch(/disabled=\{!a\.installed\}/);
-    expect(terminal).not.toMatch(/if \(a\.installed\) openAgent/);
+    const windowSheets = files.find((f) => f.path === "src/terminal/WindowSheets.tsx")!.source;
+    expect(windowSheets).toMatch(/disabled=\{!a\.installed\}/);
+    expect(windowSheets).not.toMatch(/if \(a\.installed\) openAgent/);
   });
 
   test("Push waits for something to push", () => {

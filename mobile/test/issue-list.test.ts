@@ -50,7 +50,7 @@ describe("linked pull request verdict", () => {
 describe("wiring", () => {
   const read = (p: string): string => readFileSync(join(import.meta.dir, "..", p), "utf8");
   test("the list searches and the detail shows the verdict", () => {
-    expect(read("app/(tabs)/issues.tsx")).toContain("issueMatches(");
+    expect(read("src/issues/IssueList.tsx")).toContain("issueMatches(");
     expect(read("app/issue/[number].tsx")).toContain("prVerdict(");
   });
   test("the detail's action bar is 52 tall", () => {

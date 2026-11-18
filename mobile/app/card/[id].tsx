@@ -43,7 +43,7 @@ import {
 } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
-import type { CardPr, ListMember, ProviderId, ProviderTask, TaskDetail } from "../../../shared/providers.ts";
+import type { CardPr, ListMember, ProviderId, ProviderTask, TaskDetail, TaskReply } from "../../../shared/providers.ts";
 import type { GitRepoRef, SkillInfo } from "../../../shared/types.ts";
 import { ask, askCached } from "../../src/lib/api.ts";
 import { announceCard } from "../../src/state/card-edits.ts";
@@ -124,6 +124,15 @@ export default function CardScreen(): React.ReactNode {
   const [statuses, setStatuses] = useState<Status[]>(() => (card?.listId ? lists.get(card.listId)?.value ?? [] : []));
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // Replies are read per thread, on tap: the server sends a count, not the thread.
+  const [threads, setThreads] = useState<Record<string, TaskReply[] | "loading" | "error">>({});
+  const openThread = (id: string) => {
+    if (!host || Array.isArray(threads[id]) || threads[id] === "loading") return;
+    setThreads((t) => ({ ...t, [id]: "loading" }));
+    ask<{ ok?: boolean; data?: { replies: TaskReply[] } }>(host, `/clickup/comment/replies?id=${encodeURIComponent(id)}`)
+      .then((a) => setThreads((t) => ({ ...t, [id]: a.ok && a.value.ok && a.value.data ? a.value.data.replies : "error" })))
+      .catch(() => setThreads((t) => ({ ...t, [id]: "error" })));
+  };
   const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
   /** The last successful move: what it was on before, so "Undo" has
    *  somewhere to send it back to. Its own state rather than folded into
@@ -497,10 +506,12 @@ export default function CardScreen(): React.ReactNode {
       t: "tmux",
       cmd: "issue",
       cwd: repo.root,
-      name: windowName(card),
+      name: windowName(card, { project: repo.root }),
       prompt: command,
       agent: true,
       title: card.title,
+      reuse: true,
+      cardId: card.id,
     });
     setHanding(false);
     setPicking(false);
@@ -806,7 +817,7 @@ export default function CardScreen(): React.ReactNode {
                           <Note>An attachment, with nothing written.</Note>
                         )}
                       </Bubble>
-                      {(c.replyList ?? []).map((r) => (
+                      {(Array.isArray(threads[c.id]) ? (threads[c.id] as TaskReply[]) : []).map((r) => (
                         <View key={r.id} style={{ flexDirection: "row", gap: SPACE.sm, marginTop: SPACE.sm, alignItems: "flex-start" }}>
                           <Avatar name={r.who} avatar={r.avatar} initials={r.initials} color={r.color} size={AVATAR.field} />
                           <View style={{ flex: 1, minWidth: 0 }}>
@@ -816,8 +827,14 @@ export default function CardScreen(): React.ReactNode {
                           </View>
                         </View>
                       ))}
-                      {c.replies && !(c.replyList ?? []).length ? (
-                        <Note>{c.replies} {c.replies === 1 ? "reply" : "replies"}, on the board.</Note>
+                      {c.replies && !Array.isArray(threads[c.id]) ? (
+                        <Pressable onPress={() => openThread(c.id)} accessibilityRole="button">
+                          <Note>
+                            {threads[c.id] === "loading" ? "Loading the replies…"
+                              : threads[c.id] === "error" ? "The replies could not be loaded. Tap to retry."
+                              : `${c.replies} ${c.replies === 1 ? "reply" : "replies"}. Tap to read.`}
+                          </Note>
+                        </Pressable>
                       ) : null}
                     </Rail>
                   ))}

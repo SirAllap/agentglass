@@ -271,3 +271,14 @@ describe.skipIf(!built)("the Nerd icon fallback", () => {
     }
   });
 });
+
+describe("the cursor the phone chose", () => {
+  test("is drawn as that shape, and anything unknown draws a block", () => {
+    const style = (cursor?: "bar" | "underline" | "block"): string =>
+      terminalDocument({ palette: PALETTE, columns: 80, ...(cursor ? { cursor } : null) });
+    expect(style("bar")).toContain('cursorStyle: "bar"');
+    expect(style("underline")).toContain('cursorStyle: "underline"');
+    expect(style()).toContain('cursorStyle: "block"');
+    expect(style("nope" as "bar")).toContain('cursorStyle: "block"');
+  });
+});

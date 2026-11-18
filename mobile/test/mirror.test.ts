@@ -355,10 +355,11 @@ describe("where a refusal actually lands", () => {
     expect(screen).toContain("{open && error ? (");
   });
 
-  test("and the empty-state card is no longer the only one", () => {
-    // Two readers, not one: the card for when nothing is attached, and the row
+  test("and the empty-state tile is no longer the only one", () => {
+    // Two readers, not one: the tile for when nothing is attached, and the row
     // above the key bar for when something is.
-    expect(screen.match(/\{open && error \? \(|tone={error \? "bad" : "quiet"}/g)).toHaveLength(2);
+    expect(screen).toContain("{open && error ? (");
+    expect(screen.match(/errorText\(error\)/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
   });
 
   test("the deadline writes a sentence, not a code", () => {

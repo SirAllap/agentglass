@@ -65,30 +65,28 @@ export interface AccessoryKey {
 }
 
 export const ACCESSORY_KEYS: AccessoryKey[] = [
+  // The drawing's own fold, in its order: Esc, Tab, Ctrl, ←, ↑, ↓, →, |. The
+  // rest of the catalogue follows one swipe behind.
   { id: "escape", label: "Esc", key: "escape", bytes: "\x1b", spoken: "Escape" },
-  { id: "ctrlC", label: "^C", bytes: "\x03", spoken: "Interrupt" },
+  { id: "tab", label: "Tab", key: "tab", bytes: "\t", spoken: "Tab" },
+  { id: "ctrl", label: "Ctrl", modifier: "ctrl", spoken: "Control, applies to the next key" },
+  { id: "left", label: "←", key: "left", bytes: "\x1b[D", spoken: "Arrow left", repeatable: true, narrow: true },
   { id: "up", label: "↑", key: "up", bytes: "\x1b[A", spoken: "Arrow up", repeatable: true, narrow: true },
   { id: "down", label: "↓", key: "down", bytes: "\x1b[B", spoken: "Arrow down", repeatable: true, narrow: true },
-  { id: "tab", label: "Tab", key: "tab", bytes: "\t", spoken: "Tab" },
+  { id: "right", label: "→", key: "right", bytes: "\x1b[C", spoken: "Arrow right", repeatable: true, narrow: true },
+  { id: "pipe", label: "|", bytes: "|", spoken: "Pipe" },
+  { id: "ctrlC", label: "^C", bytes: "\x03", spoken: "Interrupt" },
   // Terminal applications read ESC [ Z as reverse tab.
   { id: "shiftTab", label: "⇧Tab", bytes: "\x1b[Z", spoken: "Shift Tab" },
   /*
-   * The three latches, immediately after the six the fold was measured for.
+   * The three latches, one swipe behind the fold.
    *
-   * Not in front of them, and that is a choice rather than an oversight. The
-   * order above was measured for a bar nobody had customised, and Esc and
-   * Ctrl+C earn those places whether or not anybody ever taps a modifier;
-   * putting three keys that do nothing on their own ahead of the key that
-   * stops a runaway command would be paying for a feature with the one that
-   * was already there. They sit one swipe behind it, and anybody who lives on
-   * them moves them forward on the settings screen — where the same trip lets
-   * them delete the nine preset Ctrl+letter keys these replace.
+   * The order above is the drawing's; these follow it. Anybody who lives on a
+   * modifier moves it forward on the settings screen — where the same trip
+   * lets them delete the nine preset Ctrl+letter keys these replace.
    */
-  { id: "ctrl", label: "Ctrl", modifier: "ctrl", spoken: "Control, applies to the next key" },
   { id: "alt", label: "Alt", modifier: "alt", spoken: "Alt, applies to the next key" },
   { id: "shift", label: "Shift", modifier: "shift", spoken: "Shift, applies to the next key" },
-  { id: "left", label: "←", key: "left", bytes: "\x1b[D", spoken: "Arrow left", repeatable: true, narrow: true },
-  { id: "right", label: "→", key: "right", bytes: "\x1b[C", spoken: "Arrow right", repeatable: true, narrow: true },
   { id: "ctrlD", label: "^D", bytes: "\x04", spoken: "End of file" },
   { id: "ctrlZ", label: "^Z", bytes: "\x1a", spoken: "Suspend" },
   { id: "ctrlL", label: "^L", bytes: "\x0c", spoken: "Clear screen" },

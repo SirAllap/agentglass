@@ -13,6 +13,11 @@
  * Deny sits left of Allow and is drawn quieter, not the other way round: the
  * thumb lands on the right, and the loud button is the one somebody has just
  * read the command for.
+ *
+ * Allow HOLDS. Every allow, whatever the command says — the phone does not
+ * carry a word list that decides which commands are dangerous, and the server
+ * already treats the release as the dangerous half. Deny stays one tap: the
+ * safe direction must not be slow. See model/confirmPolicy.ts.
  */
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
@@ -21,8 +26,8 @@ import type { PendingGate } from "../../../shared/types.ts";
 import { ask } from "../lib/api.ts";
 import type { Host } from "../lib/host.ts";
 import { gateAsk, gateDetail, gateWhere, waited } from "../model/gates.ts";
-import { MONO, RADIUS, SPACE, T, ink, tint, type Palette } from "../theme.ts";
-import { TAP } from "../ui.tsx";
+import { MONO, RADIUS, SPACE, T, tint, type Palette } from "../theme.ts";
+import { HoldButton, TAP } from "../ui.tsx";
 
 /** A clock that moves once a minute — the grain of `waited`, and the same
  *  cadence the usage chip uses so a gate waiting on you does not re-render every second. */
@@ -49,10 +54,14 @@ export function GateCard({ gate, host, colors, onDone, onOpen }: {
   const now = useMinute();
   const [busy, setBusy] = useState<"allow" | "deny" | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
+  /** A hold let go too early: said under the buttons, because a fill that
+   *  vanished with no words reads as a button that did not work. */
+  const [cancelled, setCancelled] = useState<string | null>(null);
 
   const decide = async (decision: "allow" | "deny"): Promise<void> => {
     setBusy(decision);
     setFailed(null);
+    setCancelled(null);
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const answer = await ask<{ ok: boolean; error?: string }>(host, "/gate/decide", {
       method: "POST",
@@ -69,31 +78,28 @@ export function GateCard({ gate, host, colors, onDone, onOpen }: {
     onDone();
   };
 
-  const button = (label: string, decision: "allow" | "deny"): React.ReactNode => {
-    const loud = decision === "allow";
-    const face = loud ? K.primary : "transparent";
-    return (
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`${label}: ${gateDetail(gate)}`}
-        accessibilityState={{ disabled: busy !== null, busy: busy === decision }}
-        disabled={busy !== null}
-        onPress={() => { void decide(decision); }}
-        style={({ pressed }) => ({
-          minHeight: TAP, minWidth: 88, paddingHorizontal: SPACE.lg, borderRadius: RADIUS.pill,
-          alignItems: "center", justifyContent: "center",
-          backgroundColor: face,
-          borderWidth: loud ? 0 : 1, borderColor: K.border2,
-          opacity: busy !== null && busy !== decision ? 0.45 : 1,
-          transform: [{ scale: pressed ? 0.97 : 1 }],
-        })}
-      >
-        {busy === decision
-          ? <ActivityIndicator color={loud ? ink(face) : K.text} />
-          : <Text style={{ color: loud ? ink(face) : K.text, fontSize: T.body, fontWeight: "600" }}>{label}</Text>}
-      </Pressable>
-    );
-  };
+  /** Deny only. The loud button is the hold, which is its own component. */
+  const deny = (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Deny: ${gateDetail(gate)}`}
+      accessibilityState={{ disabled: busy !== null, busy: busy === "deny" }}
+      disabled={busy !== null}
+      onPress={() => { void decide("deny"); }}
+      style={({ pressed }) => ({
+        minHeight: TAP, minWidth: 88, paddingHorizontal: SPACE.lg, borderRadius: RADIUS.pill,
+        alignItems: "center", justifyContent: "center",
+        backgroundColor: "transparent",
+        borderWidth: 1, borderColor: K.border2,
+        opacity: busy !== null && busy !== "deny" ? 0.45 : 1,
+        transform: [{ scale: pressed ? 0.97 : 1 }],
+      })}
+    >
+      {busy === "deny"
+        ? <ActivityIndicator color={K.text} />
+        : <Text style={{ color: K.text, fontSize: T.body, fontWeight: "600" }}>Deny</Text>}
+    </Pressable>
+  );
 
   return (
     <View
@@ -124,6 +130,7 @@ export function GateCard({ gate, host, colors, onDone, onOpen }: {
         </Text>
       </View>
       {failed ? <Text style={{ color: K.error, fontSize: T.small }}>{failed}</Text> : null}
+      {cancelled ? <Text style={{ color: K.text3, fontSize: T.small }}>{cancelled}</Text> : null}
       <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}>
         {onOpen ? (
           <Pressable
@@ -138,8 +145,16 @@ export function GateCard({ gate, host, colors, onDone, onOpen }: {
           </Pressable>
         ) : null}
         <View style={{ flex: 1 }} />
-        {button("Deny", "deny")}
-        {button("Allow", "allow")}
+        {deny}
+        <HoldButton
+          action="gate.allow"
+          label="Hold to allow"
+          spoken={gateDetail(gate)}
+          colors={K}
+          disabled={busy !== null}
+          onRelease={(said) => setCancelled(said)}
+          onConfirm={() => { void decide("allow"); }}
+        />
       </View>
     </View>
   );

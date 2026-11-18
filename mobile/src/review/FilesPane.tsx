@@ -135,7 +135,7 @@ function Expander({ label, busy, onPress }: {
  *
  * A component and not a screen, because it is read in two places now: as the
  * Files segment of the review, and as the route a notification points at. The
- * route is a wrapper around this — see app/pr/diff.tsx — so a deep link and a
+ * route is a wrapper around this — see `/pr/[number]?pane=files` — so a deep link and a
  * tap on the segment land on the same thing rather than on two screens that
  * drift.
  *
