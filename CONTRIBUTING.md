@@ -45,6 +45,23 @@ python3 hooks/seed_demo.py   # populate with demo data
   electron-builder (the sidecar is the Bun server compiled standalone, staged in
   via `extraResources`). Linux (AppImage/`.deb`), macOS (`.dmg`), Windows.
 
+## Perf check
+
+CI runs a load test in its own `perf` job. Run it yourself with `make perf-ci`
+(needs `tmux`; about a minute). It starts 20 fake agents, 10 desk tabs, the
+panel polls and 2 flooding panes against an isolated server (own tmux socket
+`-L agx-load`, own DB), then writes `perf-ci-result.json` and exits non-zero if:
+
+- **a server stall is over 1000 ms** — the event loop stood still, so every
+  terminal froze. Usually a synchronous spawn or a disk wait.
+- **echo p99 is over 150 ms** — typing took too long to come back.
+- **a panel's p95 is over 1500 ms** — a poll the window makes was slow.
+
+The limits are in one place, `scripts/perfci.ts`. They are loose on purpose: on
+a laptop (2026-11-11, 90 agents) we saw 1 stall of ~230 ms, echo p99 ~22-34 ms
+and panels <= 240 ms, and a shared runner is slower. Size knobs:
+`AGX_LOAD_AGENTS`, `AGX_LOAD_TABS`, `AGX_LOAD_SECONDS`, `AGX_LOAD_FLOOD`.
+
 ## Ground rules
 
 - Match the surrounding style; keep the dependency footprint minimal.

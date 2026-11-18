@@ -54,6 +54,10 @@ there saves at once. **Open its tab** brings the seat's own session forward, and
 is drawn only while somebody is seated. What the orchestrator does with code is
 set on the reviewing block, not in this sheet: it has one home.
 
+## Claude account for this project
+
+Settings ▸ Advanced ▸ Worker sandbox has **Claude Code account for this project**, and the Flow page shows the same row. It is a folder: the Claude Code config folder (`CLAUDE_CONFIG_DIR`) whose login this project's agents use. Use it only to keep two accounts apart. Empty means the CLI's own default. The folder must be an absolute path with no `..`, and it may not exist yet (the CLI makes it at its first sign-in). agentglass only stores the path. It never opens, lists or copies what is inside, so it never reads a login. Transcripts of those agents are read from that folder too. The key is `workers.claudeConfigDir`.
+
 ## The block menu
 
 Every block in the drawing opens the same menu: right-click it, press the menu
@@ -67,10 +71,10 @@ loses one.
 | Open details (`Enter`) | selects the block and opens This block |
 | Change engine… | opens This block on the engine row; off on a block with no engine row (You, the Gate, the Fallback) |
 | Change model… | opens This block on the model row; off on a block with no model row |
-| Add a step after | off: the chain is six stops, and a rule changes who runs a stop rather than adding one |
+| Add a step after | opens a new step right after this one |
 | Use the general setting | only where a project has a setting of its own; drops it |
 | Copy settings as text | the block's engine, model, hand-off and limits, for a task or a doc |
-| Remove step | off: the six stops stay; turn a rule off or pick another engine |
+| Remove step | takes the step off the path after asking; the last step stays |
 
 ## Keys
 

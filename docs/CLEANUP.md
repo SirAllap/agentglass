@@ -235,7 +235,11 @@ deletes more, so a widening waits for your approval.
 | Field | What it does |
 | --- | --- |
 | `sharedContainerNames` | Container names that are never stopped or removed. |
-| `dockerImageTagTemplate` | An exact image tag with `{slug}` in it, removed besides the images whose tag contains the card id. |
+| `dockerImageTagTemplate` | An image tag with `{slug}` and/or `{sha}` (each at most once). Only `{slug}`: an exact tag, removed besides the images whose tag contains the card id. With `{sha}` (`orbit:{sha}`, `orbit:{slug}-{sha}`): the images built at one of the pull request's commits (7 to 40 hex characters of it) are removed, except one a container uses or one built at the HEAD of a live checkout. The commits are read from local refs with no fetch; a base branch that is not fetched leaves the images and says so. |
+| `orphanVolumePatterns` | Named volumes (`orbit-cache-{slug}`) the orphan sweep in Docker > Disk may list when their checkout is gone. Empty: no volume is ever listed. Anonymous volumes and any volume a container mounts are never listed. |
+| `orphanKeep` | Volume names (globs) the sweep never lists. Empty by default. |
+
+The sweep lists, when Docker > Disk loads or is refreshed (no timer), every image and volume no container uses whose owner is gone, with the reason. Removal is by checkbox; the separate setting `cleanup.orphanAutoRemove` (off by default; turning it on waits for the person's approval) removes what it lists by itself. The Images view marks an image built at a commit no checkout is on as "built at an old commit".
 | `testDbPrefix`, `testDbCommand` | Scratch databases whose name starts with the prefix and holds the card id are dropped, using this `psql` command to list and drop them. Both empty: skipped. |
 | `stashArchiveDir` | Where a stash's patch is saved before the stash is dropped. Empty: the app's own state folder. |
 | `evidenceDirs` | Folders to remove, written with `{slug}` in the last folder name only. The newer way is `cleanup.evidenceRoots`, below. |

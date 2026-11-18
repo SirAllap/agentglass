@@ -77,7 +77,7 @@ columns show where each preset puts it.
 
 | Door | Setting | Watch only | Guided | Full autopilot |
 | --- | --- | --- | --- | --- |
-| Wake the orchestrator when judgment is needed | `signals` | Off | On | On |
+| Read the quiet signals | `signals` | On, reads only | On | On |
 | Diagnose a red check | `diagnose` | Off | When I click | Automatically |
 
 ### Automatic
@@ -103,11 +103,52 @@ that door is off.
 
 ### What acts today
 
-Follow, Dock, the Landing group, Relaunch, Beacon, Match, Course, Cleanup and Look
-again act. **Follow tracker cards**, **Wake the orchestrator**, **Diagnose a red
-check**, **Re-run button** and **Start a session** can be set and are stored, and
-nothing acts on them yet. A door that is set but not yet acting is never a
-promise.
+Follow, Dock, the Landing group, Signals (the three read-only lines below), the
+card state read behind the stale-card signal, Relaunch, Beacon, Match, Course,
+Cleanup, Diagnose and Look again act. **Diagnose a red check** wakes the
+project's seat when it is set to **Automatically**. **Re-run button**, **Start a
+session** and Diagnose's **When I click** position can be set and are stored, and
+nothing acts on them yet. They are badged **Not wired yet** and are never counted
+as on, so a stage's count names only the doors that act. A door that is set but
+not yet acting is never a promise.
+
+### The three signals, and their budget
+
+With **Signals** on, an item can carry quiet lines under its sentence, in
+**Pull requests** and in **Waiting on you**. They are facts about the item and
+nothing else: a signal never changes its class, its reason or its sentence. A
+mergeable pull request with green required checks stays **Cleared to land** even
+while it carries a line.
+
+- **A stale card.** With **Follow tracker cards** on, Polaris matches the card a
+  pull request names (in its title or its branch) to the card state the Jira and
+  ClickUp integrations already hold, and says when a card that is not done has
+  not moved for seven days: *Card ORBIT-1042 has not moved for 9 days.* A pull
+  request naming both a ClickUp id and a Jira key is the Jira card's: the Jira
+  line is the one that shows. Budget: at most one pass per tracker per five
+  minutes for the whole project, never one per card — one saved ClickUp view, and
+  every saved Jira view, since a card read from one board alone is a card on the
+  other boards found only in the cache; everything else is served from the
+  integrations' cache, and the reads are counted. No tracker connected means no
+  card signal.
+- **A pull request overlap.** Two open pull requests of the repository changing
+  the same files, and whether merging both would conflict: *Overlaps #318 in
+  shared/polaris.ts, server/src/polaris.ts. Merging both would conflict.* This is
+  not the conflict-with-base check above (that one is GitHub's). It is computed
+  on this checkout's already fetched commits with `git merge-tree`, which is
+  asked once per pair of heads; no request is made, and a commit that was not
+  fetched produces no signal.
+- **A bot verdict.** With bot logins set in `polaris.botReviewers` (empty by
+  default, which reads nothing), the review comments, PR review bodies and
+  check-run summaries on the head commit from those logins are counted. A line
+  counts as **blocker**, **major**, **minor** or **nit** when it starts with
+  that word as a label, in any case (`Blocker: …`, `[major]`, `**Nit:** …`);
+  the same word inside a sentence is prose and is not counted. Only the head
+  commit is counted, and the line reads *bot review on head: 1 blocker, 3
+  major*. Each list is followed for up to five pages of 100, and the read is
+  whole only when its last page is short; a read that gh refused, or one that
+  filled the fifth page, is not remembered: the next pass asks again. A whole
+  read is kept for five minutes, so a long list costs one pass per window.
 
 ### Relaunching a dropped job
 
@@ -162,7 +203,8 @@ nothing polls.
 
 A preset sets all 17 doors of a layer at once and is stored as a label:
 
-- **Watch only**: reads and sorts. It never acts and never drafts.
+- **Watch only**: reads and sorts, and its Signals door is on so the three
+  read-only lines appear. It never acts and never drafts.
 - **Guided**: Watch only, plus signals, diagnose on click, relaunch as a dry run,
   the re-run button, beacon drafts, course and cleanup proposals.
 - **Full autopilot**: Guided, plus cards, automatic diagnosis, live relaunch and
@@ -200,8 +242,10 @@ drafted again.
 With Polaris on, the Agents view gets a **Pull requests** section (class, number,
 title, the reason and who it waits on), the orchestrator card shows a chip with
 the preset ("Polaris, Guided"), and the items that wait on you are rows in
-**Waiting on you**. When `gh` is missing or signed out, the items read as
-**Uncharted** and say why.
+**Waiting on you**. With **Signals** on, an item may also carry the quiet lines
+described under [the three signals](#the-three-signals-and-their-budget); they
+never move it to another class. When `gh` is missing or signed out, the items
+read as **Uncharted** and say why.
 
 ## Assisted setup
 
@@ -237,10 +281,11 @@ chair uses its own project; any other caller is told to name one):
     agentglass-ui settings get polaris.door.relaunch --root /home/me/code/orbit
     agentglass-ui settings set polaris.door.relaunch '{"mode":"off","cap":3}' --root /home/me/code/orbit
 
-There are 18 settings: `polaris.enabled` and one `polaris.door.<door>` for each of
-the 17 doors. A door's value is the whole object (`{"mode": "dry", "cap": 3}`).
-`get` returns the value in force and the layer it came from (project, global or
-default). The preset is shown by the card, never set by an agent.
+There are 19 settings: `polaris.enabled`, `polaris.botReviewers` and one
+`polaris.door.<door>` for each of the 17 doors. A door's value is the whole
+object (`{"mode": "dry", "cap": 3}`). `get` returns the value in force and the
+layer it came from (project, global or default). The preset is shown by the
+card, never set by an agent.
 
 | Change | What happens |
 | --- | --- |
@@ -252,9 +297,14 @@ default). The preset is shown by the card, never set by an agent.
 ## Where it is stored
 
 In `config.json`, under `polaris`: a `global` layer and a `projects` map. Each layer
-is `{ "version": 1, "enabled": true, "preset": "guided", "doors": { ... } }` and
-has only what you set. A missing door reads its safe position, an unknown key is
+is `{ "version": 1, "enabled": true, "botReviewers": ["orbit-ci"], "preset": "guided", "doors": { ... } }`
+and has only what you set. A missing door reads its safe position, an unknown key is
 kept, and a layer saved by a newer version is read, not refused.
+
+The master switch is read by one resolver: the project's true or false, else the
+global one, else off. A stored value that is not true or false reads as off and
+the page says **invalid value in config**; it is never treated as on and never
+rewritten.
 
 When a later version adds a door, the new door is off for you until you turn it on, and
 your other doors do not change. Nothing is rewritten silently: a layer keeps the format

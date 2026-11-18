@@ -48,3 +48,7 @@ out/
 
 # scripts/eyes.ts's default screenshot output.
 /.agx-eyes.png
+
+# Per-worktree scratch (short TMPDIR, briefs, copies of local data). Never tracked.
+.vt/
+.agx-tmp/
