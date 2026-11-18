@@ -32,6 +32,7 @@ import { editStored, type EditAsk } from "./jiraEdit.ts";
 import { addWebLinkStored, createSubtaskStored, linkKindsStored, relateCardsStored, removeWebLinkStored, unrelateCardsStored } from "./jiraRelate.ts";
 import { devStored } from "./jiraDev.ts";
 import { rankStored } from "./jiraRank.ts";
+import { moveToSprintStored } from "./jiraSprintMove.ts";
 import { readBoardAreas } from "./jiraboards.ts";
 import { boardEpics, activeSprint } from "./jiraBoardContext.ts";
 import { areaRows } from "../../shared/jiraAreas.ts";
@@ -41,10 +42,10 @@ import { setVoteStored, setWatchStored } from "./jiraFollow.ts";
 import { deleteWorkStored, editWorkStored, logWorkStored } from "./jiraWorklog.ts";
 import { rememberOwnMove } from "./jirawatch.ts";
 
-export const DOOR_VERBS = ["card", "moves", "links", "linktypes", "areas", "activity", "steps", "step", "link", "edit", "comment", "comment-edit", "comment-delete", "move", "subtask", "relate", "unrelate", "weblink", "unweblink", "worklog", "worklog-edit", "worklog-delete", "watch", "vote", "rank", "attach", "unattach"] as const;
+export const DOOR_VERBS = ["card", "moves", "links", "linktypes", "areas", "activity", "steps", "step", "link", "edit", "comment", "comment-edit", "comment-delete", "move", "subtask", "relate", "unrelate", "weblink", "unweblink", "worklog", "worklog-edit", "worklog-delete", "watch", "vote", "rank", "sprint-move", "attach", "unattach"] as const;
 export type DoorVerb = (typeof DOOR_VERBS)[number];
 /** The verbs that change the site. The rest read. */
-export const DOOR_ACTING: readonly DoorVerb[] = ["step", "link", "edit", "comment", "comment-edit", "comment-delete", "move", "subtask", "relate", "unrelate", "weblink", "unweblink", "worklog", "worklog-edit", "worklog-delete", "watch", "vote", "rank", "attach", "unattach"];
+export const DOOR_ACTING: readonly DoorVerb[] = ["step", "link", "edit", "comment", "comment-edit", "comment-delete", "move", "subtask", "relate", "unrelate", "weblink", "unweblink", "worklog", "worklog-edit", "worklog-delete", "watch", "vote", "rank", "sprint-move", "attach", "unattach"];
 export const isActing = (v: string): boolean => (DOOR_ACTING as readonly string[]).includes(v);
 
 /**
@@ -341,7 +342,7 @@ async function readAreas(board: unknown): Promise<DoorAnswer> {
   };
 }
 
-/** The three steps as the owner configured them, by whether they are on; their blocks name statuses a team chose. */
+/** The steps as the owner configured them, by whether they are on; their blocks name statuses a team chose. */
 function readSteps(): DoorAnswer {
   const { steps } = jiraSteps();
   return {
@@ -490,6 +491,9 @@ export async function runDoor(verb: string, b: Record<string, unknown>): Promise
     case "rank":
       // `before` or `after`: the card goes next to that one. Nothing is read back; the answer says only that it was sent.
       return written(await rankStored(key, { before: b.before, after: b.after }), { ranked: true });
+    case "sprint-move":
+      // `sprint` is the numeric sprint id; `keys` the cards (or `key` for one). The same write switch and level as every acting verb.
+      return written(await moveToSprintStored(b.sprint, Array.isArray(b.keys) ? b.keys : key ? [key] : []), { moved: true });
     case "attach": {
       const bytes = attachBytes(b);
       if (typeof bytes === "string") return refuse(bytes);

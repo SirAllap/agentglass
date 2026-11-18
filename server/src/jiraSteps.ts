@@ -20,11 +20,17 @@
  *   3. the move; the assignee change goes INSIDE it when its screen has the
  *      assignee on it (one atomic POST), else after it, and only if the
  *      assignee is still who step 1 saw
- *   4. the comment, then the link
+ *   4. the comment, then the field, then the link
  *
  * What lands short of the whole is `ok` with `partial`, one sentence naming what
  * did not land. Nothing after the move retries the move, and the comment is
  * never sent twice: a second POST is a second comment.
+ *
+ * A field block names a custom field by its NAME (ids differ from site to site)
+ * and is resolved against the card's own edit screen before anything is written:
+ * a name the card does not offer, or a kind whose value a person cannot type
+ * here, refuses the whole step with a sentence. Its request is the card's own
+ * edit, so it is gated by the write switch and not by a kind of its own.
  *
  * Ceiling: one block of each kind per step, and a person is named by the key a
  * write takes (Cloud's account id, Data Center's login).
@@ -38,15 +44,20 @@ import {
   type HandoffMove, type HandoffOutcome, type JiraCreds, type JiraResult, type JiraWriteKind,
 } from "./jira.ts";
 import { commentOn } from "./jiraComments.ts";
+import { isDay } from "./jiraEdit.ts";
+import { screenOf } from "./jiraMoveFields.ts";
 import { bad, isObj as isObject, settle, type Res, type StepGroup } from "./stepSettings.ts";
 
 /** Where a step shows, by the key it has in the settings file. */
-export const STEP_KEYS = ["handoff", "review", "merge"] as const;
+export const STEP_KEYS = ["handoff", "review", "merge", "people", "note"] as const;
 export type StepKey = (typeof STEP_KEYS)[number];
-const TRIGGER: Record<StepKey, StepTrigger> = { handoff: "move", review: "menu", merge: "merge" };
+/** The steps a button runs. The other two are single controls in the panel, with no blocks of their own. */
+export const RUN_KEYS = ["handoff", "review", "merge"] as const;
+/* The single controls take no blocks; their trigger is only what a save is checked against. */
+const TRIGGER: Record<StepKey, StepTrigger> = { handoff: "move", review: "menu", merge: "merge", people: "menu", note: "menu" };
 
 const off = (): JiraStep => ({ enabled: false, blocks: [] });
-export const defaultSteps = (): JiraSteps => ({ handoff: off(), review: off(), merge: off() });
+export const defaultSteps = (): JiraSteps => ({ handoff: off(), review: off(), merge: off(), people: off(), note: off() });
 
 // --- the settings -----------------------------------------------------------
 
@@ -67,6 +78,11 @@ export function applySteps(base: JiraSteps, input: unknown): Res<JiraSteps> {
     if ("enabled" in g) {
       if (typeof g.enabled !== "boolean") return bad(`steps.${key}.enabled must be true or false`);
       out[key].enabled = g.enabled;
+    }
+    /* The assigned list and the note button are single controls: they have no blocks to save. */
+    if (key === "people" || key === "note") {
+      if ("blocks" in g) return bad(`steps.${key}.blocks is not a setting: that step has no blocks`);
+      continue;
     }
     const shim: StepGroup = { enabled: out[key].enabled, statusNames: [], assign: NO_ASSIGN, blocks: out[key].blocks };
     const s = settle(`steps.${key}`, TRIGGER[key], g, shim, { ...shim, blocks: base[key].blocks }, "jira");
@@ -130,7 +146,7 @@ export function setJiraSteps(input: unknown): { ok: true; steps: JiraSteps; over
   // file unless it was saved itself, or the older per-project rules would stop winning on the first unrelated save.
   const file = readSettingsFile().steps;
   const next: Record<string, unknown> = isObject(file) ? { ...file } : {};
-  for (const k of Object.keys(input as object)) next[k] = r.value[k as StepKey];
+  for (const k of Object.keys(input as object)) next[k] = k === "people" || k === "note" ? { enabled: r.value[k as StepKey].enabled } : r.value[k as StepKey];
   const written = applySteps(defaultSteps(), next);
   if (!written.ok) return written;
   try { writeSettingsKey("steps", next); } catch (e) { return { ok: false, error: `could not save the settings: ${(e as Error).message}` }; }
@@ -194,6 +210,48 @@ function pickMove(moves: HandoffMove[], names: string[], toId: string | null, st
 }
 
 /**
+ * One field block, resolved against the card's own edit screen: the field's id,
+ * its name as the site spells it, and the value in the shape Jira takes. A name
+ * the card does not offer, or a kind a typed value cannot fill, is a sentence
+ * that stops the step before anything is written.
+ */
+interface FieldWrite { id: string; name: string; value: unknown }
+async function fieldWrite(creds: JiraCreds, key: string, b: { field: string; value: string }): Promise<FieldWrite | { error: string }> {
+  const v = apiOf(creds);
+  const read = await jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(key)}?fields=updated&expand=editmeta`, { fresh: true });
+  if (!read.ok) return { error: `Nothing was changed: could not read the card's fields. ${read.error ?? "Jira did not answer"}` };
+  const raw = isObj(read.data) && isObj(read.data.editmeta) && isObj(read.data.editmeta.fields) ? read.data.editmeta.fields : null;
+  const name = b.field.trim();
+  const same = (a: string, c: string): boolean => a.trim().toLowerCase() === c.trim().toLowerCase();
+  const f = screenOf(raw).find((x) => same(x.name, name));
+  if (!f) return { error: `This card has no custom field called “${name}”` };
+  const value = b.value.trim();
+  if (!value) return { error: `“${f.name}” has no value in this step: set one in Settings` };
+  switch (f.kind) {
+    case "text": return { id: f.key, name: f.name, value };
+    case "number": {
+      const n = Number(value);
+      return Number.isFinite(n) ? { id: f.key, name: f.name, value: n } : { error: `“${value}” is not a number` };
+    }
+    case "date": return isDay(value) ? { id: f.key, name: f.name, value } : { error: `“${value}” is not a date (write it as 2026-10-31)` };
+    case "option": {
+      const o = f.choices?.find((c) => same(c.name, value));
+      return o ? { id: f.key, name: f.name, value: { id: o.id } } : { error: `“${f.name}” has no value called “${value}”` };
+    }
+    case "options": {
+      const wanted = value.split(",").map((x) => x.trim()).filter(Boolean);
+      const picks = wanted.map((n) => ({ n, o: f.choices?.find((c) => same(c.name, n)) }));
+      const missing = picks.find((p) => !p.o);
+      return missing ? { error: `“${f.name}” has no value called “${missing.n}”` } : { id: f.key, name: f.name, value: picks.map((p) => ({ id: p.o!.id })) };
+    }
+    default:
+      return { error: f.kind === "longtext" ? `“${f.name}” holds long text, which a step cannot set`
+        : f.kind === "comment" ? `“${f.name}” is a comment, not a field a step sets`
+          : `“${f.name}” is a field a step cannot set yet` };
+  }
+}
+
+/**
  * Run one step on one card, as ONE request from the client.
  *
  * The step's blocks come from the settings; `choice` answers the blocks that
@@ -218,8 +276,8 @@ async function runStepOnce(creds: JiraCreds, key: string, updated: number, which
   if (!jiraWriteEnabled()) return { ok: false, error: WRITE_OFF };
   if (!ISSUE_KEY.test(key)) return { ok: false, error: "That is not a Jira card id" };
   if (!Number.isFinite(updated) || updated <= 0) return { ok: false, error: "Nothing was changed: reload the card and try again" };
-  if (typeof which !== "string" || !(STEP_KEYS as readonly string[]).includes(which)) return { ok: false, error: "That is not one of the steps" };
-  const stepKey = which as StepKey;
+  if (typeof which !== "string" || !(RUN_KEYS as readonly string[]).includes(which)) return { ok: false, error: "That is not one of the steps" };
+  const stepKey = which as (typeof RUN_KEYS)[number];
   if (choice.to !== undefined && (typeof choice.to !== "string" || !choice.to.trim() || choice.to.length > NAME_MAX)) return { ok: false, error: "That is not one of the project's statuses" };
   if (choice.assign !== undefined) { const why = badPerson(choice.assign); if (why) return { ok: false, error: why }; }
   if (choice.comment !== undefined && (typeof choice.comment !== "string" || choice.comment.length > COMMENT_MAX)) return { ok: false, error: "That comment is too long for a step" };
@@ -230,9 +288,16 @@ async function runStepOnce(creds: JiraCreds, key: string, updated: number, which
   const step = steps[stepKey];
   if (!step.enabled) return { ok: false, error: "That step is switched off: turn it on in Settings" };
   const plan = planOf<string | number>(TRIGGER[stepKey], { enabled: true, statusNames: [], assign: NO_ASSIGN, blocks: step.blocks });
+  // A review step that says nothing about who is on the card still takes the person picked in its
+  // confirmation, as an assign block that asks would. Nothing is written when no choice comes.
+  const optionalAssign = stepKey === "review" && !step.blocks.some((b) => b.type === "assign" || b.type === "unassign");
+  const askAssign = plan.askAssign ?? (optionalAssign ? { who: "none" as const } : null);
   // A step is refused whole when a kind it uses is switched off: half a hand-off (moved, then not commented) is the thing to avoid.
   const KIND_OF: Record<string, JiraWriteKind | undefined> = { move: "move", assign: "assign", unassign: "assign", comment: "comment", link: "link" };
-  for (const t of new Set(step.blocks.map((b) => KIND_OF[b.type]))) {
+  const kinds = new Set(step.blocks.map((b) => KIND_OF[b.type]));
+  // A person picked in the confirmation is a write of its own, which no block of the step declares.
+  if (optionalAssign && choice.assign !== undefined) kinds.add("assign");
+  for (const t of kinds) {
     const off = t ? writeRefusal(t) : null;
     if (off) return { ok: false, error: `${off}, and this step uses it` };
   }
@@ -301,7 +366,7 @@ async function runStepOnce(creds: JiraCreds, key: string, updated: number, which
   const takes = (who: HandoffUnassign | "people", people: { id: string | number }[] = []): boolean =>
     who === "all" || (who === "me" && !!me && was === me.id) || (who === "people" && people.some((p) => String(p.id) === wasKey));
   let want: string | null | undefined;
-  if (plan.askAssign && choice.assign !== undefined) want = choice.assign;
+  if (askAssign && choice.assign !== undefined) want = choice.assign;
   else if (give?.who === "me") want = me!.key;
   else if (give?.who === "person" && give.person) want = String(give.person.id);
   const takenOff = takes(takeOff?.who ?? fixedUnassign, takeOff && "people" in takeOff ? takeOff.people : []);
@@ -319,6 +384,11 @@ async function runStepOnce(creds: JiraCreds, key: string, updated: number, which
     else if (filled.missing.length) return { ok: false, error: `The comment names ${filled.missing.map((m) => `{${m}}`).join(", ")}, which this place cannot fill in` };
     else comment = filled.text;
   }
+
+  // A field block is resolved against the card's edit screen here, before any write: a name the card does not offer,
+  // or a kind a typed value cannot fill, refuses the whole step rather than landing half of it.
+  const fd = plan.field ? await fieldWrite(creds, key, plan.field) : null;
+  if (fd && "error" in fd) return { ok: false, error: fd.error };
 
   const transitionsAt = `/rest/api/${v}/issue/${encodeURIComponent(key)}/transitions`;
   const failed = (r: JiraResult<unknown>): HandoffOutcome =>
@@ -343,7 +413,7 @@ async function runStepOnce(creds: JiraCreds, key: string, updated: number, which
     if (inside) assigneeDone = true;
   }
   // Does the step have a say in who is on the card at all? Then it reports a row for it, done or not needed.
-  const touchesAssignee = rule ? (rule.clear || rule.askClear) : (give !== null || takeOff !== null || fixedUnassign !== "none" || askClear);
+  const touchesAssignee = rule ? (rule.clear || rule.askClear) : (give !== null || takeOff !== null || fixedUnassign !== "none" || askClear || (optionalAssign && choice.assign !== undefined));
   if (touchesAssignee && want === undefined) blocks.push({ block: "assignee", state: "skipped", why: "nothing to change on who is on it" });
   else if (touchesAssignee && assigneeDone) blocks.push({ block: "assignee", state: "done" });
 
@@ -365,12 +435,18 @@ async function runStepOnce(creds: JiraCreds, key: string, updated: number, which
     }
   }
 
-  // 4. The comment, then the link. Neither is retried and neither undoes what landed before it.
+  // 4. The comment, the field, then the link. None is retried and none undoes what landed before it.
   if (comment !== null) {
     const r = await commentOn(creds, key, comment, []);
     if (r.ok) { wrote = true; blocks.push({ block: "comment", state: "done" }); }
     else if (!wrote) return { ok: false, unauthorised: r.unauthorised, error: r.error };
     else { partials.push(`the comment was not posted: ${r.error ?? "Jira refused"}`); blocks.push({ block: "comment", state: "failed", why: "Jira did not accept the comment" }); }
+  }
+  if (fd && !("error" in fd)) {
+    const r = await jiraCall<unknown>(creds, `/rest/api/${v}/issue/${encodeURIComponent(key)}`, { method: "PUT", body: { fields: { [fd.id]: fd.value } } });
+    if (r.ok) { wrote = true; blocks.push({ block: "field", state: "done" }); }
+    else if (!wrote) return { ok: false, unauthorised: r.unauthorised, error: r.status === 400 ? "Jira did not take that value" : r.error };
+    else { partials.push(`“${fd.name}” was not set`); blocks.push({ block: "field", state: "failed", why: "Jira did not take that value" }); }
   }
   if (wantsLink && pr) {
     const r = await linkPullRequest(creds, key, pr.url, pr.title ?? "");

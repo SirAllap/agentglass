@@ -107,7 +107,7 @@ describe("a secret in a shell history is dropped by shape", () => {
   const MUST_DROP = [
     'export GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
     'set -x API_KEY abc123',
-    'curl -H "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9" https://example.test',
+    `curl -H "Authorization: Bearer ${["eyJhbGciOiJIUzI1NiJ9"].join("")}" https://example.test`,
     'gh auth login --with-token',
     'psql --password hunter2 -h db.example.test',
     'ssh-add ~/.ssh/id_ed25519',

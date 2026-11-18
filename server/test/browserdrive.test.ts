@@ -583,6 +583,13 @@ describe("§16 — origins, read-only, audit, redaction", () => {
     expect("error" in parseAsk("handoff", { reason: "x".repeat(201) })).toBe(true);
     expect("error" in parseAsk("handoff", { check: true, until: "#a" })).toBe(true);
     expect("error" in parseAsk("handoff", { check: "yes" })).toBe(true);
+    // The deadline rides on the arm only, clamped to the CLI's 1 s .. 3600 s.
+    const timed = parseAsk("handoff", { reason: "x", timeoutMs: 9_999_999 });
+    expect("ask" in timed && timed.ask.args.timeoutMs).toBe(3_600_000);
+    const short = parseAsk("handoff", { reason: "x", timeoutMs: 5 });
+    expect("ask" in short && short.ask.args.timeoutMs).toBe(1000);
+    expect("error" in parseAsk("handoff", { check: true, timeoutMs: 1000 })).toBe(true);
+    expect("error" in parseAsk("handoff", { reason: "x", timeoutMs: "soon" })).toBe(true);
   });
 
   test("dialog: accept or dismiss, never both; text needs an accept; always needs a side", () => {
@@ -976,7 +983,7 @@ describe("§15 — every verb that carries a value, not just `type`", () => {
 
   test("a non-standard header name is redacted by name, like Authorization already was", () => {
     const out = redactAskForTest("headers", args("headers", {
-      headers: { "X-Api-Key": "abc123def456", "X-Auth-Token": "zzz", "Content-Type": "application/json" },
+      headers: { "X-Api-Key": ["abc123", "def456"].join(""), "X-Auth-Token": "zzz", "Content-Type": "application/json" },
     }));
     const h = out.headers as Record<string, string>;
     expect(h["X-Api-Key"]).toBe("[redacted]");

@@ -7,6 +7,7 @@
  */
 import { catalogueUrlError, pluginGitUrlError, pluginRefError } from "./plugin-sources.ts";
 import { failed } from "./refused.ts";
+import { pinnedRefError, previewSrc } from "../../shared/pluginSafe.ts";
 import { guardedFetch, type GuardedFetchOptions } from "./net.ts";
 
 export interface CataloguePlugin {
@@ -77,8 +78,9 @@ function validateCataloguePlugin(raw: unknown): CataloguePlugin | null {
   if (!src || typeof src !== "object" || (src as Record<string, unknown>).kind !== "git") return null;
   const url = (src as Record<string, unknown>).url;
   if (pluginGitUrlError(url) !== null) return null;
-  const ref = (src as Record<string, unknown>).ref ?? null;
-  if (pluginRefError(ref) !== null) return null;
+  const ref = (src as Record<string, unknown>).ref;
+  // An entry that does not pin a full commit is dropped: a branch is a pointer its author can move after review.
+  if (pluginRefError(ref) !== null || pinnedRefError(ref) !== null) return null;
   if (typeof p.description !== "string" || !p.description.trim()) return null; // too long is cut below, not a reason to lose the entry
   // Malformed is dropped, not ignored: ignoring it would install the entry
   // with no hash to hold it to, which is the unpinned install it asked not
@@ -94,7 +96,7 @@ function validateCataloguePlugin(raw: unknown): CataloguePlugin | null {
     : undefined;
   return {
     id: p.id,
-    source: { kind: "git", url: (url as string).trim(), ref: ref === null ? null : (ref as string).trim() },
+    source: { kind: "git", url: (url as string).trim(), ref: (ref as string).trim() },
     ...(typeof p.sha256 === "string" ? { sha256: p.sha256 } : {}),
     description: p.description.trim().slice(0, MAX_TEXT),
     categories,
@@ -103,7 +105,7 @@ function validateCataloguePlugin(raw: unknown): CataloguePlugin | null {
     ...(draws?.length ? { draws } : {}),
     ...(short(p.added, 40) ? { added: short(p.added, 40) } : {}),
     ...(typeof p.minApp === "string" && /^\d{1,4}(\.\d{1,4}){0,2}$/.test(p.minApp) ? { minApp: p.minApp } : {}),
-    ...(typeof p.preview === "string" && /^https:\/\/[^\s"'<>]{4,512}$/.test(p.preview) ? { preview: p.preview } : {}),
+    ...(previewSrc(p.preview) ? { preview: previewSrc(p.preview) } : {}),
     ...(p.scope === "read" || p.scope === "answer" || p.scope === "full" ? { scope: p.scope } : {}),
     ...(typeof p.license === "string" && /^[\w.+() -]{1,40}$/.test(p.license.trim()) ? { license: p.license.trim() } : {}),
   };

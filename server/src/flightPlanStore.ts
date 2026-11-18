@@ -7,10 +7,11 @@
  * missing plan or, when visual, a missing mockup.
  */
 import { randomBytes } from "node:crypto";
-import { db } from "./db.ts";
+import { db, durably } from "./db.ts";
 import { mockupKind } from "./preflight.ts";
 import { APP, getRun, getSetting } from "./preflightStore.ts";
 import type { StopReason } from "../../shared/types.ts";
+import { sensitiveHit } from "../../shared/builderModel.ts";
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS flight_plan (
@@ -43,9 +44,25 @@ CREATE TABLE IF NOT EXISTS flight_plan_revision (
 `);
 try { db.exec(`ALTER TABLE flight_plan ADD COLUMN auto_runs INTEGER NOT NULL DEFAULT 0`); } catch { /* already there */ }
 try { db.exec(`ALTER TABLE flight_plan ADD COLUMN size TEXT NOT NULL DEFAULT 'M'`); } catch { /* already there */ }
-for (const col of [`review_rounds INTEGER NOT NULL DEFAULT 0`, `stop_reason TEXT`, `question TEXT`, `queued INTEGER NOT NULL DEFAULT 0`, `created_by TEXT`, `landed_at INTEGER`, `last_report TEXT`, `reviewed_version INTEGER`, `reviewed_size TEXT`, `edited_after_review TEXT`, `worker TEXT`]) {
+for (const col of [`review_rounds INTEGER NOT NULL DEFAULT 0`, `stop_reason TEXT`, `question TEXT`, `queued INTEGER NOT NULL DEFAULT 0`, `created_by TEXT`, `landed_at INTEGER`, `landed_sha TEXT`, `last_report TEXT`, `reviewed_version INTEGER`, `reviewed_size TEXT`, `edited_after_review TEXT`, `worker TEXT`]) {
   try { db.exec(`ALTER TABLE flight_plan ADD COLUMN ${col}`); } catch { /* already there */ }
 }
+/*
+ * What the list needs from the text (its size, the sensitive-path hit), kept next to it and stamped with the
+ * `updated_at` it was computed for (NULL or older = not known yet; see `planFacts`). The covering index holds
+ * every column of a list head: a column stored after `plan_md` makes SQLite walk the text's overflow pages to
+ * reach it, so without the index a cold list still read every plan's text (~190 MB, a 2.6 s stall).
+ */
+for (const col of [`text_bytes INTEGER`, `text_hit TEXT`, `facts_at INTEGER`]) {
+  try { db.exec(`ALTER TABLE flight_plan ADD COLUMN ${col}`); } catch { /* already there */ }
+}
+/* Any write that bumps updated_at without touching the text (Preflight, question, launch, worker, decide...) keeps valid
+ * facts valid: carry facts_at to the new updated_at here, once, so no writer has to remember. A write that sets facts_at
+ * itself (patchPlan, the text edit) is left alone; so is a row whose facts were already stale. Reads no plan_md. */
+db.exec(`CREATE TRIGGER IF NOT EXISTS flight_plan_facts_follow AFTER UPDATE OF updated_at ON flight_plan
+  WHEN OLD.facts_at IS OLD.updated_at AND NEW.facts_at IS OLD.facts_at AND NEW.updated_at IS NOT OLD.updated_at
+  BEGIN UPDATE flight_plan SET facts_at = NEW.updated_at WHERE rowid = NEW.rowid; END`);
+db.exec(`CREATE INDEX IF NOT EXISTS flight_plan_head ON flight_plan (created_at, root, state, id, title, request, visual, size, mockups, decision, preflight_run_id, task_id, auto_runs, review_rounds, stop_reason, question, queued, created_by, landed_at, landed_sha, last_report, reviewed_version, reviewed_size, edited_after_review, worker, launched, updated_at, text_bytes, text_hit, facts_at)`);
 /*
  * What a role worker that was started for a plan came to: one row per ending.
  * `plan_version` is versionOf(plan) at that moment, so a pass given to an older
@@ -63,6 +80,53 @@ CREATE TABLE IF NOT EXISTS flight_plan_step (
 );
 CREATE INDEX IF NOT EXISTS flight_plan_step_plan ON flight_plan_step (plan_id, role_id);
 CREATE TABLE IF NOT EXISTS flight_plan_gate (since INTEGER NOT NULL);
+`);
+/* `branch_tip`: the branch's commit when the worker STARTED (a commit made while it ran leaves the pass on the older tip). `worker`: its name, so a merge can list the passes it used. Null on rows from before. */
+for (const col of [`branch_tip TEXT`, `worker TEXT`]) { try { db.exec(`ALTER TABLE flight_plan_step ADD COLUMN ${col}`); } catch { /* already there */ } }
+/*
+ * The server's own sign-off on a local merge: one row per review outcome for (plan, branch tip, plan version).
+ * verdict: clear | blocker | incomplete | failed | person. Only signoff.ts writes it, from a run's result or the person's own words.
+ * Final verdicts (clear, blocker, person) are unique per key; incomplete and failed repeat, one per try.
+ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS flight_plan_signoff (
+  id INTEGER PRIMARY KEY,
+  plan_id TEXT NOT NULL,
+  branch_tip TEXT NOT NULL,
+  plan_version INTEGER NOT NULL,
+  at INTEGER NOT NULL,
+  run_id TEXT,
+  verdict TEXT NOT NULL,
+  sentence TEXT,
+  reason TEXT,
+  cost_usd REAL,
+  signed_by TEXT,
+  base_sha TEXT
+);
+`);
+/* base_sha: the base branch's commit the review read the diff against; a verdict does not count once base has moved. */
+try { db.exec(`ALTER TABLE flight_plan_signoff ADD COLUMN base_sha TEXT`); } catch { /* already there */ }
+db.exec(`DROP INDEX IF EXISTS flight_plan_signoff_final`);
+db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS flight_plan_signoff_final2 ON flight_plan_signoff (plan_id, branch_tip, plan_version, base_sha, verdict) WHERE verdict IN ('clear', 'blocker', 'person')`);
+db.exec(`
+/* merged: 0 unknown (intent written, git not finished), 1 merged by this verb, 2 landed by other means, 3 tried and failed with base unmoved. */
+CREATE TABLE IF NOT EXISTS flight_plan_merge (
+  id INTEGER PRIMARY KEY,
+  plan_id TEXT NOT NULL,
+  at INTEGER NOT NULL,
+  who TEXT NOT NULL,
+  base TEXT,
+  base_before TEXT,
+  branch TEXT,
+  tip TEXT,
+  merged INTEGER NOT NULL DEFAULT 0,
+  sha TEXT,
+  overridden TEXT,
+  reason TEXT,
+  passes TEXT,
+  signoff_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS flight_plan_merge_plan ON flight_plan_merge (plan_id);
 `);
 if (!db.query(`SELECT 1 FROM flight_plan_gate`).get()) db.query(`INSERT INTO flight_plan_gate (since) VALUES (?)`).run(Date.now());
 export const SIZES = ["S", "M", "L"] as const;
@@ -92,6 +156,8 @@ export interface Plan {
   createdBy: string | null;
   /** When the plan was first seen landed (observed, not the merge's own time); null while it flies. */
   landedAt: number | null;
+  /** The commit the person or the seat named when closing a plan that was built outside Launch; null when landing was seen by git. */
+  landedSha: string | null;
   /** The plan text version and size the last Preflight read: Go needs a run on the plan as it is now. */
   reviewedVersion: number | null; reviewedSize: Size | null;
   /** How the text was edited since the last Preflight started; null when it was not. */
@@ -104,7 +170,7 @@ export interface Plan {
 }
 interface Row {
   id: string; root: string; title: string; request: string; visual: number; size: string; plan_md: string; mockups: string; state: string;
-  decision: string | null; preflight_run_id: string | null; task_id: string | null; auto_runs: number; review_rounds: number; stop_reason: string | null; question: string | null; queued: number; created_by: string | null; landed_at: number | null; last_report: string | null; reviewed_version: number | null; reviewed_size: string | null; edited_after_review: string | null; worker: string | null; launched: string | null; created_at: number; updated_at: number;
+  decision: string | null; preflight_run_id: string | null; task_id: string | null; auto_runs: number; review_rounds: number; stop_reason: string | null; question: string | null; queued: number; created_by: string | null; landed_at: number | null; landed_sha: string | null; last_report: string | null; reviewed_version: number | null; reviewed_size: string | null; edited_after_review: string | null; worker: string | null; launched: string | null; created_at: number; updated_at: number;
 }
 /** Where a builder flies, kept so a hold can reach it and a landing can be seen: the branch, its tree, the commit it was cut from, and its tab. */
 export interface LaunchedWhere { branch?: string; worktree?: string; from?: string; base?: string; window?: string; session?: string }
@@ -118,7 +184,7 @@ const toPlan = (r: Row): Plan => ({
   id: r.id, root: r.root, title: r.title, request: r.request, visual: !!r.visual, size: r.size as Size, planMd: r.plan_md, mockups: JSON.parse(r.mockups), state: r.state as PlanState,
   decision: r.decision ? JSON.parse(r.decision) : null, preflightRunId: r.preflight_run_id, taskId: r.task_id, autoRuns: r.auto_runs,
   reviewRounds: r.review_rounds, stopReason: r.stop_reason as StopReason | null, question: r.question ? JSON.parse(r.question) : null, queued: !!r.queued,
-  createdBy: r.created_by, landedAt: r.landed_at, lastReport: r.last_report ? JSON.parse(r.last_report) : null, reviewedVersion: r.reviewed_version, reviewedSize: r.reviewed_size as Size | null,
+  createdBy: r.created_by, landedAt: r.landed_at, landedSha: r.landed_sha ?? null, lastReport: r.last_report ? JSON.parse(r.last_report) : null, reviewedVersion: r.reviewed_version, reviewedSize: r.reviewed_size as Size | null,
   editedAfterReview: r.edited_after_review as EditAfterReview | null, worker: r.worker ?? null, launched: r.launched ? JSON.parse(r.launched) : null, createdAt: r.created_at, updatedAt: r.updated_at,
 });
 
@@ -151,10 +217,53 @@ export const getRevision = (id: string, n: number): Revision | null => {
 
 export const MAX_PLAN_BYTES = 200_000;
 export const getPlan = (id: string): Plan | null => { const r = db.query<Row, [string]>(`SELECT * FROM flight_plan WHERE id = ?`).get(id); return r ? toPlan(r) : null; };
+/** A plan as the list shows it: everything but the text, which is read once per edit (see `planTextOf`). */
+export type PlanHead = Omit<Plan, "planMd">;
+const COLS_NO_TEXT = `id, root, title, request, visual, size, '' AS plan_md, mockups, state, decision, preflight_run_id, task_id, auto_runs, review_rounds, stop_reason, question, queued, created_by, landed_at, landed_sha, last_report, reviewed_version, reviewed_size, edited_after_review, worker, launched, created_at, updated_at`;
+/**
+ * The plan list without the plan text. A text is up to 200 KB of overflow
+ * pages; copying 200 of them per `GET /flight-plan/plans` read ~690k disk
+ * blocks and stalled the server for 3.5 s. What the list needs from the text
+ * (its size and the sensitive-path hit) is kept per plan, keyed by `updated_at`.
+ */
+/** INDEXED BY, so the list is answered from the covering index and never opens the table (and so never its overflow pages). */
+export const LIST_HEADS_SQL = `SELECT ${COLS_NO_TEXT} FROM flight_plan INDEXED BY flight_plan_head WHERE (? IS NULL OR root = ?) AND (? IS NULL OR state = ?) ORDER BY created_at DESC, rowid DESC LIMIT 200`;
+export function listPlanHeads(f: { root?: string; state?: string } = {}): PlanHead[] {
+  return db.query<Row, [string | null, string | null, string | null, string | null]>(LIST_HEADS_SQL)
+    .all(f.root ?? null, f.root ?? null, f.state ?? null, f.state ?? null).map((r) => { const { planMd: _t, ...h } = toPlan(r); return h; });
+}
+/** The stored size and hit of a plan's text, when they are for the text now saved. */
+export function storedFacts(id: string, updatedAt: number): { bytes: number; hit: string | null } | null {
+  const r = db.query<{ text_bytes: number | null; text_hit: string | null; facts_at: number | null }, [string]>(`SELECT text_bytes, text_hit, facts_at FROM flight_plan WHERE id = ?`).get(id);
+  return r && r.facts_at === updatedAt && r.text_bytes !== null ? { bytes: r.text_bytes, hit: r.text_hit } : null;
+}
+export function saveFacts(id: string, updatedAt: number, f: { bytes: number; hit: string | null }): void {
+  db.query(`UPDATE flight_plan SET text_bytes = ?, text_hit = ?, facts_at = ? WHERE id = ? AND updated_at = ?`).run(f.bytes, f.hit, updatedAt, id, updatedAt);
+}
+/** Ids whose facts are not stored for the text now saved, newest first; reads no text. */
+export const idsWithoutFacts = (limit: number): { id: string; updatedAt: number }[] =>
+  db.query<{ id: string; updated_at: number }, [number]>(`SELECT id, updated_at FROM flight_plan INDEXED BY flight_plan_head WHERE facts_at IS NULL OR facts_at != updated_at ORDER BY created_at DESC LIMIT ?`).all(limit).map((r) => ({ id: r.id, updatedAt: r.updated_at }));
+export const planHeadOf = (id: string): PlanHead | null => {
+  const r = db.query<Row, [string]>(`SELECT ${COLS_NO_TEXT} FROM flight_plan WHERE id = ?`).get(id);
+  if (!r) return null; const { planMd: _t, ...h } = toPlan(r); return h;
+};
+/** One plan's text, read on its own. */
+export const planTextOf = (id: string): string => db.query<{ plan_md: string }, [string]>(`SELECT plan_md FROM flight_plan WHERE id = ?`).get(id)?.plan_md ?? "";
 export function listPlans(f: { root?: string; state?: string } = {}): Plan[] {
   return db.query<Row, [string | null, string | null, string | null, string | null]>(
     `SELECT * FROM flight_plan WHERE (? IS NULL OR root = ?) AND (? IS NULL OR state = ?) ORDER BY created_at DESC, rowid DESC LIMIT 200`,
   ).all(f.root ?? null, f.root ?? null, f.state ?? null, f.state ?? null).map(toPlan);
+}
+
+/**
+ * Where each launched plan flies: its root and its launch record, nothing else.
+ * The budget asks this on every read, and the plan list reads the budget once
+ * per plan; `listPlans` would copy every plan's full text each time (200 plans
+ * x 200 rows of markdown per list call, ~700 ms on the server's main thread).
+ */
+export function launchedWhere(): { root: string; launched: Plan["launched"] }[] {
+  return db.query<{ root: string; launched: string | null }, []>(`SELECT root, launched FROM flight_plan WHERE state = 'launched' ORDER BY created_at DESC, rowid DESC LIMIT 200`)
+    .all().map((r) => ({ root: r.root, launched: r.launched ? JSON.parse(r.launched) : null }));
 }
 
 export function createPlan(p: { root: string; title: string; request: string; visual: boolean; size?: Size; taskId?: string | null; by?: string }): Plan {
@@ -191,9 +300,11 @@ export function patchPlan(id: string, p: { title?: string; planMd?: string; visu
     db.query(`INSERT INTO flight_plan_revision (plan_id, n, plan_md, created_at, by) VALUES (?, ?, ?, ?, ?)`).run(id, versionOf(id), cur.planMd, Date.now(), by);
   }
   const state: PlanState = planMd.trim() ? "ready" : "draft";
-  db.query(`UPDATE flight_plan SET title = ?, plan_md = ?, visual = ?, size = ?, mockups = ?, state = ?, decision = ?, queued = 0, edited_after_review = ?, updated_at = ? WHERE id = ?`).run(
+  const at = Math.max(Date.now(), cur.updatedAt + 1);
+  // The size and hit are written with the text, so the list never reads it.
+  db.query(`UPDATE flight_plan SET title = ?, plan_md = ?, visual = ?, size = ?, mockups = ?, state = ?, decision = ?, queued = 0, edited_after_review = ?, updated_at = ?, text_bytes = ?, text_hit = ?, facts_at = ? WHERE id = ?`).run(
     p.title?.trim().slice(0, 200) ?? cur.title, planMd, (p.visual ?? cur.visual) ? 1 : 0, p.size ?? cur.size, JSON.stringify(p.mockups ? mockups : cur.mockups), state,
-    cur.state === "no-go" ? JSON.stringify(cur.decision) : null, edited, Date.now(), id,
+    cur.state === "no-go" ? JSON.stringify(cur.decision) : null, edited, at, Buffer.byteLength(planMd), sensitiveHit(planMd), at, id,
   );
   return { ok: true, plan: getPlan(id)! };
 }
@@ -231,11 +342,11 @@ export function answerQuestion(id: string, text: string, by: string): Ok | Fail 
     .run(JSON.stringify({ ...cur.question, answer: { text: answer, by, at: Date.now() } }), Date.now(), id);
   return { ok: true, plan: getPlan(id)! };
 }
-/** The builder's line of progress. Only a launched plan has a builder; the text is capped and is data. */
+/** The builder's line of progress. A launched plan has a builder, and so has a plan at ready or Go linked to a worker (never a draft); the text is capped and is data. */
 export function reportProgress(id: string, r: { line: string; step?: number; of?: number }, by: string): Ok | Fail {
   const cur = getPlan(id);
   if (!cur) return { ok: false, error: "no such flight plan", status: 404 };
-  if (cur.state !== "launched") return { ok: false, error: "only a launched plan has a builder to report", status: 409 };
+  if (cur.state !== "launched" && !(cur.worker && (cur.state === "ready" || cur.state === "go"))) return { ok: false, error: "only a launched plan, or one at ready or Go linked to a worker, has a builder to report", status: 409 };
   const line = r.line.replace(/\s+/g, " ").trim().slice(0, 200);
   if (!line) return { ok: false, error: "line: one line of what is done or what comes next", status: 400 };
   const n = (v: unknown) => (typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 999 ? v : null);
@@ -254,8 +365,8 @@ export function setLaunchedTab(id: string, tab: { window: string; session?: stri
   if (p?.launched) db.query(`UPDATE flight_plan SET launched = ? WHERE id = ?`).run(JSON.stringify({ ...p.launched, ...tab }), id);
 }
 /** Remembers the first time a launched plan was seen landed: "landed today" needs a time and git keeps none for a fast-forward. */
-export function markLanded(id: string): void {
-  db.query(`UPDATE flight_plan SET landed_at = ? WHERE id = ? AND landed_at IS NULL`).run(Date.now(), id);
+export function markLanded(id: string, sha?: string): void {
+  db.query(`UPDATE flight_plan SET landed_at = ?, landed_sha = ? WHERE id = ? AND landed_at IS NULL`).run(Date.now(), sha ?? null, id);
 }
 export function setQueued(id: string, queued: boolean): void {
   db.query(`UPDATE flight_plan SET queued = ? WHERE id = ?`).run(queued ? 1 : 0, id);
@@ -278,8 +389,9 @@ export function decide(id: string, verdict: "go" | "no-go", by: string, reason?:
   if (verdict === "no-go" && !why) return { ok: false, error: "No-go needs a reason: it goes back to the author", status: 400 };
   // The Go record says when it went to a text Preflight did not read: reviewBlock let it through as the answer to the findings.
   const editedAfter = verdict === "go" && cur.reviewedVersion !== null && cur.reviewedVersion !== versionOf(id);
-  db.query(`UPDATE flight_plan SET state = ?, decision = ?, updated_at = ? WHERE id = ? AND state = ?`)
-    .run(verdict, JSON.stringify({ by, at: Date.now(), ...(why ? { reason: why } : {}), ...(editedAfter ? { editedAfterPreflight: true } : {}) }), Date.now(), id, cur.state);
+  // Go / No-go is the person's decision: it reaches the disk before the answer does.
+  durably(() => db.query(`UPDATE flight_plan SET state = ?, decision = ?, updated_at = ? WHERE id = ? AND state = ?`)
+    .run(verdict, JSON.stringify({ by, at: Date.now(), ...(why ? { reason: why } : {}), ...(editedAfter ? { editedAfterPreflight: true } : {}) }), Date.now(), id, cur.state));
   return { ok: true, plan: getPlan(id)! };
 }
 
@@ -292,9 +404,52 @@ export function markLaunched(id: string, where: LaunchedWhere = {}): boolean {
 
 export type StepVerdict = "pass" | "fail";
 /** A role worker started for this plan ended its turn. Version and head are read now. */
-export function recordStep(planId: string, roleId: string, verdict: StepVerdict, head: string | null = null): void {
-  db.query(`INSERT INTO flight_plan_step (plan_id, role_id, verdict, plan_version, head, at) VALUES (?, ?, ?, ?, ?, ?)`)
-    .run(planId, roleId, verdict, versionOf(planId), head, Date.now());
+export function recordStep(planId: string, roleId: string, verdict: StepVerdict, head: string | null = null, branchTip: string | null = null, worker: string | null = null): void {
+  db.query(`INSERT INTO flight_plan_step (plan_id, role_id, verdict, plan_version, head, at, branch_tip, worker) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(planId, roleId, verdict, versionOf(planId), head, Date.now(), branchTip, worker);
+}
+/** Roles with a pass given at this exact branch tip and the plan text as it is now. A null tip never matches. Returns role id to the worker that passed (newest). */
+export function passedAtTip(planId: string, tip: string): Map<string, { worker: string | null; tip: string }> {
+  const out = new Map<string, { worker: string | null; tip: string }>();
+  if (!tip) return out;
+  for (const r of db.query<{ role_id: string; worker: string | null }, [string, string, number]>(`SELECT role_id, worker FROM flight_plan_step WHERE plan_id = ? AND verdict = 'pass' AND branch_tip = ? AND plan_version = ? ORDER BY rowid`).all(planId, tip, versionOf(planId))) out.set(r.role_id, { worker: r.worker, tip });
+  return out;
+}
+/** Role ids that have a pass of any kind (any tip, any version): the difference from passedAtTip says "re-run on the current commit". */
+export function everPassedRoles(planId: string): Set<string> {
+  return new Set(db.query<{ role_id: string }, [string]>(`SELECT DISTINCT role_id FROM flight_plan_step WHERE plan_id = ? AND verdict = 'pass'`).all(planId).map((r) => r.role_id));
+}
+
+export interface MergeRow { id: number; planId: string; at: number; who: string; base: string | null; baseBefore: string | null; branch: string | null; tip: string | null; merged: 0 | 1 | 2 | 3; sha: string | null; overridden: string[]; reason: string | null; passes: { role: string; worker: string | null; tip: string }[]; signoffId: number | null }
+interface MergeDb { id: number; plan_id: string; at: number; who: string; base: string | null; base_before: string | null; branch: string | null; tip: string | null; merged: number; sha: string | null; overridden: string | null; reason: string | null; passes: string | null; signoff_id: number | null }
+const toMerge = (r: MergeDb): MergeRow => ({ id: r.id, planId: r.plan_id, at: r.at, who: r.who, base: r.base, baseBefore: r.base_before, branch: r.branch, tip: r.tip, merged: r.merged as 0 | 1 | 2 | 3, sha: r.sha, overridden: r.overridden ? JSON.parse(r.overridden) : [], reason: r.reason, passes: r.passes ? JSON.parse(r.passes) : [], signoffId: r.signoff_id });
+/** The intent row, written before git runs. Throws when the insert fails: the caller answers 500 and nothing ran. */
+export function recordMerge(r: Omit<MergeRow, "id" | "at" | "merged" | "sha">): number {
+  return Number(db.query(`INSERT INTO flight_plan_merge (plan_id, at, who, base, base_before, branch, tip, merged, overridden, reason, passes, signoff_id) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`)
+    .run(r.planId, Date.now(), r.who, r.base, r.baseBefore, r.branch, r.tip, JSON.stringify(r.overridden), r.reason, JSON.stringify(r.passes), r.signoffId).lastInsertRowid);
+}
+/** Moves a row from 0 only: a row already settled stays settled. */
+export function settleMerge(id: number, merged: 1 | 2 | 3, sha: string | null = null): void {
+  db.query(`UPDATE flight_plan_merge SET merged = ?, sha = COALESCE(?, sha) WHERE id = ? AND merged = 0`).run(merged, sha, id);
+}
+export function setMergeSignoff(id: number, signoffId: number | null): void { db.query(`UPDATE flight_plan_merge SET signoff_id = ? WHERE id = ?`).run(signoffId, id); }
+export const openMerge = (planId: string): MergeRow | null => { const r = db.query<MergeDb, [string]>(`SELECT * FROM flight_plan_merge WHERE plan_id = ? AND merged = 0 ORDER BY id DESC LIMIT 1`).get(planId); return r ? toMerge(r) : null; };
+/** One transaction: the merge row says merged with its sha, and the plan is marked landed. */
+export function finishMerge(id: number, planId: string, sha: string): void {
+  db.transaction(() => { settleMerge(id, 1, sha); markLanded(planId); })();
+}
+export const mergesOf = (planId: string): MergeRow[] => db.query<MergeDb, [string]>(`SELECT * FROM flight_plan_merge WHERE plan_id = ? ORDER BY id`).all(planId).map(toMerge);
+/** What the plan's answer shows: the merge this verb made, the newest sign-off, and how often the override was used. */
+export function mergeSummary(planId: string) {
+  const rows = mergesOf(planId);
+  const m = [...rows].reverse().find((r) => r.merged === 1 || r.merged === 2);
+  const overrides = rows.filter((r) => r.overridden.length && (r.merged === 1 || r.merged === 3));
+  const s = db.query<{ verdict: string; at: number; sentence: string | null }, [string]>(`SELECT verdict, at, sentence FROM flight_plan_signoff WHERE plan_id = ? ORDER BY id DESC LIMIT 1`).get(planId);
+  return {
+    merge: m ? { sha: m.sha, at: m.at, who: m.who, overridden: m.overridden, by: m.merged === 1 ? "this-verb" : "other-means" } : null,
+    signoff: s ? { verdict: s.verdict, at: s.at, sentence: s.sentence } : null,
+    overrides: { attempts: overrides.length, merged: overrides.filter((r) => r.merged === 1).length },
+  };
 }
 /** Role ids with a passing result recorded against the plan text as it is now saved. */
 export function passedRoles(planId: string): Set<string> {

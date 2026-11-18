@@ -35,6 +35,7 @@ import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { TEST_TERM } from "./tmuxTerm.ts";
 import { story } from "./story.ts";
+import { agxTestBase } from "./tmuxTmp.ts";
 
 /*
  * Short, for the 108-byte unix socket path limit — a pid is five or six of
@@ -54,7 +55,7 @@ import { story } from "./story.ts";
  * run to reap. `afterAll` already removes the whole directory, so what a crash
  * leaves now is one empty directory rather than a live server.
  */
-const TMPDIR = `/tmp/agx-tmux-claim-${process.pid}`;
+const TMPDIR = agxTestBase("agx-tmux-claim");
 const SOCK = "agx-claim";
 const CTL = new URL("../src/tmuxctl.ts", import.meta.url).pathname;
 const REAL_TMPDIR = process.env.TMUX_TMPDIR;

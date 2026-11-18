@@ -257,7 +257,10 @@ describe("the sidecar and a tmux that cannot do it", () => {
     const t = stub("tmux-noB", `case "$*" in *-V*) echo "tmux 3.8";; *has-session*) exit 0;; *" -C "*) printf '%%begin 1 1 1\\ncommand refresh-client: unknown flag -B\\n%%error 1 1 1\\n'; exec sleep 5;; esac`);
     listen({ bin: t.bin, backoffMs: 20 });
     const attaches = () => t.log().filter((l) => l.includes(" -C ")).length;
-    expect(await settled(attaches, (n) => n >= 1)).toBe(1);
+    // -V, has-session and the attach are three forks in a row; in a full run on a
+    // loaded runner they can take longer than the default 2 s, and a deadline
+    // read of 0 attaches is a false red. settled returns the moment one shows.
+    expect(await settled(attaches, (n) => n >= 1, 10_000)).toBe(1);
     expect(await settled(attaches, (n) => n > 1, 600)).toBe(1);
   });
 

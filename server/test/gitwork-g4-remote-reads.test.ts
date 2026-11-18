@@ -100,21 +100,21 @@ describe("tagsOrigin", () => {
 });
 
 describe("stashFiles", () => {
-  it("lists the files a stash touches with their status", () => {
+  it("lists the files a stash touches with their status", async () => {
     writeFileSync(join(repo, "a.txt"), "changed\n");
     writeFileSync(join(repo, "b.txt"), "new\n");
     git("add", "b.txt");
     git("stash", "push", "-q", "-m", "wip");
     const hash = git("rev-parse", "stash@{0}").stdout.toString().trim();
-    const files = stashFiles(repo, hash);
+    const files = await stashFiles(repo, hash);
     expect(files).toContainEqual({ status: "M", path: "a.txt" });
     expect(files).toContainEqual({ status: "A", path: "b.txt" });
-    expect(stashList(repo)).toHaveLength(1);
+    expect(await stashList(repo)).toHaveLength(1);
   });
 
-  it("refuses anything that is not a hash", () => {
-    expect(stashFiles(repo, "--output=x.txt")).toEqual([]);
-    expect(stashFiles(repo, "HEAD")).toEqual([]);
+  it("refuses anything that is not a hash", async () => {
+    expect(await stashFiles(repo, "--output=x.txt")).toEqual([]);
+    expect(await stashFiles(repo, "HEAD")).toEqual([]);
   });
 });
 
@@ -122,36 +122,36 @@ describe("worktree unlock and force remove", () => {
   const sibling = () => `${repo}-feat`;
 
   it("unlocks a locked worktree so it can be removed", async () => {
-    expect(addWorktree(repo, sibling(), "feat", true).ok).toBe(true);
+    expect((await addWorktree(repo, sibling(), "feat", true)).ok).toBe(true);
     git("worktree", "lock", sibling());
     expect((await worktreesWithState(repo)).find((w) => w.path === sibling())?.locked).toBe(true);
-    expect(removeWorktree(repo, sibling(), false).ok).toBe(false);
-    expect(unlockWorktree(repo, sibling()).ok).toBe(true);
+    expect((await removeWorktree(repo, sibling(), false)).ok).toBe(false);
+    expect((await unlockWorktree(repo, sibling())).ok).toBe(true);
     expect((await worktreesWithState(repo)).find((w) => w.path === sibling())?.locked).toBe(false);
-    expect(removeWorktree(repo, sibling(), false).ok).toBe(true);
+    expect((await removeWorktree(repo, sibling(), false)).ok).toBe(true);
   });
 
-  it("refuses to unlock a path that is not a worktree of this repo", () => {
-    const r = unlockWorktree(repo, join(dir, "elsewhere"));
+  it("refuses to unlock a path that is not a worktree of this repo", async () => {
+    const r = await unlockWorktree(repo, join(dir, "elsewhere"));
     expect(r.ok).toBe(false);
     expect(r.error).toContain("not a worktree");
   });
 
-  it("a worktree with a submodule needs force, and force removes it", () => {
+  it("a worktree with a submodule needs force, and force removes it", async () => {
     const lib = join(dir, `lib-${Math.random().toString(36).slice(2)}`);
     Bun.spawnSync(["mkdir", "-p", lib]);
     at(lib, "init", "-q", "-b", "main", ".");
     writeFileSync(join(lib, "x.txt"), "x\n");
     at(lib, "add", "-A");
     at(lib, "commit", "-qm", "lib");
-    expect(submoduleAdd(repo, lib, "lib").ok).toBe(true);
+    expect((await submoduleAdd(repo, lib, "lib")).ok).toBe(true);
     git("commit", "-qm", "add lib");
-    expect(addWorktree(repo, sibling(), "feat", true).ok).toBe(true);
+    expect((await addWorktree(repo, sibling(), "feat", true)).ok).toBe(true);
     at(sibling(), "submodule", "update", "--init");
-    const plain = removeWorktree(repo, sibling(), false);
+    const plain = await removeWorktree(repo, sibling(), false);
     expect(plain.ok).toBe(false);
     expect(plain.error).toContain("submodule");
-    expect(removeWorktree(repo, sibling(), true).ok).toBe(true);
+    expect((await removeWorktree(repo, sibling(), true)).ok).toBe(true);
   });
 });
 
@@ -159,7 +159,7 @@ describe("worktree pid", () => {
   const linux = process.platform === "linux";
 
   (linux ? it : it.skip)("names a process whose cwd is inside the worktree, and only that one", async () => {
-    expect(addWorktree(repo, `${repo}-busy`, "busy", true).ok).toBe(true);
+    expect((await addWorktree(repo, `${repo}-busy`, "busy", true)).ok).toBe(true);
     const child = Bun.spawn(["sleep", "30"], { cwd: `${repo}-busy` });
     try {
       const rows = await worktreesWithState(repo);

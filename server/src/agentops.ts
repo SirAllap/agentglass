@@ -27,26 +27,34 @@
  * prompt looks like.
  */
 import { launchPerm } from "./launchperm.ts";
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { db } from "./db.ts";
-import { tmux, engineWindowRunning, engineSessionName, KEPT_MARK } from "./tmuxpane.ts";
+import { setPaneRoot } from "./panewt.ts";
+import { tmux, engineWindowOutcome, engineSessionName, KEPT_MARK, noteLayoutChanged } from "./tmuxpane.ts";
+import { projectRootOf } from "./git.ts";
+import { PLACE_FORMAT, parsePlaceWindows, placeArgs } from "./tmuxplace.ts";
 import { paneCommand } from "./tmuxlayout.ts";
 import { agentBinFor, agentArgv } from "./agentticket.ts";
 import { AGENT_PROVIDERS, agentKind, agentProvider } from "../../shared/agentKinds.ts";
-import { roleLaunch, workerRole } from "../../shared/workerRoles.ts";
+import { LEGACY_FLOOR, roleLaunch, workerRole } from "../../shared/workerRoles.ts";
 import { DEFAULT_WORKER_ENVELOPE } from "../../shared/orchestration.ts";
-import { createHash } from "node:crypto";
-import { deniedFor, toolsDeniedFor } from "./agents/envelope.ts";
+import { createHash, randomBytes } from "node:crypto";
+import { BROWSER_SERVER, DOORS_FOR_ROLE, deniedFor, narrowEnvelope, toolsDeniedFor } from "./agents/envelope.ts";
+import { mcpConfigFor, mergeSandboxIntoSettingsArgs, sandboxFor } from "./agents/headless.ts";
 import { revokeWorkerTokens } from "./auth.ts";
-import { forgetWorkerPages } from "./browserdrive.ts";
+import { agentWindowEnv, BROWSER_OFF_VAR } from "./browseraccess.ts";
+import { claudeAccountDir } from "./claudeAccount.ts";
+import { forgetWorkerPages, signOutVaultLanes } from "./browserdrive.ts";
 import { workerRoles } from "./config.ts";
-import { claudeCode, supportsSessionName } from "./agents/claudecode.ts";
+import { claudeCode, claudeHome, projectSlug, supportsSessionName } from "./agents/claudecode.ts";
 import { SPELLINGS } from "./agents/launch.ts";
 import { screenReaderFor } from "./chatpane.ts";
 import { boardNow } from "./lantern.ts";
+import { dropScratch, OWNER_OPTION, ownerLaunch, reapOwner } from "./reaper.ts";
 import type { BoardRow } from "./agentboard.ts";
+import { runChild } from "./broker/brokerRun.ts";
 
 /** A name is a handle a script types and a tmux window is named after: short,
  *  plain, and never something `-t` could misread. */
@@ -61,6 +69,49 @@ export const validName = (s: unknown): s is string => typeof s === "string" && N
  * Opened without selecting (`select` false below), so nobody's screen moves.
  */
 export const agentSession = (root: string): string => engineSessionName(root);
+
+/**
+ * The root whose session a worker opens in: the project the worker's directory belongs to.
+ * `root` is the app's open project, so a worker of ANOTHER project landed in its session, and a
+ * worktree whose folder had its own name got a session of its own. `resolve` folds a worktree to its
+ * repository (git's common dir); when it cannot, the caller's root stands.
+ */
+/** The session the person is on (the one the app shows); index.ts sets it, so this file need not import the terminal. */
+let personSession: () => string | undefined = () => undefined;
+export const setPersonSession = (f: () => string | undefined): void => { personSession = f; };
+
+/**
+ * A worker never makes a session. Its window goes in its project's own session; when that does not
+ * exist yet, in the one the person is on. Only with neither is the project's name used (tmux must have a session).
+ */
+export function pickAgentSession(space: string, exists: (s: string) => boolean, current: string | undefined): string {
+  if (exists(space)) return space;
+  return current && /^[A-Za-z0-9_-]{1,64}$/.test(current) && !current.startsWith("agx-phone-") && exists(current) ? current : space;
+}
+
+/** The session a window sits in now, or undefined. A panel's or phone's mirror of it is not a home. */
+export async function sessionOfWindow(windowId: string): Promise<string | undefined> {
+  if (!/^@\d+$/.test(windowId)) return undefined;
+  const r = await tmux(["list-panes", "-a", "-F", "#{window_id}\t#{session_name}"]);
+  if (!r.ok) return undefined;
+  for (const l of r.stdout.split("\n")) {
+    const [w, n] = l.split("\t");
+    if (w === windowId && n && /^[A-Za-z0-9_-]{1,64}$/.test(n) && !n.startsWith("agx-phone-") && !n.startsWith("agx-view-")) return n;
+  }
+  return undefined;
+}
+
+export async function agentSessionFor(root: string, cwd: string): Promise<string> {
+  const space = agentSession(agentSpaceRoot(root, cwd, projectRootOf));
+  const has = new Map<string, boolean>();
+  const cur = personSession();
+  for (const n of [space, cur]) if (n && !has.has(n)) has.set(n, (await tmux(["has-session", "-t", `=${n}`])).ok);
+  return pickAgentSession(space, (n) => has.get(n) === true, cur);
+}
+
+export function agentSpaceRoot(root: string, cwd: string, resolve: (d: string) => string | null): string {
+  try { return (cwd && resolve(cwd)) || root; } catch { return root; }
+}
 
 export interface NamedAgent {
   name: string;
@@ -79,6 +130,9 @@ export interface NamedAgent {
   /** The policy decision that started it (agents/workerstart.ts `StartedBy`):
    *  present on a headless, policy-started worker and nowhere else. */
   startedBy?: unknown;
+  /** The worker role it was started as, on every start that named one — a TUI
+   *  worker included, which carries no policy stamp and still is a role. */
+  role?: string;
   /** How the latest turn of a headless worker ended; absent while it runs. */
   exitCode?: number;
   exitLine?: string;
@@ -88,6 +142,7 @@ interface Row {
   name: string; kind: string; cwd: string; pane_id: string; window_id: string;
   started_at: number; ended_at: number | null; adopted?: number;
   seat_root?: string | null; model?: string | null; started_by?: string | null; resume_id?: string | null;
+  role?: string | null;
   exit_code?: number | null; exit_line?: string | null;
 }
 const parsed = (s: string | null | undefined): unknown => { try { return s ? JSON.parse(s) : undefined; } catch { return undefined; } };
@@ -98,6 +153,7 @@ const toAgent = (r: Row): NamedAgent => ({
   ...(r.seat_root ? { seatRoot: r.seat_root } : null),
   ...(r.model ? { model: r.model } : null),
   ...(r.started_by ? { startedBy: parsed(r.started_by) } : null),
+  ...(r.role ? { role: r.role } : null),
   ...(r.exit_code != null ? { exitCode: r.exit_code, exitLine: r.exit_line ?? "" } : null),
 });
 
@@ -114,11 +170,15 @@ const everything = db.query<Row, []>(`SELECT * FROM named_agent ORDER BY started
 const end = db.query<never, [number, string]>(`UPDATE named_agent SET ended_at = ? WHERE name = ? AND ended_at IS NULL`);
 /* Ownership and the decision, written right after the row, and the previous
    turn's outcome cleared: a restart under the same name is a new turn. */
-const stamp = db.query<never, [string | null, string | null, string | null, string | null, string]>(
-  `UPDATE named_agent SET seat_root = ?, model = ?, started_by = ?, resume_id = ?, exit_code = NULL, exit_line = NULL WHERE name = ?`);
+const stamp = db.query<never, [string | null, string | null, string | null, string | null, string | null, string]>(
+  `UPDATE named_agent SET seat_root = ?, model = ?, started_by = ?, resume_id = ?, role = ?, exit_code = NULL, exit_line = NULL WHERE name = ?`);
 const settle = db.query<never, [number, string, string | null, string]>(
   `UPDATE named_agent SET exit_code = ?, exit_line = ?, resume_id = COALESCE(?, resume_id) WHERE name = ?`);
-const ownedLive = db.query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM named_agent WHERE seat_root = ? AND ended_at IS NULL`);
+/* A turn is what counts against the seat's limit, not a tab. A worker whose
+   turn is over — a finished headless one, or a TUI still sitting in its pane
+   waiting for an answer — holds no engine and no work, so it must not make the
+   next start wait for a person to stop it. */
+const ownedLive = db.query<{ n: number }, [string]>(`SELECT COUNT(*) AS n FROM named_agent WHERE seat_root = ? AND ended_at IS NULL AND exit_code IS NULL`);
 /* The same row `startAgent` writes, with `adopted` set: one registry, so every
    verb that reads it reaches an enlisted tab without knowing there are two
    ways in. A name that was a worker's before starts again as nobody's: the
@@ -131,21 +191,67 @@ const adopt = db.query<never, [string, string, string, string, string, number]>(
   ON CONFLICT(name) DO UPDATE SET
     kind = excluded.kind, cwd = excluded.cwd, pane_id = excluded.pane_id,
     window_id = excluded.window_id, started_at = excluded.started_at, ended_at = NULL, adopted = 1,
-    seat_root = NULL, model = NULL, started_by = NULL, resume_id = NULL, exit_code = NULL, exit_line = NULL
+    seat_root = NULL, model = NULL, started_by = NULL, resume_id = NULL, role = NULL, exit_code = NULL, exit_line = NULL
 `);
 
 /** Whether ONE pane is on the engine. The same fact `panesAlive` rests on,
  *  asked of a single id — an adopted seat is a pane this app did not open, and
  *  it has to be checked the same way as one it did. */
 export async function paneAlive(paneId: string): Promise<boolean> {
-  if (!/^%\d+$/.test(paneId)) return false;
-  return (await panesAlive()).has(paneId);
+  return (await paneLiveness(paneId)) !== "dead";
 }
 
-/** Every pane on the engine right now — the one fact liveness rests on.
- *  A DEAD pane is not on it: the engine keeps a pane whose command failed
- *  (tmuxconf.ts), and an agent that crashed is a status line in a tab, not
- *  somebody to prompt, broadcast to or wait on. */
+/**
+ * The three-way answer `paneAlive` collapses to a bool, kept apart for a
+ * caller that must not treat "could not ask" the same as "confirmed gone" —
+ * an adopted seat's pane-identity check (seat.ts) is exactly that caller: a
+ * reused %id is only a reused id when the engine actually answered.
+ */
+export async function paneLiveness(paneId: string): Promise<"alive" | "dead" | "unknown"> {
+  if (!/^%\d+$/.test(paneId)) return "dead";
+  const read = await panesAlive();
+  if (!read.ok) return read.absent ? "dead" : "unknown";
+  return read.panes.has(paneId) ? "alive" : "dead";
+}
+
+/** The identity a live pane carries, `pid.start_time` the way `engineIdentity`
+ *  already spells a session's: tmux renumbers %ids from %0 on a fresh server,
+ *  so the id alone does not say a pane is the SAME pane across a restart.
+ *  Null means the engine could not be asked, never that the pane is gone —
+ *  callers already know that from `paneLiveness`. */
+export async function paneIdentity(paneId: string): Promise<string | null> {
+  const r = await tmux(["display-message", "-p", "-t", paneId, "#{pane_pid}.#{pane_start_time}"]).catch(() => null);
+  return r?.ok ? r.stdout.trim() : null;
+}
+
+/**
+ * What a read of the engine's panes said. Two different failures, because they
+ * are not the same fact:
+ *
+ *   `unknown`  the read could not be made — an unreadable socket, a client the
+ *              server will not speak to, no tmux at all. It says nothing about
+ *              any window, and every caller treats it as "still there".
+ *   `absent`   tmux answered `no server running on <path>`: there is no engine,
+ *              so there is no pane. That is a fact about every window — and
+ *              still not a reason to kill anything (see `reconcile`).
+ *
+ * The fallback direction is deliberate: wording a later tmux changes makes a
+ * failure `unknown`, which kills nothing.
+ */
+type PanesRead = { ok: true; panes: Set<string>; places: Map<string, Place> } | { ok: false; absent: boolean };
+
+/** Where a tab sat in its session: the index a resumed turn takes back. */
+type Place = { session: string; index: number };
+const placeOf = new Map<string, Place>();
+/** Remember where a named agent's window is now. Its window closes with its
+ *  turn, so this is the only place the slot survives to the next one. */
+export function notePlace(name: string, p: Place | undefined): void { if (p) placeOf.set(name, p); }
+/** The slot a name last held in THIS session, or undefined. */
+export function placeFor(name: string, session: string): number | undefined {
+  const p = placeOf.get(name);
+  return p && p.session === session ? p.index : undefined;
+}
+
 /**
  * A pane whose CLI has exited and whose tab is kept for reading: the wrapper
  * (`paneCommand`) has `exec`'d its `sleep`. While the CLI runs, the pane's
@@ -158,24 +264,76 @@ export async function paneAlive(paneId: string): Promise<boolean> {
 const KEPT_EXITED = (current: string, start: string): boolean =>
   current === "sleep" && start.includes(KEPT_MARK);
 
-async function panesAlive(): Promise<Set<string>> {
-  const r = await tmux(["list-panes", "-a", "-F", "#{pane_id}\t#{pane_dead}\t#{pane_current_command}\t#{pane_start_command}"]).catch(() => null);
-  const out = new Set<string>();
-  for (const line of r?.ok ? r.stdout.split("\n") : []) {
-    const [id = "", dead = "", current = "", ...start] = line.trim().split("\t");
-    if (id.startsWith("%") && dead !== "1" && !KEPT_EXITED(current, start.join("\t"))) out.add(id);
+/* One outage, one line: the board polls `reconcile`, and a dead engine would
+   otherwise be a line per poll. Cleared by the next read that works. */
+let engineReadDown = false;
+function engineDown(line: string): void {
+  if (engineReadDown) return;
+  engineReadDown = true;
+  console.error(line);
+}
+
+/** tmux's own words for "there is no engine on this socket", both measured on
+ *  3.8: `no server running on <path>` when the file is there and nobody is
+ *  listening, and `error connecting to <path> (No such file or directory)` when
+ *  it is not there at all. */
+const noEngine = (stderr: string): boolean =>
+  /no server running/i.test(stderr) || /error connecting to .*No such file or directory/i.test(stderr);
+
+/** Every pane on the engine right now — the one fact liveness rests on.
+ *  A DEAD pane is not on it: the engine keeps a pane whose command failed
+ *  (tmuxconf.ts), and an agent that crashed is a status line in a tab, not
+ *  somebody to prompt, broadcast to or wait on. */
+async function panesAlive(): Promise<PanesRead> {
+  const r = await tmux(["list-panes", "-a", "-F", "#{pane_id}\t#{pane_dead}\t#{window_index}\t#{session_name}\t#{pane_current_command}\t#{pane_start_command}"]).catch(() => null);
+  if (!r?.ok && noEngine(r?.stderr ?? "")) return { ok: false, absent: true };
+  if (r?.refused) return { ok: false, absent: false }; // never asked: not "down", and not worth a log line
+  if (!r?.ok) {
+    engineDown("[agentops] the engine's panes could not be read; treating every window as still open until one can");
+    return { ok: false, absent: false };
   }
-  return out;
+  engineReadDown = false;
+  const out = new Set<string>();
+  const places = new Map<string, Place>();
+  for (const line of r.stdout.split("\n")) {
+    const [id = "", dead = "", index = "", session = "", current = "", ...start] = line.trim().split("\t");
+    if (id.startsWith("%") && dead !== "1" && !KEPT_EXITED(current, start.join("\t"))) {
+      out.add(id);
+      /* A mirror (phone, view) shows the same window under its own session and
+         its own numbering: only the real session's index is the tab's place. */
+      if (/^\d+$/.test(index) && /^[A-Za-z0-9_-]{1,64}$/.test(session) && !session.startsWith("agx-phone-") && !session.startsWith("agx-view-") && !places.has(id)) {
+        places.set(id, { session, index: Number(index) });
+      }
+    }
+  }
+  return { ok: true, panes: out, places };
 }
 
 /** The registry reconciled against the engine: a row whose pane is gone is
  *  closed here, at the moment somebody looks, and never listed as alive. */
 export async function reconcile(now = Date.now()): Promise<NamedAgent[]> {
-  const alive = await panesAlive();
+  const read = await panesAlive();
+  const rows = live.all();
+  if (!read.ok) {
+    /* A read that could not be made closes nothing: ending a row is what sends
+       its owner's processes to the reaper (`reapLater` below), and a
+       `tmux kill-server` at an upgrade is enough to break one. An ABSENT engine
+       is the other way round: no window of theirs exists, so the rows go — and
+       still nothing is reaped, because the upgrade that killed the engine
+       restores those windows a moment later and a worker's `nohup`'d server is
+       not a leftover (reaper.ts). */
+    if (!read.absent) return rows.map(toAgent);
+    if (rows.length) engineDown(`[agentops] the engine is not running; ${rows.length} named window(s) it held are gone`);
+    for (const r of rows) { end.run(now, r.name); endWindow(r.name); }
+    return [];
+  }
   const out: NamedAgent[] = [];
-  for (const r of live.all()) {
-    if (alive.has(r.pane_id)) out.push(toAgent(r));
-    else end.run(now, r.name);
+  for (const r of rows) {
+    if (read.panes.has(r.pane_id)) { notePlace(r.name, read.places.get(r.pane_id)); out.push(toAgent(r)); continue; }
+    /* The window this row named is gone, so the turn's leftovers go with it —
+       now, not at the next ten-minute tick. Only a row that actually ended is
+       worth the /proc walk: a poll that sees nothing new costs nothing. */
+    if (end.run(now, r.name).changes) { endWindow(r.name); reapLater(r.name); }
   }
   return out;
 }
@@ -186,6 +344,25 @@ export async function reconcile(now = Date.now()): Promise<NamedAgent[]> {
 const lettingGo = new Set<(name: string) => void>();
 export function onLetGo(f: (name: string) => void): void { lettingGo.add(f); }
 const letGo = (name: string): void => { for (const f of lettingGo) f(name); };
+
+/* The narrower event: the WINDOW a name meant is over. A new turn under the
+   same name is not that — `turnStarted` releases the name and nothing else —
+   while a row that ends, or a tab reconciled away, closes the window and
+   everything the turn left running in it. One listener per process
+   (agents/policystart.ts). */
+const endingWindow = new Set<(name: string) => void>();
+export function onWindowEnd(f: (name: string) => void): void { endingWindow.add(f); }
+export function endWindow(name: string): void {
+  /* Every end path comes through here (exit, crash, engine gone, a new turn
+     taking the name), so "sign agents out when the task ends" lives here
+     rather than only in stopAgent's forgetWorkerPages (sec 4, finding 4). */
+  void signOutVaultLanes(name, true, true).catch(() => []);
+  for (const f of endingWindow) f(name);
+}
+
+/** A turn starting under a name: the name's ceiling is re-armed, but the
+ *  window it already meant is not over, so its scope stays. */
+export function turnStarted(name: string): void { letGo(name); }
 
 /** Rewrite the decision stamped on a row and nothing else. */
 export function restamp(name: string, startedBy: unknown): void {
@@ -212,6 +389,46 @@ export function openNamed(): NamedAgent[] {
   return live.all().map(toAgent);
 }
 
+/**
+ * The owners whose windows are on the engine now — what the reaper asks before
+ * it stops anything. The registry without a tmux read (openNamed, never
+ * reconcile: a failed tmux read must not end rows), plus every window name on
+ * the engine's socket and every owner pinned to a window there, because a chat
+ * window or a run's window owns processes without ever being a named agent.
+ *
+ * `null` when the window list could not be read, and the reaper stops nothing
+ * on that: the registry alone would make every chat window's leftovers look
+ * like an owner whose window is gone.
+ *
+ * Ceiling: names are unique per session and repeat across sessions, so a
+ * leftover named after a window that still exists somewhere is left alone. That
+ * is a leak, never a wrong kill, and the next window to close claims it.
+ */
+export async function liveOwnerNames(): Promise<Set<string> | null> {
+  const out = new Set<string>();
+  for (const a of openNamed()) out.add(a.name);
+  /* The name AND the owner the window was pinned to: a tab a person renames
+     keeps no name a worker can be recognised by, and a dot in one is rewritten
+     to a dash before the window is made (tmuxpane.ts `engineWindowName`). */
+  const r = await tmux(["list-windows", "-a", "-F", `#{window_name}\t#{${OWNER_OPTION}}`]).catch(() => null);
+  if (r?.refused) return null; // never asked: unknown, not an engine fault
+  if (!r?.ok) {
+    /* Unknown, or no engine at all: either way nothing is stopped on it. An
+       engine that is gone restores its windows on the next boot, and a worker's
+       `nohup`'d server is not a leftover just because the list could not be
+       read (reaper.ts). */
+    if (!noEngine(r?.stderr ?? "")) {
+      engineDown("[agentops] the engine's windows could not be read; nothing is reaped on that until one can");
+    }
+    return null;
+  }
+  engineReadDown = false;
+  for (const line of r.stdout.split("\n")) {
+    for (const field of line.split("\t")) if (field.trim()) out.add(field.trim());
+  }
+  return out;
+}
+
 /** The rows for one pane, newest first — what a window's bar asks. No tmux and
  *  no board: a poll from the terminal has to cost a row, not a sweep. */
 export function agentsAtPane(paneId: string, all = false): NamedAgent[] {
@@ -230,6 +447,10 @@ export type StartResult =
   | { ok: false; error: "died" }
   /** A worker role's lock that the configs in that directory loosen, and how. */
   | { ok: false; error: "lock-loosened"; detail: string }
+  /** The command still would not fit in one tmux message after the big-argv
+   *  spill below, measured on the ENGINE's own refusal: never shown as the
+   *  generic `no-window`, which said nothing about why. */
+  | { ok: false; error: "prompt-too-long" }
   | { ok: false; error: "no-cli" | "no-window" | "bad-name" | "yolo-refused" | "yolo-role" | "bad-args" };
 /** Every refusal `startAgent` can answer, so a caller's table of wordings is
  *  checked for a new one rather than printing `undefined`. */
@@ -392,19 +613,32 @@ export function roleStart(
   roleId: unknown,
   roles: ReturnType<typeof workerRoles> = workerRoles(),
   dir: string = lockDir(),
-  lock: { readsOnly: boolean; tools: string[]; allow?: string[] } | null = null,
+  lock: { readsOnly: boolean; tools: string[]; allow?: string[]; mayStartSubagents?: boolean } | null = null,
+  /** A worker's own `cwd` and run folder: when given, the same `sandboxFor`
+   *  box a policy-started turn merges through (`headlessTurn`) is merged into
+   *  this role's `--settings` too, so a worker started straight from
+   *  `/agents/named/start` — no orchestration policy stored for the project —
+   *  is sandboxed the same way instead of running with no network sandbox at
+   *  all. Omitted (as every existing caller before this did), no sandbox is
+   *  added — the caller's own CLI invocation decides, as before. */
+  sandbox?: { cwd: string; runDir?: string },
 ): { ok: true; id: string; kind: string; args: string[]; env: Record<string, string> } | { ok: false; error: "no-role" | "no-lock" } {
   const base = workerRole(roleId);
   if (!base) return { ok: false, error: "no-role" };
   /* A saved flow's lock only narrows, except the role's own grant, which this
      path is as much a worker of as one the policy started. */
   const role = lock
-    ? { ...base, ...(lock.readsOnly ? { readOnly: true } : {}), ...(lock.allow?.length ? { allow: lock.allow } : {}) }
+    ? { ...base, ...(lock.readsOnly ? { readOnly: true } : {}), ...(lock.allow?.length ? { allow: lock.allow } : {}), ...(lock.mayStartSubagents ? { mayStartSubagents: true } : {}) }
     : base;
   const choice = roles[role.id];
   const row = agentProvider(choice.provider);
+  // Task (the Agent tool) is denied unless the role's lock grants
+  // mayStartSubagents, whatever the tools list says: an empty list denies
+  // nothing, so keying it off the list let a role with no tools start
+  // subagents without the switch or its approval card.
+  const toolDeny = [...toolsDeniedFor(lock?.tools).filter((t) => t !== "Task" && t !== "Agent"), ...(role.mayStartSubagents ? [] : ["Agent", "Task"])];
   const launch = row && agentKind(row.id)
-    ? roleLaunch(row, role, choice.model, deniedFor(DEFAULT_WORKER_ENVELOPE, role), toolsDeniedFor(lock?.tools))
+    ? roleLaunch(row, role, choice.model, deniedFor(DEFAULT_WORKER_ENVELOPE, role), toolDeny)
     : null;
   if (!row || !launch) return { ok: false, error: "no-lock" };
   const plain = lock ? roleLaunch(row, base, choice.model, deniedFor(DEFAULT_WORKER_ENVELOPE, base)) : null;
@@ -423,7 +657,28 @@ export function roleStart(
     renameSync(tmp, path);
     env[launch.file.env] = path;
   }
-  return { ok: true, id: role.id, kind: row.id, args: launch.args, env };
+  // This plain start (no stored orchestration policy) never runs through
+  // `compileEnvelope`/`headlessTurn`, so a role's own door to the browser
+  // (`DOORS_FOR_ROLE`) was never attached here: the deny list above opens the
+  // CLI for a role that has the door, but nothing ever loaded the MCP server,
+  // so a builder got no `mcp__agentglass-browser__*` tools at all. `--strict-
+  // mcp-config` stays off here, unlike the policy path: this start carries no
+  // other lockdown of the person's or project's own MCP servers, so forcing
+  // it on would drop those instead of adding to them.
+  const args = row.id === "claude" && DOORS_FOR_ROLE[role.base ?? role.id]?.includes(BROWSER_SERVER)
+    ? [...launch.args, "--mcp-config", JSON.stringify(mcpConfigFor(role, []))]
+    : launch.args;
+  // Claude's lock rides as a `--settings` flag (`args`), the same shape
+  // `headlessTurn` merges `sandboxFor`'s box into — so a worker started here,
+  // straight from `/agents/named/start` with no orchestration policy stored,
+  // gets the same network sandbox a policy-started turn does, through the
+  // one merge point (`mergeSandboxIntoSettingsArgs`) both paths call.
+  if (sandbox && row.id === "claude") {
+    const envelope = narrowEnvelope(DEFAULT_WORKER_ENVELOPE, lock);
+    const box = sandboxFor(role, envelope, sandbox.cwd, sandbox.runDir);
+    mergeSandboxIntoSettingsArgs(args, box);
+  }
+  return { ok: true, id: role.id, kind: row.id, args, env };
 }
 
 /**
@@ -449,7 +704,8 @@ export function roleStart(
 export function chairLock(kind: string): Record<string, string> {
   const p = agentProvider(kind);
   if (!p || p.lock?.via !== "env") return {};
-  const launch = roleLaunch(p, workerRole("builder")!, "");
+  // A chair on OpenCode runs none of the person's hooks, so it keeps the old floor: it cannot push, post or spend.
+  const launch = roleLaunch(p, workerRole("builder")!, "", LEGACY_FLOOR);
   if (!launch?.env.OPENCODE_CONFIG_CONTENT) return {};
   const env = { ...launch.env };
   for (const k of OPENCODE_ENV_LAYERS) env[k] = process.env[k] ?? "";
@@ -518,15 +774,25 @@ export function lockLoosened(rules: OpenCodeRule[], lock: string): { subject: st
   return null;
 }
 
+/**
+ * Run `argv` in the spawn broker with its stdout sent to `file` and stderr dropped.
+ * A shell sets the redirect and then becomes the command (`exec`), so the broker's
+ * pipes are closed before OpenCode starts any helper of its own, and its limit
+ * still ends OpenCode itself. Exit code, or "late" at the limit.
+ */
+async function runToFile(argv: string[], file: string, cwd: string, env: Record<string, string>, timeoutMs: number): Promise<number | "late"> {
+  const r = await runChild(["sh", "-c", 'f="$1"; shift; exec "$@" >"$f" 2>/dev/null </dev/null', "sh", file, ...argv], { cwd, env: { ...process.env, ...env }, timeoutMs });
+  if (r.timedOut) return "late";
+  if (r.code === null) throw new Error(r.error ?? "it could not be started");
+  return r.code;
+}
+
 /** `opencode --version`, for a refusal's message only; "" when it will not say. Answer to a file, as below. */
 export async function openCodeVersion(bin: string, cwd: string, env: Record<string, string>): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), "agx-oc-ver-"));
   try {
     const file = join(dir, "v.txt");
-    const proc = Bun.spawn([bin, "--version"], { cwd, env: { ...process.env, ...env }, stdin: "ignore", stdout: Bun.file(file), stderr: "ignore" });
-    const timer = setTimeout(() => { try { proc.kill(); } catch { /* gone */ } }, 5_000);
-    await proc.exited;
-    clearTimeout(timer);
+    await runToFile([bin, "--version"], file, cwd, env, 5_000);
     return /\d+\.\d+\.\d+/.exec(readFileSync(file, "utf8"))?.[0] ?? "";
   } catch { return ""; } finally { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } }
 }
@@ -554,14 +820,8 @@ export async function openCodeLockLoosened(bin: string, cwd: string, env: Record
   const dir = mkdtempSync(join(tmpdir(), "agx-oc-rules-"));
   try {
     const file = join(dir, "rules.json");
-    const proc = Bun.spawn([bin, "debug", "agent", agent], {
-      cwd, env: { ...process.env, ...env }, stdin: "ignore", stdout: Bun.file(file), stderr: "ignore",
-    });
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const late = new Promise<"late">((r) => { timer = setTimeout(() => r("late"), timeoutMs); });
-    const done = await Promise.race([proc.exited, late]);
-    clearTimeout(timer);
-    if (done === "late") { try { proc.kill(); } catch { /* gone */ } return `OpenCode would not show its ${agent} agent's rules`; }
+    const done = await runToFile([bin, "debug", "agent", agent], file, cwd, env, timeoutMs);
+    if (done === "late") return `OpenCode would not show its ${agent} agent's rules`;
     if (done !== 0) {
       /* A nonzero exit is not a hang: OpenCode answered, and what it said is that
          it has no \`debug agent\` (gone in 2.x, measured on 2.1.4, where \`debug agents\`
@@ -600,6 +860,54 @@ export function workerRoleChoices() {
   };
 }
 
+/*
+ * A TMUX COMMAND LINE THAT DOES NOT FIT, AND THE ONE ARGUMENT THAT MADE IT
+ * TOO BIG.
+ *
+ * tmux packs a command into one message and refuses it outright over roughly
+ * 15–20 KB (measured on tmux 3.8), with no window at all — a role's brief and
+ * a card's text are both inlined into this argv (`namedAgentArgv`, and every
+ * headless engine's own argv builder), and either one alone can cross it.
+ *
+ * `handedOver` (agentticket.ts) solves this for a caller's own `--prompt`,
+ * but only because THAT builder always puts it last. Nothing here can assume
+ * where the big one sits — an engine's own flags can come after it — so this
+ * finds whichever element is the largest and, only if moving it would
+ * actually help, writes it to a 0600 file in the window's own scratch
+ * directory and rebuilds the command to read it back and delete it before
+ * running the rest, keeping every other argument exactly where it was.
+ *
+ * SPILL_OVER is the whole command's ceiling, kept well under tmux's own so a
+ * name, a cwd and a handful of flags never tip it over by themselves.
+ * SPILL_WORTH is how big the one argument must be on its own before moving
+ * it is worth the file: swapping out a 200-byte flag value buys nothing.
+ */
+const SPILL_OVER_BYTES = 8_000;
+const SPILL_WORTH_BYTES = 2_000;
+
+function spillBigArg(argv: string[], scratchDir: string | null): string[] {
+  if (!scratchDir) return argv;
+  const total = argv.reduce((n, a) => n + Buffer.byteLength(a) + 1, 0);
+  if (total <= SPILL_OVER_BYTES) return argv;
+  let idx = 0, max = -1;
+  for (let i = 0; i < argv.length; i++) {
+    const n = Buffer.byteLength(argv[i]!);
+    if (n > max) { max = n; idx = i; }
+  }
+  if (max < SPILL_WORTH_BYTES) return argv;
+  const quote = (a: string) => `'${a.replace(/'/g, `'\\''`)}'`;
+  const file = join(scratchDir, `argv-${randomBytes(9).toString("base64url")}.txt`);
+  try {
+    writeFileSync(file, argv[idx]!, { mode: 0o600 });
+  } catch {
+    return argv; // an unwritable scratch dir is not a reason to drop the start: tmux's own refusal, if it comes, now says why
+  }
+  const before = argv.slice(0, idx).map(quote).join(" ");
+  const after = argv.slice(idx + 1).map(quote).join(" ");
+  const script = `f=${quote(file)}; p=$(cat "$f"; printf .); p=\${p%.}; rm -f "$f"; exec ${before}${before ? " " : ""}"$p"${after ? ` ${after}` : ""}`;
+  return ["sh", "-c", script];
+}
+
 /**
  * The command line a named agent starts with: the one `agentArgv` builds, with
  * Claude's `--remote-control` and the caller's pass-through flags added.
@@ -618,17 +926,55 @@ export function namedAgentArgv(
   return agentArgv(bin, { prompt: p.prompt ?? "", yolo: p.yolo === true, title: p.name, kind, perm: launchPerm(p.yolo === true ? "bypassPermissions" : "default") }, canName, [...remote, ...(p.serverArgs ?? []), ...p.args]);
 }
 
-function ownRow(p: { name: string; owner?: { seatRoot: string | null; model: string; startedBy: unknown | null; resumeId: string | null } }): void {
+function ownRow(p: { name: string; owner?: { seatRoot: string | null; model: string; startedBy: unknown | null; resumeId: string | null; role?: string | null } }): void {
   const o = p.owner;
-  stamp.run(o?.seatRoot ?? null, o?.model || null, o?.startedBy ? JSON.stringify(o.startedBy) : null, o?.resumeId ?? null, p.name);
+  stamp.run(o?.seatRoot ?? null, o?.model || null, o?.startedBy ? JSON.stringify(o.startedBy) : null, o?.resumeId ?? null, o?.role ?? null, p.name);
+}
+
+/** Fire and forget, for a caller whose own answer must not wait on a sweep: a
+ *  reap that throws is the next tick's problem, never the stop's. */
+function reapLater(name: string): void {
+  void reapOwner(name).catch(() => { /* the ten-minute run starts from scratch */ });
 }
 
 /** A seat takes an agent that has no owner. Never one that has. */
+/**
+ * Why a live tab may not be re-rooted into `dir`, as a sentence; null when it may.
+ *
+ * Only a directory that exists and is the same repo (same git common dir) as
+ * the tab's current one: a worktree of it, or its main checkout. Pure over its
+ * two seams so the cases can be stated.
+ */
+export function recwdRefusal(
+  dir: string, current: string,
+  repoOf: (d: string) => string | null, isDir: (d: string) => boolean,
+): string | null {
+  if (!dir.startsWith("/")) return "dir: an absolute path";
+  if (!isDir(dir)) return `${dir} is not a directory`;
+  const want = repoOf(current);
+  const got = repoOf(dir);
+  if (!want) return `${current} is not in a git repo, so there is no worktree to move to`;
+  if (got !== want) return `${dir} is not a worktree of this tab's repo (${basename(want)}): a tab moves only between checkouts of its own repo`;
+  return null;
+}
+
+/* Who hears that a tab has a root: the server registers one (drop the repo cache, tell the windows). */
+type RootNote = { name: string; paneId: string; cwd: string };
+let rootAnnouncer: ((n: RootNote) => void) | null = null;
+export function setRootAnnouncer(fn: ((n: RootNote) => void) | null): void { rootAnnouncer = fn; }
+export function announceTabRoot(n: RootNote): void { try { rootAnnouncer?.(n); } catch { /* a listener must never fail a start */ } }
+
+/** Re-root a live agent's directory without touching its process or pane. */
+export function recwdAgent(name: string, dir: string): void {
+  db.query(`UPDATE named_agent SET cwd = ? WHERE name = ? AND ended_at IS NULL`).run(dir, name);
+}
+
 export function ownAgent(name: string, seatRoot: string): void {
   db.query(`UPDATE named_agent SET seat_root = ? WHERE name = ? AND seat_root IS NULL`).run(seatRoot, name);
 }
 
-/** Workers this seat owns that are still on the engine. */
+/** Workers this seat owns that are still on a turn: a tab whose turn ended is
+ *  a worker to read or to answer, not one that fills the limit. */
 export async function liveOwnedBy(seatRoot: string): Promise<number> {
   await reconcile();
   return ownedLive.get(seatRoot)?.n ?? 0;
@@ -645,6 +991,21 @@ export function liveOwned(): { name: string; paneId: string; seatRoot: string; s
 }
 
 /** The engine session a headless worker's last turn ran in, for a resume. */
+/** The Claude session id a start resumes: the owner's, or the one after `--resume` in the argv. */
+function resumeTarget(p: { owner?: { resumeId: string | null }; args?: string[]; exactArgv?: string[] }): string | null {
+  if (p.owner?.resumeId) return p.owner.resumeId;
+  const argv = p.exactArgv ?? p.args ?? [];
+  const i = argv.indexOf("--resume");
+  return i >= 0 ? (argv[i + 1] ?? null) : null;
+}
+
+/** A resumed session lives in the account folder it was made in. If the project's chosen account does not hold it but the default folder does (the account was switched since), keep the default so the resume finds it. */
+export function accountForResume(account: string | null, cwd: string | undefined, id: string | null, home: string = claudeHome()): string | null {
+  if (!account || !id || !cwd) return account;
+  const file = (h: string) => join(h, "projects", projectSlug(cwd), `${id}.jsonl`);
+  return !existsSync(file(account)) && existsSync(file(home)) ? null : account;
+}
+
 export function resumeIdOf(name: string): string | null {
   return byName.get(name)?.resume_id ?? null;
 }
@@ -655,6 +1016,14 @@ export function settleTurn(a: NamedAgent, result: { exitCode: number; line: stri
   if (!result || a.exitCode !== undefined) return a;
   settle.run(result.exitCode, result.line, result.resumeId ?? null, a.name);
   return agentNamed(a.name) ?? a;
+}
+
+/** What a verb answers for a name whose row has ended. A turn stopped at its
+ *  limit used to read like a name that never existed ("no agent by that name"),
+ *  which is what a worker that vanished mid-loop looked like from outside: its
+ *  row says why (`timeout: still running after 30 minutes`), so the answer says it. */
+export function endedAnswer(a: NamedAgent | null): string {
+  return a && a.endedAt !== null && a.exitLine ? `no agent by that name is running: ${a.name} ended (${a.exitLine})` : "no agent by that name";
 }
 
 /* The wrapper's own line, printed after its CLI returns: the status the pane
@@ -671,6 +1040,7 @@ export async function keptExit(paneId: string): Promise<string | null> {
  *  returns — and a caller that waited for the CLI can. */
 export function endKept(name: string, now = Date.now()): void {
   letGo(name);
+  endWindow(name);
   end.run(now, name);
 }
 
@@ -687,6 +1057,8 @@ export async function startAgent(p: {
   /** Started as a worker role: its model and OpenCode agent are the role's,
    *  so a caller's `--model`, `-m` or `--agent` is refused as well. */
   lockedRole?: boolean;
+  /** A turn after the first reuses the session its tab sits in now (even one a person moved it to). */
+  session?: string;
   /** The OpenCode lock was checked on the private server this worker runs against (agents/opencodeserve.ts), so the plain probe below is skipped. Set only by that path. */
   lockVerified?: boolean;
   /** Extra environment for the window. NOT reachable from `/agents/named/start`
@@ -704,8 +1076,13 @@ export async function startAgent(p: {
    *  reason as `env`; a caller's `args` must be empty beside it. */
   exactArgv?: string[];
   /** Who owns the row and why it was started this way. The seat's root is
-   *  taken from the credential, never from the body. */
-  owner?: { seatRoot: string | null; model: string; startedBy: unknown | null; resumeId: string | null };
+   *  taken from the credential, never from the body. `role` is the worker role
+   *  a start named, kept even when no policy stamp came with it. */
+  owner?: { seatRoot: string | null; model: string; startedBy: unknown | null; resumeId: string | null; role?: string | null };
+  /** The card this worker was started for (`--card`, or the one its brief
+   *  resolved): pinned on the window as `@agx-card`, so the bar can tell its
+   *  branch apart from a sibling worker's in the same parent checkout. */
+  card?: string;
 }): Promise<StartResult> {
   if (!validName(p.name)) return { ok: false, error: "bad-name" };
   const kind = p.exactArgv ? (agentProvider(p.kind ?? "") ? { id: p.kind! } : undefined) : agentKind(p.kind ?? "claude");
@@ -733,17 +1110,41 @@ export async function startAgent(p: {
      one of them unreachable by name. The caller decides (`proj1234-2` is the
      worker's own convention) — this only refuses. A name whose pane is gone is
      free again, which is what a relaunch of the same card wants. */
-  const alive = await panesAlive();
+  const read = await panesAlive();
   const had = byName.get(p.name);
   if (had && had.ended_at === null) {
-    if (alive.has(had.pane_id)) return { ok: false, error: "exists", agent: toAgent(had) };
+    /* An unread engine is not a free name: a second worker under it would leave
+       one of them unreachable by name. An ABSENT one is free, as any ended row
+       is — no window of theirs exists, and refusing here would keep a name
+       unusable until an engine happened to come back. */
+    const theirs = read.ok ? read.panes.has(had.pane_id) : !read.absent;
+    if (theirs) return { ok: false, error: "exists", agent: toAgent(had) };
+    // The row's window is gone, so everything its run left in the scope goes
+    // with it, before the new turn takes the name (`noteRunScope`).
     end.run(p.now ?? Date.now(), p.name);
+    endWindow(p.name);
   }
 
   const bin = p.exactArgv ? "sh" : agentBinFor(kind.id);
   if (!bin) return { ok: false, error: "no-cli" };
-  const argv = p.exactArgv ?? namedAgentArgv(bin, kind.id, { ...p, args }, supportsSessionName(bin));
-  if (!argv.length) return { ok: false, error: "no-cli" };
+  const built = p.exactArgv ?? namedAgentArgv(bin, kind.id, { ...p, args }, supportsSessionName(bin));
+  if (!built.length) return { ok: false, error: "no-cli" };
+
+  /* The owner this window's processes will name, and their own TMPDIR. A pane
+     is already its own session and process group (measured: pgid == sid == the
+     pane's pid), so the hangup on close reaches what stays in it; a `nohup`d
+     child that survives the hangup is what the marker is for, and reaper.ts
+     finds it under systemd once this window is gone. Asked for before `argv`
+     is spilled below: the file it may write goes in this same scratch, so it
+     is gone the moment the window is (or never opened). */
+  const owned = ownerLaunch(p.name);
+  // A role's brief or a card's text, built by this app rather than typed by a
+  // caller, is not run through `handedOver` (agentticket.ts) — that helper
+  // only ever sees a caller's own `--prompt`, always the LAST element of what
+  // it builds. Here the big text can sit anywhere in `built` (a worker's
+  // wrapper and its flags come after it on some engines), so the one argument
+  // actually responsible for the size is found and spilled, wherever it is.
+  const argv = spillBigArg(built, owned.dir);
 
   /*
    * `keep` runs the CLI through the wrapper every other window this app opens
@@ -755,8 +1156,34 @@ export async function startAgent(p: {
    * (tmuxconf.ts) — took its tab and its answer with it.
    */
   const run = p.keep ? ["sh", "-c", paneCommand(argv)] : argv;
-  const opened = await engineWindowRunning(p.root, p.name, run, p.cwd, { AGENTGLASS_AGENT_NAME: p.name, ...(p.env ?? {}) }, agentSession(p.root), false, false);
-  if (!opened) return { ok: false, error: "no-window" };
+  /*
+   * THE LOWEST DOOR for the browser credential: whatever path started this
+   * agent, a window is never opened without one. A caller that minted for its
+   * own turn (a role's `wk_`, a seat's `st_`) hands it in `env` and is left
+   * alone; a path added later that forgot gets a credential of the tab's own
+   * rather than the server's inherited machine token. Off only when Settings ▸
+   * Browser turned this engine off, which `agentWindowEnv` answers with the
+   * marker and no credential (`agentWindowDrops`).
+   */
+  /* The project's Claude account: its config directory, for a Claude window that was not handed one. */
+  const account = kind.id === "claude" && !p.env?.CLAUDE_CONFIG_DIR ? accountForResume(claudeAccountDir(p.root), p.cwd, resumeTarget(p)) : null;
+  const given = account ? { ...p.env, CLAUDE_CONFIG_DIR: account } : p.env;
+  const env = given?.AGENTGLASS_TOKEN || given?.[BROWSER_OFF_VAR]
+    ? (given ?? {})
+    : agentWindowEnv({ name: p.name, engine: kind.id, base: given, root: p.root }).env;
+  const into = p.session || await agentSessionFor(p.root, p.cwd);
+  /* A resumed turn is the same tab: its window closed with the last turn, and
+     the new one takes the index the old one had (never selecting itself). */
+  const outcome = await engineWindowOutcome(p.root, p.name, run, p.cwd, { AGENTGLASS_AGENT_NAME: p.name, ...env, ...owned.env }, into, false, false, false, p.card ?? "", placeFor(p.name, into));
+  if (!outcome.ok) {
+    dropScratch(owned.dir);
+    // The spill above is the fix; this is the fallback's own refusal still
+    // saying why, instead of folding every tmux refusal into "no-window" —
+    // measured as the one a long brief used to come back as.
+    return { ok: false, error: /command too long/.test(outcome.reason) ? "prompt-too-long" : "no-window" };
+  }
+  const opened = outcome;
+  if (!outcome.reused && placeFor(p.name, into) === undefined) await settleWindow(outcome.windowId, into, agentSpaceRoot(p.root, p.cwd, projectRootOf), p.name);
   /* A window this app opened and watches: its closing is how `reconcile`
      learns the agent ended, so it closes on any exit rather than keeping the
      corpse the engine keeps for a person's own tabs (tmuxconf.ts). Left on,
@@ -768,8 +1195,9 @@ export async function startAgent(p: {
      checks the same way): a CLI that fails at launch is exactly the fast
      failure that beats the second tmux call. So it is closed here, and the
      caller is told, rather than handed an agent whose pane is a dead one. */
-  const dead = await tmux(["display-message", "-p", "-t", opened.windowId, "#{pane_dead}\t#{pane_current_command}\t#{pane_start_command}"]);
-  const [isDead = "", current = "", ...start] = dead.ok ? dead.stdout.trim().split("\t") : [];
+  const dead = await tmux(["display-message", "-p", "-t", opened.windowId, "#{pane_dead}\t#{window_index}\t#{pane_current_command}\t#{pane_start_command}"]);
+  const [isDead = "", index = "", current = "", ...start] = dead.ok ? dead.stdout.trim().split("\t") : [];
+  if (/^\d+$/.test(index)) notePlace(p.name, { session: into, index: Number(index) });
   /* Kept (`keep`): a CLI that has already exited at this point, with a status
      other than 0, failed at launch; its tab stays, since it was asked to, and
      says why — under its name, recorded as already ended, so `read` and
@@ -782,18 +1210,26 @@ export async function startAgent(p: {
       letGo(p.name);
       upsert.run(p.name, kind.id, p.cwd, opened.paneId, opened.windowId, now);
       end.run(now, p.name);
+      endWindow(p.name);
       ownRow(p);
+      dropScratch(owned.dir);
+      reapLater(p.name);
       return { ok: false, error: "died" };
     }
   }
   if (isDead === "1") {
     await tmux(["kill-window", "-t", opened.windowId]);
+    dropScratch(owned.dir);
+    reapLater(p.name);
     return { ok: false, error: "died" };
   }
+  noteLayoutChanged();
   const startedAt = p.now ?? Date.now();
-  letGo(p.name);
+  turnStarted(p.name);
   upsert.run(p.name, kind.id, p.cwd, opened.paneId, opened.windowId, startedAt);
   ownRow(p);
+  /* EVERY path that opens a tab with a cwd ends here (the start verb, a policy-started worker, a resumed turn): its root is announced at birth. */
+  announceTabRoot({ name: p.name, paneId: opened.paneId, cwd: p.cwd });
   return { ok: true, agent: agentNamed(p.name) ?? { name: p.name, kind: kind.id, cwd: p.cwd, paneId: opened.paneId, windowId: opened.windowId, startedAt, endedAt: null } };
 }
 
@@ -821,18 +1257,39 @@ export function stateOfScreen(screen: string | null, kind?: string): AgentState 
   return "starting";
 }
 
+/** What one look at the screen means for a wait. `working` seen and then left
+ *  is a turn that ran and ended between two looks of the caller: asked for
+ *  `working`, that is reached, and `finished` says it is already over. Without
+ *  this a reviewer whose turn fit inside the wait answered `ready, reached:
+ *  false`, which reads as a prompt that was lost. */
+export function waitStep(until: readonly AgentState[], state: AgentState, sawWorking: boolean): { done: boolean; reached: boolean; finished: boolean } {
+  if (until.includes(state)) return { done: true, reached: true, finished: false };
+  if (state === "gone") return { done: true, reached: false, finished: false };
+  if (sawWorking && state !== "working" && until.includes("working")) return { done: true, reached: true, finished: true };
+  return { done: false, reached: false, finished: false };
+}
+
 /** Wait until the agent is in one of the states asked for, or the deadline
  *  passes. `gone` always ends the wait: nothing later is coming. */
-export async function waitFor(paneId: string, until: AgentState[], timeoutMs: number, tick = 250, kind?: string): Promise<{ state: AgentState; reached: boolean }> {
+export async function waitFor(paneId: string, until: AgentState[], timeoutMs: number, tick = 250, kind?: string): Promise<{ state: AgentState; reached: boolean; finished?: true }> {
   const deadline = Date.now() + Math.max(0, timeoutMs);
+  let sawWorking = false;
   for (;;) {
     /* A kept tab is still on screen after its CLI has exited; the agent in
-       it is gone all the same. */
-    const state = (await panesAlive()).has(paneId) ? stateOfScreen(await screenOf(paneId), kind) : "gone";
-    if (until.includes(state) || state === "gone") return { state, reached: until.includes(state) };
+       it is gone all the same. An unknown counts as there: the screen answers
+       whether it is, and that is the one thing that may end a wait. */
+    const state = (await paneAlive(paneId)) ? stateOfScreen(await screenOf(paneId), kind) : "gone";
+    const step = waitStep(until, state, sawWorking);
+    if (step.done) return { state, reached: step.reached, ...(step.finished ? { finished: true as const } : {}) };
+    if (state === "working") sawWorking = true;
     if (Date.now() >= deadline) return { state, reached: false };
     await Bun.sleep(tick);
   }
+}
+
+/** The pasted text has finished arriving: this look reads what the last one did. */
+export function boxSettled(previous: string, box: string | null): boolean {
+  return !!box?.trim() && box === previous;
 }
 
 export type PromptOutcome = "sent" | "queued" | "diverted" | "stuck" | "gone";
@@ -847,8 +1304,9 @@ export type PromptOutcome = "sent" | "queued" | "diverted" | "stuck" | "gone";
  */
 export async function promptAgent(paneId: string, text: string, timeoutMs = 10_000, kind?: string): Promise<PromptOutcome> {
   const r = screenReaderFor(kind) ?? screenReaderFor()!;
-  /* A kept tab whose CLI has exited: a paste would land in a `sleep`. */
-  if (!(await panesAlive()).has(paneId)) return "gone";
+  /* A kept tab whose CLI has exited: a paste would land in a `sleep`. An
+     unread engine keeps the paste: a missing pane fails the paste itself. */
+  if (!(await paneAlive(paneId))) return "gone";
   /* Another engine's box is only typed into once it reads empty: a dialog this
      app has no screen for would take the paste and the Enter. Claude's reading
      is unchanged. */
@@ -870,7 +1328,12 @@ export async function promptAgent(paneId: string, text: string, timeoutMs = 10_0
     const screen = await screenOf(paneId);
     if (screen === null) return "gone";
     const box = r.inputBox(screen);
-    if (box?.trim()) { pasted = box; break; }
+    /* The box is drawn while the paste is still arriving: the first look at it
+       measured "p" of a whole message, Enter submitted nothing the CLI took, and
+       the verdict was compared against that one letter. Enter waits until two
+       looks, 60 ms apart, read the same box. */
+    if (boxSettled(pasted, box)) { pasted = box!; break; }
+    pasted = box?.trim() ? box : "";
     if (Date.now() > deadline) return "stuck";
     await Bun.sleep(60);
   }
@@ -894,13 +1357,63 @@ const KEYS: Record<string, string> = {
 export const keyNamed = (k: unknown): string | null => (typeof k === "string" ? KEYS[k.toLowerCase()] ?? null : null);
 
 export async function pressKey(paneId: string, key: string): Promise<boolean> {
-  /* A kept tab whose CLI has exited is a `sleep`: a key there reaches nobody. */
-  if (!(await panesAlive()).has(paneId)) return false;
+  /* A kept tab whose CLI has exited is a `sleep`: a key there reaches nobody.
+     An unread engine presses it and lets tmux answer. */
+  if (!(await paneAlive(paneId))) return false;
   return (await tmux(["send-keys", "-t", paneId, key])).ok;
 }
 
 /** Whether an ended agent's own tab is still on the engine: its pane, in a
  *  window still carrying the name it was opened under. */
+/** Parse a `#{pane_pid}\t#{@agx_owner}` answer: the pane's pid when the window
+ *  was launched for `owner`, else null. A person's tab or an orchestrator seat
+ *  has no owner, or another one. */
+export function ownsPane(answer: string, owner: string): { pid: number } | null {
+  const [pid = "", got = ""] = answer.replace(/\n+$/, "").split("\t");
+  const root = Number(pid);
+  if (!Number.isInteger(root) || root < 2) return null;
+  return owner && got.trim() === owner ? { pid: root } : null;
+}
+
+/** tmux's words for "that pane is not there". Anything else that is not an
+ *  answer (a timeout, a refused call) is `unknown`, which kills nothing and
+ *  ends nothing. */
+const paneGone = (stderr: string): boolean => /can't find (pane|window|session)/i.test(stderr) || noEngine(stderr);
+const PANE_ID = /^%\d+$/;
+
+/** Whose window a pane id is in, asked now. `own` only for a window launched
+ *  for `owner`; `foreign` for a person's tab, a seat, another worker, or an id
+ *  that is not a pane id (an empty target is tmux's "current window"). */
+export type PaneOwner = { own: true; pid: number } | { own: false; why: "foreign" | "gone" | "unknown" };
+export async function paneOwner(paneId: string, owner: string, ask: typeof tmux = tmux): Promise<PaneOwner> {
+  if (!PANE_ID.test(paneId) || !owner) return { own: false, why: "foreign" };
+  const r = await ask(["display-message", "-p", "-t", paneId, `#{pane_pid}\t#{${OWNER_OPTION}}`]).catch(() => null);
+  if (!r?.ok) return { own: false, why: r && !r.refused && paneGone(r.stderr) ? "gone" : "unknown" };
+  const own = ownsPane(r.stdout, owner);
+  return own ? { own: true, ...own } : { own: false, why: "foreign" };
+}
+
+/**
+ * THE ONE WAY THIS APP CLOSES AN AGENT'S WINDOW.
+ *
+ * agentglass never closes a window it does not own. The owner is checked on
+ * the PANE at the moment of the kill, and the kill names that same pane id:
+ * never a stored `@N` (a pane moved by join/break-pane, or an id tmux reused,
+ * names another window) and never a window name (a person can give a tab any
+ * name). A window that is not `owner`'s — a person's tab, a relaunched
+ * orchestrator — is left exactly where it is.
+ */
+export async function closeOwnedWindow(paneId: string, owner: string, ask: typeof tmux = tmux): Promise<"killed" | "failed" | "foreign" | "gone" | "unknown"> {
+  const who = await paneOwner(paneId, owner, ask);
+  if (!who.own) {
+    if (who.why === "foreign") console.warn(`[agentglass] pane ${paneId || "(none)"} is not ${owner}'s own window; it was not closed`);
+    return who.why;
+  }
+  const killed = (await ask(["kill-window", "-t", paneId])).ok;
+  if (killed) noteLayoutChanged();
+  return killed ? "killed" : "failed";
+}
+
 export async function keptTabOf(a: NamedAgent): Promise<boolean> {
   const r = await tmux(["display-message", "-p", "-t", a.paneId, "#{window_name}"]);
   return r.ok && r.stdout.trim() === a.name;
@@ -918,15 +1431,34 @@ export async function keptTabOf(a: NamedAgent): Promise<boolean> {
  * The answer says which happened, because "stopped" meaning two things and
  * saying so once is how a caller ends up surprised in one direction or the
  * other.
+ *
+ * `endsWindow: false` is a new turn closing the tab its predecessor kept: the
+ * row goes and the window the name meant does not, so a dev server the last
+ * turn left for the person stays up (scopes.ts `endWindowScopes`).
  */
-export async function stopAgent(a: NamedAgent, now = Date.now(), kill = !a.adopted): Promise<{ ok: boolean; killed: boolean }> {
-  /* An ended agent is only stopped through its kept tab, found by its pane
-     (`keptTabOf`), so that is the window closed. */
+export async function stopAgent(
+  a: NamedAgent, now = Date.now(), kill = !a.adopted, opts: { endsWindow?: boolean; ask?: typeof tmux } = {},
+): Promise<{ ok: boolean; killed: boolean; unknown?: true }> {
+  /* The window closed is the one the agent's PANE is in, asked of tmux at this
+     moment, and only when that window carries this agent's `@agx_owner`
+     (`closeOwnedWindow`). A tmux that did not answer leaves the row live: the
+     next pass asks again, rather than calling a running worker ended. */
+  let killed = false;
+  if (kill) {
+    const r = await closeOwnedWindow(a.paneId, a.name, opts.ask);
+    if (r === "unknown") return { ok: false, killed: false, unknown: true };
+    killed = r === "killed";
+  }
   letGo(a.name);
+  setPaneRoot(a.paneId, null);
   revokeWorkerTokens(a.name);
   forgetWorkerPages(a.name);
-  const killed = kill ? (await tmux(["kill-window", "-t", a.endedAt === null ? a.windowId : a.paneId])).ok : false;
   end.run(now, a.name);
+  if (opts.endsWindow ?? true) endWindow(a.name);
+  /* Only once the window is CONFIRMED gone: a `kill-window` that failed leaves
+     the worker running, and a reap here would SIGTERM its children and remove
+     its scratch under it. One that went on its own is the next sweep's. */
+  if (kill && killed) reapLater(a.name);
   return { ok: kill ? killed : true, killed };
 }
 
@@ -1006,6 +1538,11 @@ export async function enlistAgent(p: {
   }
   const now = Date.now();
   letGo(p.name);
+  endWindow(p.name);
+  /* A new enlist is a fresh start for the pane's footer: an explicit re-root
+     from an earlier registration must not outlive it. (The registered cwd is
+     tmux's shell path; the footer reads the agent itself, see panewt.ts.) */
+  setPaneRoot(paneId, null);
   adopt.run(p.name, "claude", cwd, paneId, windowId, now);
   const made = agentNamed(p.name);
   return made ? { ok: true, agent: made } : { ok: false, error: "no-pane" };
@@ -1014,12 +1551,67 @@ export async function enlistAgent(p: {
 /** The list the worker reconciles against: every live name, with what the
  *  board knows about its pane — working or idle, stopped on a person, on
  *  which branch — so a tick can also tell a stalled session from a busy one. */
-export async function listAgents(all = false): Promise<Array<NamedAgent & { state?: BoardRow["state"]; needsYou?: BoardRow["needsYou"]; doing?: string; branch?: string; session?: string }>> {
+export async function listAgents(all = false): Promise<Array<NamedAgent & { state?: BoardRow["state"]; needsYou?: BoardRow["needsYou"]; screenState?: AgentState; doing?: string; branch?: string; session?: string }>> {
   const agents = all ? everyAgent() : await reconcile();
   const board = await boardNow().catch(() => [] as BoardRow[]);
   const byPane = new Map(board.filter((r) => r.paneId).map((r) => [r.paneId!, r]));
-  return agents.map((a) => {
-    const b = a.endedAt === null ? byPane.get(a.paneId) : undefined;
-    return { ...a, state: b?.state, needsYou: b?.needsYou, doing: b?.doing, branch: b?.branch, session: b?.session };
-  });
+  return Promise.all(agents.map(async (a) => {
+    const live = a.endedAt === null;
+    const screenState = live ? stateOfScreen(await screenOf(a.paneId), a.kind) : undefined;
+    return listRow(a, live ? byPane.get(a.paneId) : undefined, screenState);
+  }));
+}
+
+/** One list row. The board reads hook events, which a permission prompt does
+ *  not send: a worker stuck on "Do you want to proceed?" showed as working for
+ *  20 minutes while `read` said needs-you. The screen is what `read` trusts,
+ *  so list trusts it too: one decision, stateOfScreen. */
+export function listRow(a: NamedAgent, b: BoardRow | undefined, screenState: AgentState | undefined) {
+  const stuck = screenState === "needs-you";
+  const needsYou = b?.needsYou ?? (stuck ? { kind: "permission" as const, why: "a prompt on the screen waits for a person", since: Date.now() } : undefined);
+  return { ...a, state: stuck ? "waiting" as const : b?.state, needsYou, screenState, doing: b?.doing, branch: b?.branch, session: b?.session };
+}
+
+
+/**
+ * Put a tab's window in a session WITHOUT touching what the person is looking at: `-d` on the move,
+ * so no session's current window changes. Default session is the project's own; the named one must exist.
+ */
+export function placeMoveArgs(windowId: string, session: string, windows: ReturnType<typeof parsePlaceWindows>, name: string, afterId?: string | null): string[] {
+  const rest = windows.filter((w) => w.id !== windowId);
+  // Right after the project's own last tab when it has one (its orchestrator, then its workers); the name's group only otherwise.
+  return ["move-window", "-d", "-s", windowId, ...(afterId && rest.some((w) => w.id === afterId) ? ["-a", "-t", afterId] : placeArgs(rest, name, `=${session}:`))];
+}
+
+/** The last window of `session` whose folder belongs to `project`, other than `self`: where a tab of that project goes. */
+export function lastOfProject(rows: Array<{ id: string; index: number; path: string }>, project: string, self: string, resolve: (d: string) => string | null): string | null {
+  let last: { id: string; index: number } | null = null;
+  for (const w of rows) {
+    if (w.id === self || !w.path) continue;
+    let root: string | null = null;
+    try { root = resolve(w.path); } catch { /* unresolvable: not this project's */ }
+    if (root === project && (!last || w.index > last.index)) last = w;
+  }
+  return last?.id ?? null;
+}
+
+/** Move a window right after its project's last tab in `to`, then close the gaps. `-d` throughout. */
+export async function settleWindow(windowId: string, to: string, project: string, name: string) {
+  const listed = await tmux(["list-windows", "-t", `=${to}:`, "-F", PLACE_FORMAT]);
+  const paths = await tmux(["list-windows", "-t", `=${to}:`, "-F", "#{window_id}\t#{window_index}\t#{pane_current_path}"]);
+  const rows = paths.stdout.split("\n").map((l) => l.split("\t")).filter((c) => /^@\d+$/.test(c[0] ?? "")).map((c) => ({ id: c[0]!, index: Number(c[1]), path: c.slice(2).join("\t") }));
+  const after = lastOfProject(rows, project, windowId, projectRootOf);
+  const r = await tmux(placeMoveArgs(windowId, to, parsePlaceWindows(listed.stdout), name, after));
+  if (r.ok) await tmux(["move-window", "-r", "-t", `=${to}:`]);
+  return r;
+}
+
+export async function placeAgent(a: NamedAgent, session?: string): Promise<{ ok: true; session: string } | { ok: false; error: string }> {
+  if (!/^@\d+$/.test(a.windowId)) return { ok: false, error: "that tab has no window to place" };
+  if (session !== undefined && !/^[A-Za-z0-9_-]{1,64}$/.test(session)) return { ok: false, error: "session: letters, digits, dash or underscore" };
+  const project = agentSpaceRoot(a.seatRoot ?? a.cwd, a.cwd, projectRootOf);
+  const to = session ?? await agentSessionFor(project, a.cwd);
+  if (!(await tmux(["has-session", "-t", `=${to}`])).ok) return { ok: false, error: `no session ${to}: a tab is never moved into a new one` };
+  const r = await settleWindow(a.windowId, to, project, a.name);
+  return r.ok ? { ok: true, session: to } : { ok: false, error: r.stderr.trim().slice(0, 200) || "tmux refused the move" };
 }

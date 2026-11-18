@@ -43,15 +43,27 @@ afterAll(() => {
 
 const names = () => tmuxRun("list-windows", "-t", S, "-F", "#{window_name}").split("\n").join(",");
 
-test.skipIf(!have)("a reopened window lands after the one that was before it, in its folder, named and selected", () => {
+test.skipIf(!have)("a reopened window lands after the one that was before it, in its folder, named and selected", async () => {
   const two = tmuxRun("list-windows", "-t", S, "-F", "#{window_id} #{window_name}").split("\n").find((l) => l.endsWith(" two"))!.split(" ")[0]!;
   tmuxRun("kill-window", "-t", two);
   expect(names()).toBe("one,three");
   const one = tmuxRun("list-windows", "-t", S, "-F", "#{window_id} #{window_name}").split("\n").find((l) => l.endsWith(" one"))!.split(" ")[0]!;
-  expect(ctl.reopenWindow(target, "two", tmpdir(), one, true)).toBe(true);
+  expect(await ctl.reopenWindow(target, "two", tmpdir(), one, true)).toBe(true);
   expect(names()).toBe("one,two,three");
   expect(tmuxRun("display-message", "-p", "-t", S, "#{window_name}")).toBe("two");
   expect(tmuxRun("display-message", "-p", "-t", S, "#{pane_current_path}")).toBe(tmpdir());
+});
+
+test.skipIf(!have)("Reopen puts back the card pins, not just the name", async () => {
+  tmuxRun("new-window", "-t", S, "-n", "pinned", "-c", tmpdir(), "sleep", "300");
+  const pinned = tmuxRun("list-windows", "-t", S, "-F", "#{window_id} #{window_name}").split("\n").find((l) => l.endsWith(" pinned"))!.split(" ")[0]!;
+  tmuxRun("set-option", "-w", "-t", pinned, "@agx-given", "orbit-ORBIT-1042");
+  tmuxRun("set-option", "-w", "-t", pinned, "@agx-card", "ORBIT-1042");
+  tmuxRun("kill-window", "-t", pinned);
+  const one = tmuxRun("list-windows", "-t", S, "-F", "#{window_id} #{window_name}").split("\n").find((l) => l.endsWith(" one"))!.split(" ")[0]!;
+  expect(await ctl.reopenWindow(target, "my notes", tmpdir(), one, true, "orbit-ORBIT-1042", "ORBIT-1042")).toBe(true);
+  expect(tmuxRun("display-message", "-p", "-t", S, "#{window_name}\t#{@agx-given}\t#{@agx-card}"))
+    .toBe("my notes\torbit-ORBIT-1042\tORBIT-1042");
 });
 
 test.skipIf(!have)("Restart here respawns a dead pane as a shell in its folder and leaves a live pane alone", async () => {
@@ -59,12 +71,12 @@ test.skipIf(!have)("Restart here respawns a dead pane as a shell in its folder a
   const boom = tmuxRun("list-windows", "-t", S, "-F", "#{window_id} #{window_name}").split("\n").find((l) => l.endsWith(" boom"))!.split(" ")[0]!;
   for (let i = 0; i < 100 && tmuxRun("display-message", "-p", "-t", boom, "#{pane_dead}") !== "1"; i++) await Bun.sleep(20);
   expect(tmuxRun("display-message", "-p", "-t", boom, "#{pane_dead}")).toBe("1");
-  expect(ctl.restartWindow(target, boom)).toBe(true);
+  expect(await ctl.restartWindow(target, boom)).toBe(true);
   expect(tmuxRun("display-message", "-p", "-t", boom, "#{pane_dead}")).toBe("0");
   // The respawned shell's directory is set by tmux's child after restartWindow returns (paneSettled.ts).
   expect(await settled(() => tmuxRun("display-message", "-p", "-t", boom, "#{pane_current_path}"), (p) => p === tmpdir())).toBe(tmpdir());
   // Alive now: a second press must not kill the shell it just started.
   const pid = tmuxRun("display-message", "-p", "-t", boom, "#{pane_pid}");
-  expect(ctl.restartWindow(target, boom)).toBe(false);
+  expect(await ctl.restartWindow(target, boom)).toBe(false);
   expect(tmuxRun("display-message", "-p", "-t", boom, "#{pane_pid}")).toBe(pid);
 });

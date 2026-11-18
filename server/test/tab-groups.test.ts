@@ -13,12 +13,14 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
+import { agxTestBase } from "./tmuxTmp.ts";
+import { settled } from "./paneSettled.ts";
 import { FRAME_ARGV, parseWindows, runAction, sanitizeGroupName, type TmuxTarget } from "../src/tmuxctl.ts";
 import { __resetWindowRepo, windowRepo } from "../src/windowrepo.ts";
 import { projectRootOfAsync } from "../src/git.ts";
 
 const SOCK = [...TMUX_ISOLATED, "-L", `agx-tabgroups-${process.pid}`];
-const TMPDIR = `/tmp/agx-tmux-tabgroups-${process.pid}`;
+const TMPDIR = agxTestBase("agx-tmux-tabgroups");
 const REAL_TMPDIR = process.env.TMUX_TMPDIR;
 const has = !!Bun.which("tmux");
 /** Without TMUX: this suite may itself be running inside somebody's tmux. */
@@ -67,35 +69,39 @@ const frameWindows = () => {
 };
 
 describe.skipIf(!has)("the window options, against real tmux", () => {
-  test("a window starts in no group, unpinned, with its directory", () => {
-    const w = frameWindows().find((x) => x.id === win)!;
+  test("a window starts in no group, unpinned, with its directory", async () => {
+    // tmux's child sets a new pane's directory after new-session returns;
+    // read at once it is still the tmux server's own cwd (seen on CI as the
+    // checkout's server/ folder), so wait for it to settle.
+    const want = realpathSync("/tmp");
+    const w = (await settled(() => frameWindows().find((x) => x.id === win)!, (v) => v?.cwd === want))!;
     expect(w.group).toBeUndefined();
     expect(w.pinned).toBeUndefined();
-    expect(w.cwd).toBe(realpathSync("/tmp"));
+    expect(w.cwd).toBe(want);
   });
 
-  test("group sets @agx-group and the frame reads it back; no name clears it", () => {
-    expect(runAction(target, "group", win, "orbit")).toBe(true);
+  test("group sets @agx-group and the frame reads it back; no name clears it", async () => {
+    expect(await runAction(target, "group", win, "orbit")).toBe(true);
     expect(frameWindows().find((x) => x.id === win)!.group).toBe("orbit");
-    expect(runAction(target, "group", win)).toBe(true);
+    expect(await runAction(target, "group", win)).toBe(true);
     expect(frameWindows().find((x) => x.id === win)!.group).toBeUndefined();
   });
 
-  test("pin sets and clears @agx-pin", () => {
-    expect(runAction(target, "pin", win, undefined, undefined, undefined, true)).toBe(true);
+  test("pin sets and clears @agx-pin", async () => {
+    expect(await runAction(target, "pin", win, undefined, undefined, undefined, true)).toBe(true);
     expect(frameWindows().find((x) => x.id === win)!.pinned).toBe(true);
-    expect(runAction(target, "pin", win, undefined, undefined, undefined, false)).toBe(true);
+    expect(await runAction(target, "pin", win, undefined, undefined, undefined, false)).toBe(true);
     expect(frameWindows().find((x) => x.id === win)!.pinned).toBeUndefined();
   });
 
-  test("a window that is not on this server is refused", () => {
-    expect(runAction(target, "group", "@9999", "orbit")).toBe(false);
-    expect(runAction(target, "pin", "not-an-id", undefined, undefined, undefined, true)).toBe(false);
+  test("a window that is not on this server is refused", async () => {
+    expect(await runAction(target, "group", "@9999", "orbit")).toBe(false);
+    expect(await runAction(target, "pin", "not-an-id", undefined, undefined, undefined, true)).toBe(false);
   });
 });
 
 describe("parsing", () => {
-  test("the appended fields are read, and absent ones stay absent", () => {
+  test("the appended fields are read, and absent ones stay absent", async () => {
     const [w] = parseWindows("@1\t1\tapi\t1\t*\t\t120\t40\tdesk\tops\t1\t/home/dev/code/orbit");
     expect(w).toMatchObject({ id: "@1", group: "ops", pinned: true, cwd: "/home/dev/code/orbit" });
     const [old] = parseWindows("@2\t2\tweb\t0\t-\t\t120\t40\tdesk");
@@ -104,7 +110,7 @@ describe("parsing", () => {
     expect(old!.cwd).toBeUndefined();
   });
 
-  test("a group name is held to one short printable line", () => {
+  test("a group name is held to one short printable line", async () => {
     expect(sanitizeGroupName("  orbit  ")).toBe("orbit");
     expect(sanitizeGroupName("a\u0007b\nc")).toBe("abc");
     expect(sanitizeGroupName("x".repeat(80))).toHaveLength(32);

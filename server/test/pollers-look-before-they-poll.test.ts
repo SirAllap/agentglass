@@ -32,7 +32,7 @@ test("the reminder and session polls go through the focus gate, and the palette 
   expect(code(themes)).not.toMatch(/pollWhileLooking|setInterval/);
   expect(code(reminders)).toContain("pollWhileLooking(");
   expect(code(reminders)).not.toContain("setInterval(");
-  expect(code(app)).toMatch(/usePoll\(true, \(\) => \{ void loadSessions\(\); \}, 30_000\)/);
+  expect(code(app)).toMatch(/usePoll\(true, \(\) => \{ void loadSessions\(\); \}, SESSIONS_POLL_MS\)/);
   expect(code(app)).not.toMatch(/setInterval\(load, 30_000\)/);
 });
 
@@ -44,7 +44,7 @@ test("the machine panel, the terminal's pane reads and the switcher use usePoll,
   expect(code(switcher)).toContain("onWindowsChanged(");
   /* One timer for both terminal reads, not two 4 s intervals. */
   expect(code(terminal)).not.toMatch(/setInterval\([^)]*4000\)/);
-  expect(code(terminal)).toContain("usePoll(open, () => { wtRunRef.current?.(); fillRef.current?.(); }, 4000)");
+  expect(code(terminal)).toContain("usePoll(open, () => { wtRunRef.current?.(); fillRef.current?.(); }, PANE_BEAT_MS)");
 });
 
 test("the dashboard's stats and facet polls go through usePoll", () => {

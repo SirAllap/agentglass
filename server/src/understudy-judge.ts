@@ -33,6 +33,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { classOf, retrieve, judgeEnabled, privateTermsGate, translate, termsStatus, type Precedent } from "./understudy.ts";
 import { compiledRules } from "./understudy-ask.ts";
+import { runChild } from "./broker/brokerRun.ts";
 
 const claudeBin = () => Bun.which("claude");
 
@@ -200,17 +201,15 @@ export async function judge(
   const room = judgeRoom();
   if (!room) return { ...DECLINE, error: "no private directory to run in" };
   try {
-    const p = Bun.spawn(argv, {
-      stdin: new TextEncoder().encode(buildPrompt(q, rules, cases)),
-      stdout: "pipe",
-      stderr: "ignore",
+    // Through the spawn broker: a fork of the server stalls every request.
+    const r = await runChild(argv, {
+      stdin: buildPrompt(q, rules, cases),
       cwd: room.cwd,
       env: { ...process.env, CLAUDE_CONFIG_DIR: room.config },
+      timeoutMs,
     });
-    const timer = setTimeout(() => { try { p.kill(); } catch { /* already gone */ } }, timeoutMs);
-    const text = await new Response(p.stdout).text();
-    await p.exited;
-    clearTimeout(timer);
+    if (r.error && r.code === null) throw new Error(r.error);
+    const text = r.stdout;
     if (!text.trim()) return { ...DECLINE, error: "it returned nothing" };
     return parseVerdict(text);
   } catch (e) {

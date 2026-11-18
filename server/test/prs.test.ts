@@ -563,3 +563,15 @@ describe("what the image proxy relays", () => {
     }
   });
 });
+
+describe("laterPageFacts", () => {
+  test("an unread later page keeps hasNext and the total from page one", async () => {
+    const { laterPageFacts } = await import("../src/prs.ts");
+    expect(laterPageFacts({ loading: true }, { total: 426 })).toEqual({ total: 426, hasNext: true, cursor: null });
+  });
+  test("a read page keeps its own facts; page one is untouched", async () => {
+    const { laterPageFacts } = await import("../src/prs.ts");
+    expect(laterPageFacts({ loading: false, total: 426, hasNext: false, cursor: null }, { total: 426 }).hasNext).toBe(false);
+    expect(laterPageFacts({ loading: true }, undefined)).toEqual({ total: undefined, hasNext: false, cursor: null });
+  });
+});

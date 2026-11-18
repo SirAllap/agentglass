@@ -91,7 +91,7 @@ describe("the hook says what the session is", () => {
        window outlives every panel that looks at it, and `-e` has to be there
        when its first pane is forked. The variable reaching the pane is measured
        against a real tmux in engine-panels.test.ts. */
-    expect(term).toContain("env: d.bench && ticket?.role ? { AGENTGLASS_ROLE: ticket.role } : undefined,");
+    expect(term).toContain("env: windowCred?.env ?? (d.bench && ticket?.role ? { AGENTGLASS_ROLE: ticket.role } : undefined),");
     expect(term).toContain("if (ticket?.role) env = { ...env, AGENTGLASS_ROLE: ticket.role };");
     const index = await Bun.file(new URL("../src/index.ts", import.meta.url)).text();
     expect(index).toContain('title: "Lantern", kind: "claude", role: "lantern" }');

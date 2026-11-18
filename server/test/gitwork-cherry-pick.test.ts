@@ -77,8 +77,8 @@ beforeEach(build);
 afterAll(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe("cherry-pick engine", () => {
-  it("replays a clean set in one run, oldest first", () => {
-    const r = cherryPick(repo, [F2(), F3()]);
+  it("replays a clean set in one run, oldest first", async () => {
+    const r = await cherryPick(repo, [F2(), F3()]);
     expect(r.ok).toBe(true);
     expect(subject()).toBe("feat three");
     const log = git("log", "--format=%s", "-3").stdout.toString().split("\n");
@@ -86,105 +86,105 @@ describe("cherry-pick engine", () => {
     expect(log).toContain("feat three");
   });
 
-  it("pauses mid-series on a conflict, and continue finishes it", () => {
-    const r = cherryPick(repo, [F1(), F2(), F3()]);
+  it("pauses mid-series on a conflict, and continue finishes it", async () => {
+    const r = await cherryPick(repo, [F1(), F2(), F3()]);
     expect(r.ok).toBe(false);
     expect(r.error).toContain("could not apply");
-    expect(conflicts(repo).state).toBe("cherry-picking");
-    expect(conflicts(repo).files).toEqual([join(repo, "a.txt")]);
+    expect((await conflicts(repo)).state).toBe("cherry-picking");
+    expect((await conflicts(repo)).files).toEqual([join(repo, "a.txt")]);
 
     // The shared resolution path is the one the panel uses for merges.
-    const res = resolveWith(repo, "a.txt", "theirs");
+    const res = await resolveWith(repo, "a.txt", "theirs");
     expect(res.ok).toBe(true);
-    const fin = mergeContinue(repo);
+    const fin = await mergeContinue(repo);
     expect(fin.ok).toBe(true);
-    expect(conflicts(repo).state).toBe("clean");
+    expect((await conflicts(repo)).state).toBe("clean");
     // F1 stopped the run; continue replays F2 and F3 after it.
     expect(subject()).toBe("feat three");
     expect(read("a.txt")).toBe("theirs\n");
   });
 
-  it("abort restores the branch to where it was", () => {
+  it("abort restores the branch to where it was", async () => {
     const before = subject();
-    cherryPick(repo, [F1(), F2(), F3()]);
-    const a = cherryPickAbort(repo);
+    await cherryPick(repo, [F1(), F2(), F3()]);
+    const a = await cherryPickAbort(repo);
     expect(a.ok).toBe(true);
-    expect(conflicts(repo).state).toBe("clean");
+    expect((await conflicts(repo)).state).toBe("clean");
     expect(subject()).toBe(before);
   });
 
-  it("-n stages the change without committing", () => {
+  it("-n stages the change without committing", async () => {
     const headBefore = subject();
-    const r = cherryPick(repo, [F2()], true);
+    const r = await cherryPick(repo, [F2()], true);
     expect(r.ok).toBe(true);
     expect(subject()).toBe(headBefore);
     const staged = git("diff", "--cached", "--name-only").stdout.toString().trim();
     expect(staged).toContain("b.txt");
   });
 
-  it("refuses when a pick is already in progress", () => {
-    cherryPick(repo, [F1(), F2(), F3()]);
-    const r = cherryPick(repo, [F3()]);
+  it("refuses when a pick is already in progress", async () => {
+    await cherryPick(repo, [F1(), F2(), F3()]);
+    const r = await cherryPick(repo, [F3()]);
     expect(r.ok).toBe(false);
     expect(r.error).toContain("cherry-pick");
   });
 
-  it("refuses bogus hashes instead of handing them to git", () => {
-    const r = cherryPick(repo, ["HEAD", "main"]);
+  it("refuses bogus hashes instead of handing them to git", async () => {
+    const r = await cherryPick(repo, ["HEAD", "main"]);
     expect(r.ok).toBe(false);
     expect(r.error).toContain("no valid commit hashes");
   });
 
-  it("cherryPickContinue only acts when there is a pick to continue", () => {
-    const r = cherryPickContinue(repo);
+  it("cherryPickContinue only acts when there is a pick to continue", async () => {
+    const r = await cherryPickContinue(repo);
     expect(r.ok).toBe(false);
     expect(r.error).toContain("nothing to continue");
   });
 
-  it("a commit already on the branch is refused and leaves no pick in progress", () => {
+  it("a commit already on the branch is refused and leaves no pick in progress", async () => {
     // git stops with "The previous cherry-pick is now empty" and keeps the
     // sequencer open with zero conflicts: a screen with nothing to resolve.
     const same = git("rev-parse", "HEAD").stdout.toString().trim();
     git("checkout", "-q", "-b", "twin", "HEAD~1");
     git("cherry-pick", same);
-    const r = cherryPick(repo, [same]);
+    const r = await cherryPick(repo, [same]);
     expect(r.ok).toBe(false);
     expect(Bun.spawnSync(["test", "-e", join(repo, ".git", "CHERRY_PICK_HEAD")]).exitCode).not.toBe(0);
     expect(git("status", "--porcelain").stdout.toString().trim()).toBe("");
   });
 
-  it("a merge commit is refused for revert with a plain sentence", () => {
+  it("a merge commit is refused for revert with a plain sentence", async () => {
     // Raw git said "is a merge but no -m option was given" with a 40-char sha for the second.
     git("checkout", "-q", "feat");
     git("merge", "--no-ff", "-qm", "merge main", "main", "-X", "ours");
     const m = git("rev-parse", "HEAD").stdout.toString().trim();
-    const rm = revertCommit(repo, m);
+    const rm = await revertCommit(repo, m);
     expect(rm.ok).toBe(false);
     expect(rm.error).toContain("merge commit");
     expect(rm.error).not.toContain(m);
     expect(git("status", "--porcelain").stdout.toString().trim()).toBe("");
   });
 
-  it("a revert resolved to no change is skipped instead of stranding the revert", () => {
+  it("a revert resolved to no change is skipped instead of stranding the revert", async () => {
     // Raw git stayed "Revert in progress" and the toast was six lines of status.
     git("checkout", "-q", "feat");
     const one = git("rev-parse", "HEAD~2").stdout.toString().trim();
     writeFileSync(join(repo, "a.txt"), "later\n");
     git("add", "-A"); git("commit", "-qm", "feat later");
-    expect(revertCommit(repo, one).ok).toBe(false);
+    expect((await revertCommit(repo, one)).ok).toBe(false);
     git("checkout", "--ours", "a.txt"); git("add", "a.txt");
-    const r = mergeContinue(repo);
+    const r = await mergeContinue(repo);
     expect(r.ok).toBe(true);
     expect(Bun.spawnSync(["test", "-e", join(repo, ".git", "REVERT_HEAD")]).exitCode).not.toBe(0);
   });
 
-  it("a pick that fails for another reason is not skipped as if it were empty", () => {
+  it("a pick that fails for another reason is not skipped as if it were empty", async () => {
     // A signing program that fails leaves CHERRY_PICK_HEAD in place with no
     // conflicts and a non-empty change; skipping it would drop that commit.
     git("config", "commit.gpgsign", "true");
     git("config", "gpg.program", "false");
     const two = git("rev-parse", "feat~1").stdout.toString().trim();
-    const r = cherryPick(repo, [two]);
+    const r = await cherryPick(repo, [two]);
     expect(r.ok).toBe(false);
     expect(Bun.spawnSync(["test", "-e", join(repo, ".git", "CHERRY_PICK_HEAD")]).exitCode).toBe(0);
   });

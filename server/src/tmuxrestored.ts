@@ -29,6 +29,9 @@ export interface RestoredMark {
   pane?: CapturedPane;
   /** Its position in the window, to find it again in the rebuilt window. */
   paneIndex?: number;
+  /** The person put the banner away: the window keeps its mark (its card is
+   *  still the way to resume it), the desk is just not announced again. */
+  off?: true;
 }
 
 interface MarksFile { engine: string; at: number; windows: Record<string, RestoredMark> }
@@ -90,11 +93,12 @@ export function dropStaleMarks(engine: string): void {
 }
 
 /** The wire fields for one window, or null when the last restore did not build it. */
-export function restoredFields(id: string): { restored: true; restoredAt: number; was?: string; resume?: string } | null {
+export function restoredFields(id: string): { restored: true; restoredAt: number; restoredDismissed?: true; was?: string; resume?: string } | null {
   const f = read();
   const m = f?.windows[id];
   if (!f || !m) return null;
-  return { restored: true, restoredAt: f.at, ...(m.was ? { was: m.was } : {}), ...(m.resume ? { resume: m.resume } : {}) };
+  return { restored: true, restoredAt: f.at, ...(m.off ? { restoredDismissed: true as const } : {}),
+    ...(m.was ? { was: m.was } : {}), ...(m.resume ? { resume: m.resume } : {}) };
 }
 
 export function restoredMark(id: string): RestoredMark | null {
@@ -114,6 +118,24 @@ export function dismissRestored(ids?: string[]): void {
   const windows = { ...f.windows };
   for (const id of ids) delete windows[id];
   write(Object.keys(windows).length ? { ...f, windows } : null);
+}
+
+/**
+ * "NOT NOW" ON THE BANNER, kept where the restore is.
+ *
+ * The pill is drawn from these marks, so hiding it in one renderer's storage
+ * left the desk still saying "restored" to every other window, to the phone,
+ * and to the same window after a reload — the answer never reached the thing it
+ * answered. The marks STAY: each window's card is how a person resumes it, and
+ * putting the banner away is not answering them. The next restore writes a new
+ * record and is announced again.
+ */
+export function dismissRestoredBanner(ids?: string[]): void {
+  const f = read();
+  if (!f) return;
+  const windows = { ...f.windows };
+  for (const id of ids ?? Object.keys(windows)) if (windows[id]) windows[id] = { ...windows[id], off: true };
+  write({ ...f, windows });
 }
 
 export function __forgetRestoredCache(): void { cache = undefined; }

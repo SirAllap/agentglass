@@ -26,6 +26,7 @@ import { browseReal } from "./browse.ts";
 import { agentglassConfigDirs } from "./config.ts";
 import { startExternalJob, listJobs, type JobView } from "./fsops.ts";
 import { mimeOf } from "./openwith.ts";
+import { setIntervalAs } from "./loopwatch.ts";
 
 export type Runtime = "python" | "bash" | "command";
 export interface ActionManifest {
@@ -409,7 +410,7 @@ export async function runAction(id: unknown, pathsIn: unknown, source: unknown, 
         const pid = proc.pid;
         job.onCancel(() => { try { process.kill(-pid, "SIGTERM"); } catch { /* gone */ } setTimeout(() => { try { process.kill(-pid, "SIGKILL"); } catch { /* gone */ } }, 3000).unref?.(); });
         const out = { text: "", cut: false };
-        const tick = setInterval(() => { const p = readProgress(progress); if (p) job.progress(p.done, p.total); }, 400);
+        const tick = setIntervalAs("finder action progress", () => { const p = readProgress(progress); if (p) job.progress(p.done, p.total); }, 400);
         await Promise.all([readCapped(proc.stdout as ReadableStream<Uint8Array>, out), readCapped(proc.stderr as ReadableStream<Uint8Array>, out)]);
         const code = await proc.exited;
         clearInterval(tick);

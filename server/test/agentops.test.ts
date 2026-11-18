@@ -6,7 +6,7 @@
  */
 import { launchFlags, launchPerm } from "../src/launchperm.ts";
 import { describe, expect, test } from "bun:test";
-import { keyNamed, stateOfScreen, startAgent, validName, refusedArg, namedAgentArgv, NAME_RE } from "../src/agentops.ts";
+import { listRow, boxSettled, waitStep, keyNamed, stateOfScreen, startAgent, validName, refusedArg, namedAgentArgv, NAME_RE } from "../src/agentops.ts";
 import { SPELLINGS } from "../src/agents/launch.ts";
 
 const READY = [
@@ -225,5 +225,43 @@ describe("the command line a named agent starts with", () => {
       .toEqual(["/usr/bin/claude", "--name", "w", ...ASK, "--remote-control", "w", "--model", "opus", "go"]);
     expect(namedAgentArgv("/usr/bin/claude", "claude", { name: "w", args: ["--model", "opus"] }, false))
       .toEqual(["/usr/bin/claude", ...ASK, "--model", "opus"]);
+  });
+});
+
+describe("a wait that sees a turn start and end", () => {
+  test("working seen, then ready: asked for working, that is reached and finished, not lost", () => {
+    expect(waitStep(["working"], "ready", true)).toEqual({ done: true, reached: true, finished: true });
+    expect(waitStep(["working"], "ready", false)).toEqual({ done: false, reached: false, finished: false });
+    expect(waitStep(["working"], "working", false)).toEqual({ done: true, reached: true, finished: false });
+    expect(waitStep(["ready"], "ready", true)).toEqual({ done: true, reached: true, finished: false });
+    expect(waitStep(["working"], "gone", true).reached).toBe(false);
+  });
+});
+
+describe("a paste still arriving", () => {
+  test("the box is read as settled only when two looks agree, never on the first letter", () => {
+    expect(boxSettled("", "p")).toBe(false);
+    expect(boxSettled("p", "pl")).toBe(false);
+    expect(boxSettled("plan", "plan")).toBe(true);
+    expect(boxSettled("", null)).toBe(false);
+    expect(boxSettled("  ", "  ")).toBe(false);
+  });
+});
+
+describe("list and read give one answer", () => {
+  const agent = { name: "orbit-1", kind: "claude", cwd: "/tmp/x", paneId: "%1", windowId: "@1", startedAt: 1, endedAt: null };
+  const board = { state: "working", doing: "build" } as never;
+  test("a pane showing a permission prompt is needs-you in list, as in read", () => {
+    const screenState = stateOfScreen(PERMISSION, "claude");
+    expect(screenState).toBe("needs-you");
+    const row = listRow(agent as never, board, screenState);
+    expect(row.screenState).toBe("needs-you");
+    expect(row.state).toBe("waiting");
+    expect(row.needsYou).toMatchObject({ kind: "permission" });
+  });
+  test("a working pane stays as the board says", () => {
+    const row = listRow(agent as never, board, stateOfScreen(WORKING, "claude"));
+    expect(row.state).toBe("working");
+    expect(row.needsYou).toBeUndefined();
   });
 });

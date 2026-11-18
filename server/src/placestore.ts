@@ -45,6 +45,9 @@ function open(): Database {
   mkdirSync(dirname(path()), { recursive: true });
   conn = new Database(path());
   conn.exec("PRAGMA journal_mode = WAL;");
+  // Same as db.ts: WAL + NORMAL skips the per-commit fsync, which on btrfs can
+  // wait for a whole transaction commit and stall the event loop for seconds.
+  conn.exec("PRAGMA synchronous = NORMAL;");
   // Imported browsing history is private; keep the file 0600 like the token and
   // devices files rather than the 0644 SQLite creates, so another local user on
   // a shared box can't read it. WAL/SHM are spun up by the pragma above and

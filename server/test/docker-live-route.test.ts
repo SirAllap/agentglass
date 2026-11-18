@@ -30,17 +30,23 @@ exit 0
   base = `http://127.0.0.1:${port}`;
   proc = Bun.spawn(["bun", "run", new URL("../src/index.ts", import.meta.url).pathname], {
     env: {
-      PATH: `${dir}:${process.env.PATH ?? ""}`, TMUX_TMPDIR: TMUX_TEST_TMPDIR, HOME: dir, XDG_CONFIG_HOME: dir, XDG_DATA_HOME: dir, XDG_CACHE_HOME: dir,
+      PATH: `${dir}:${process.env.PATH ?? ""}`, TMPDIR: dir, TMUX_TMPDIR: TMUX_TEST_TMPDIR, HOME: dir, XDG_CONFIG_HOME: dir, XDG_DATA_HOME: dir, XDG_CACHE_HOME: dir,
       AGENTGLASS_STATE_DIR: `${dir}/state`, AGENTGLASS_ROOT: dir, AGENTGLASS_DB: join(dir, "d.db"),
       AGENTGLASS_TOKEN: TOKEN, AGENTGLASS_SCAN_DISABLED: "1", AGENTGLASS_PORT: String(port),
     },
     stdout: "ignore", stderr: "pipe",
   });
+  // Keep what the child says: a boot that fails must explain itself.
+  let err = "";
+  void (async () => {
+    try { for await (const c of proc!.stderr as ReadableStream<Uint8Array>) err += new TextDecoder().decode(c); } catch { /* closed */ }
+  })();
   for (let i = 0; i < 150; i++) {
     try { if ((await fetch(base + "/health")).ok) return; } catch { /* not up yet */ }
     await Bun.sleep(100);
   }
-  throw new Error("the server did not come up");
+  const tail = err.split("\n").slice(-30).join("\n");
+  throw new Error(`the server did not come up (exit ${proc.exitCode ?? "still running"}); last 30 lines of its stderr:\n${tail}`);
 }, SERVER_BOOT_MS);
 
 afterAll(() => {

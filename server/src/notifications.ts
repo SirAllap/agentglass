@@ -22,6 +22,7 @@ import { spawn, type Subprocess } from "bun";
 import { deathTie } from "./pdeathsig.ts";
 import { failed } from "./refused.ts";
 import { existsSync } from "node:fs";
+import { setTimeoutAs } from "./loopwatch.ts";
 
 export type SystemNote = {
   /** Stable within a session; used to key the UI's queue and to name the note
@@ -402,7 +403,7 @@ function scheduleRestart(startedAt: number): void {
   const ranMs = Date.now() - startedAt;
   restartDelay = ranMs >= RESTART_HEALTHY_MS ? 0 : Math.min(RESTART_MAX_MS, Math.max(RESTART_MIN_MS, restartDelay * 2));
   if (restartTimer) clearTimeout(restartTimer);
-  restartTimer = setTimeout(() => { restartTimer = null; if (subs.size && !proc) start(); }, restartDelay);
+  restartTimer = setTimeoutAs("notifications restart", () => { restartTimer = null; if (subs.size && !proc) start(); }, restartDelay);
   restartTimer.unref?.();
 }
 
@@ -470,7 +471,7 @@ async function pump(p: Subprocess<"ignore", "pipe", "pipe">) {
       // A single-dispatch notification is the whole one there is, so no next
       // header ever comes to push it out — it used to sit here forever. Flush it
       // once the stream goes quiet, which for a lone ping is immediately.
-      if (buf) { idle = setTimeout(() => { idle = null; const t = buf; buf = ""; drain(t); }, IDLE_FLUSH_MS); idle.unref?.(); }
+      if (buf) { idle = setTimeoutAs("notifications idle flush", () => { idle = null; const t = buf; buf = ""; drain(t); }, IDLE_FLUSH_MS); idle.unref?.(); }
     }
   } catch { /* the process was killed, which is how we stop it */ }
   clearIdle();

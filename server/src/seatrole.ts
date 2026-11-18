@@ -11,7 +11,7 @@
  * seat outlives the process that opened it, and an in-memory set forgets it
  * on the first restart.
  */
-import { sessionRoles, setSessionRole, sessionsWhosePromptStarts } from "./db.ts";
+import { sessionRoles, setSessionRole, scheduleLegacyPromptScan } from "./db.ts";
 import { SEAT_PROMPT_MARK, SEAT_ROLE } from "./seatmark.ts";
 
 const seats = new Set<string>();
@@ -21,7 +21,6 @@ function load(): void {
   if (loaded) return;
   loaded = true;
   for (const [id, role] of sessionRoles()) if (role === SEAT_ROLE) seats.add(id);
-  for (const id of sessionsWhosePromptStarts(SEAT_PROMPT_MARK)) noteSeatSession(id);
 }
 
 export function noteSeatSession(id: string): void {
@@ -31,6 +30,8 @@ export function noteSeatSession(id: string): void {
 }
 
 export const isSeatSession = (id: string | undefined): boolean => { load(); return !!id && seats.has(id); };
+/* Chats that predate the role: found once, in the background (see scheduleLegacyPromptScan), never inside a request. */
+scheduleLegacyPromptScan("legacy-seat-chats", SEAT_PROMPT_MARK, noteSeatSession);
 
 /**
  * What `/ingest` asks of every hook event: is this the seat?

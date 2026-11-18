@@ -15,11 +15,11 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { nodeModulesGap, withDepsLine } from "../src/checkoutDeps.ts";
+import { ensureCheckoutDeps, nodeModulesGap, withDepsLine } from "../src/checkoutDeps.ts";
 
 const REPO = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const DEPSCHECK = join(REPO, "scripts", "depscheck.ts");
@@ -141,10 +141,24 @@ describe("the command the make targets run first", () => {
     mkdirSync(join(dir, "web"), { recursive: true });
     copyFileSync(DEPSCHECK, join(dir, "scripts", "depscheck.ts"));
     copyFileSync(join(REPO, "server", "src", "checkoutDeps.ts"), join(dir, "server", "src", "checkoutDeps.ts"));
+    // checkoutDeps runs its install on the broker (53a4f390b), which reaches
+    // the relay's wire: the script has to load, or it exits 1 before it answers.
+    for (const d of ["broker", "relay"]) cpSync(join(REPO, "server", "src", d), join(dir, "server", "src", d), { recursive: true });
     writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "orbit", private: true, workspaces: ["web"] }));
     writeFileSync(join(dir, "web", "package.json"), JSON.stringify({ name: "orbit-web", dependencies: { "orbit-shared": "1.0.0" } }));
     const r = spawnSync("bun", [join(dir, "scripts", "depscheck.ts")], { encoding: "utf8", env: { ...process.env, NO_COLOR: "1" } });
     expect(r.status).toBe(2);
     expect(r.stderr).toContain(`environment: node_modules missing (node_modules, web/node_modules) — run \`bun install\` in ${dir}`);
+  });
+});
+
+describe("ensureCheckoutDeps", () => {
+  test("two turns in one checkout share one install, never two at once", async () => {
+    const dir = checkout(["web"], []);
+    const first = ensureCheckoutDeps(dir);
+    expect(ensureCheckoutDeps(join(dir, "web", ".."))).toBe(first);
+    await first;
+    // Settled: the next turn looks again instead of reusing the old answer.
+    expect(ensureCheckoutDeps(dir)).not.toBe(first);
   });
 });

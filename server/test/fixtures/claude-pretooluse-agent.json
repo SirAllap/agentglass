@@ -1,0 +1,13 @@
+{
+  "session_id": "sess-0000",
+  "transcript_path": "/home/example/.claude/projects/-work-acme-orbit/sess-0000.jsonl",
+  "cwd": "/work/acme/orbit",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "description": "review the footer diff",
+    "prompt": "Read only the diff as a stranger and name the line that breaks.",
+    "subagent_type": "general-purpose"
+  }
+}

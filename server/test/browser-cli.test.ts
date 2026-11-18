@@ -537,11 +537,32 @@ describe.skipIf(!HAVE_PY)("the CLI an agent runs", () => {
     const r = await cli("handoff", "Enter the code", "--until", "#welcome");
     expect(r.code, r.err).toBe(0);
     expect(JSON.parse(r.out).state).toBe("done");
-    expect(asked).toEqual(["handoff", "handoff", "handoff", "handoff"]);
-    expect(verbArgs(0)).toMatchObject({ reason: "Enter the code", until: "#welcome" });
+    // Arm, three checks, and the cancel every way out sends (a no-op after Done).
+    expect(asked).toEqual(["handoff", "handoff", "handoff", "handoff", "handoff"]);
+    expect(verbArgs(4)).toMatchObject({ cancel: true });
+    expect(verbArgs(0)).toMatchObject({ reason: "Enter the code", until: "#welcome", timeoutMs: 300_000 });
     expect(verbArgs(1)).toMatchObject({ check: true, waitMs: 20_000 });
     expect(verbArgs(1).reason).toBeUndefined();
     expect(controls).toContainEqual({ cmd: "view", to: "browser" });
+  });
+
+  step("handoff --timeout ends the wait: the banner comes down, a timeout result, exit nonzero", async () => {
+    await openWindow();
+    answers = {
+      handoff: () => {
+        const a = askedArgs[askedArgs.length - 1] as Record<string, unknown>;
+        if (a.reason) return { ok: true, value: { state: "armed", url: "u", title: "t" } };
+        if (a.check) return { ok: true, value: { state: "waiting", url: "u", title: "t" } };
+        return { ok: true, value: { state: "cancelled" } };
+      },
+    };
+    asked = []; askedArgs = [];
+    const t0 = Date.now();
+    const r = await cli("handoff", "Solve the CAPTCHA", "--timeout", "2");
+    expect(Date.now() - t0).toBeLessThan(10_000);
+    expect(r.code, r.out).toBe(1);
+    expect(r.err + r.out).toContain("nobody answered the handoff in 2 s");
+    expect(askedArgs[askedArgs.length - 1]).toMatchObject({ cancel: true });
   });
 
   step("but a refusal a retry cannot fix is not retried", async () => {
@@ -1029,6 +1050,12 @@ describe.skipIf(!HAVE_PY)("every verb carries the caller's tab, the four early r
     r = await cliAsMe("open", "--as", "shower-three", "https://example.com/");
     expect(r.code, r.err).toBe(0);
     expect(askedArgs[0]?.show).toBeUndefined();
+    /* The claim follows the answer: a lane with no pane to bring it forward is said so, not "brought forward". */
+    answers.open = { ok: true, value: { id: "t-shown", url: "u", title: "t", shown: false, why: "the Browser pane is not open in the agentglass window" } };
+    r = await cliAsMe("--show", "open", "--as", "shower-four", "https://example.com/");
+    expect(r.code, r.err).toBe(0);
+    expect(r.err).toContain("--show: not brought forward: the Browser pane is not open in the agentglass window");
+    expect(r.err).not.toContain("is brought forward");
   });
 
   step("a redaction is SAID — the server counts what it masked and the CLI used to drop the count", async () => {

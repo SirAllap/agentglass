@@ -14,7 +14,7 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { statSync } from "node:fs";
-import { db, dbPath, reclaimFreePages, trimWal, WAL_SIZE_LIMIT } from "../src/db.ts";
+import { db, dbPath, reclaimFreePages, shrinkFreePages, trimWal, WAL_SIZE_LIMIT } from "../src/db.ts";
 
 const pages = () => Number((db.query("PRAGMA page_count").get() as { page_count: number }).page_count);
 const free = () => Number((db.query("PRAGMA freelist_count").get() as { freelist_count: number }).freelist_count);
@@ -76,7 +76,9 @@ describe("the WAL file gives its space back", () => {
     db.run("DELETE FROM wal_probe");
     const wide = "x".repeat(4000);
     const insert = db.prepare("INSERT INTO wal_probe (id, blob) VALUES (?, ?)");
-    db.transaction(() => { for (let i = 0; i < 3000; i++) insert.run(i, wide); })();
+    // Sized from the shared database: pages other suites left make a fixed 3000 rows fall under the 30% floor.
+    const rows = Math.max(3000, Math.ceil(pages() * 0.8));
+    db.transaction(() => { for (let i = 0; i < rows; i++) insert.run(i, wide); })();
     db.run("DELETE FROM wal_probe WHERE id >= 10");
     expect(walBytes()).toBeGreaterThan(1_000_000);
 
@@ -120,5 +122,52 @@ describe("the WAL file gives its space back", () => {
     if (next.busy) expect(walBytes()).toBeLessThanOrEqual(WAL_SIZE_LIMIT);
     else expect(walBytes()).toBe(0);
     db.run("DROP TABLE wal_probe");
+  });
+});
+
+/*
+ * auto_vacuum = INCREMENTAL: retention's freed pages go back in small steps
+ * instead of the file keeping its high-water mark. Measured on a copy of a real
+ * 1.13 GB file: 1000 pages (4 MB) per step took 42 ms; the one conversion VACUUM
+ * took 14 s, which is why it is not paid on the loop during use.
+ */
+describe("incremental auto_vacuum", () => {
+  const mode = () => Number((db.query("PRAGMA auto_vacuum").get() as { auto_vacuum: number }).auto_vacuum);
+
+  test("a fresh database is INCREMENTAL, and VACUUM keeps it so", () => {
+    expect(mode()).toBe(2);
+    db.exec("VACUUM");
+    expect(mode()).toBe(2);
+  });
+
+  test("shrinkFreePages releases freelist pages a step at a time and keeps the rows", () => {
+    db.run("CREATE TABLE IF NOT EXISTS shrink_probe (id INTEGER PRIMARY KEY, blob TEXT)");
+    db.run("DELETE FROM shrink_probe");
+    const wide = "y".repeat(4000);
+    const insert = db.prepare("INSERT INTO shrink_probe (id, blob) VALUES (?, ?)");
+    db.transaction(() => { for (let i = 0; i < 2000; i++) insert.run(i, wide); })();
+    db.run("DELETE FROM shrink_probe WHERE id >= 20");
+    const total = pages();
+    const freeBefore = free();
+    expect(freeBefore).toBeGreaterThan(500);
+
+    const released = shrinkFreePages(100);
+    expect(released).toBe(100); // one step, not the whole freelist
+    expect(free()).toBe(freeBefore - 100);
+    // The file shrinks by the 100 pages freed, plus one more when the last of them took a
+    // pointer-map page with it; where that falls depends on the file's size, not on the step.
+    expect(total - pages()).toBeGreaterThanOrEqual(100);
+    expect(total - pages()).toBeLessThanOrEqual(101);
+    expect(Number((db.query("SELECT COUNT(*) c FROM shrink_probe").get() as { c: number }).c)).toBe(20);
+    expect((db.query("PRAGMA integrity_check").get() as { integrity_check: string }).integrity_check).toBe("ok");
+
+    db.run("DROP TABLE shrink_probe");
+    db.exec("VACUUM");
+  });
+
+  test("with nothing on the freelist a step releases nothing", () => {
+    db.exec("VACUUM");
+    expect(free()).toBe(0);
+    expect(shrinkFreePages()).toBe(0);
   });
 });

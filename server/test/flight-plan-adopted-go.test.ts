@@ -39,7 +39,7 @@ beforeAll(async () => {
   db.close();
   // The started seat steps down; a session that was already running takes the chair.
   expect((await h.asPerson("/seat/close", { root: h.dir })).ok).toBe(true);
-  const r = await h.asPerson("/seat/adopt", { root: h.dir, pane: await h.handTab(h.dir), powers: "assign" });
+  const r = await h.adoptAsPerson({ root: h.dir, pane: await h.handTab(h.dir), powers: "assign" });
   expect(r.ok).toBe(true);
   adopted = (r as any).token;
 }, SERVER_BOOT_MS);

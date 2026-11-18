@@ -10,7 +10,8 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SEAT_CHECKS_ID } from "../../shared/agentRules.ts";
+import { SEAT_CHECKS_ID, SEAT_DELEGATES_ID, SEAT_DELEGATES_TOOL } from "../../shared/agentRules.ts";
+import { agentVerdict } from "../../shared/settingClass.ts";
 import { templateFlow } from "../../shared/flowTemplates.ts";
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "agx-rules-store-")));
@@ -22,6 +23,7 @@ process.env.AGENTGLASS_STATE_DIR = join(dir, "state");
 const store = await import("../src/agentRulesStore.ts");
 const { db } = await import("../src/db.ts");
 const cfg = await import("../src/config.ts");
+const Store = await import("../src/preflightStore.ts");
 const { DEFAULT_LAUNCH_DENY } = await import("../../shared/launchModes.ts");
 
 const ROOT = join(dir, "acme", "orbit");
@@ -48,6 +50,9 @@ beforeEach(() => {
   cards = []; dropped = [];
   cfg.writeLaunchPermissions({ mode: "default", deny: DEFAULT_LAUNCH_DENY.join("\n") });
   cfg.writeStoredFlow(ROOT, null);
+  cfg.writeWorkerRole("reviewer", { provider: "claude", model: "" });
+  cfg.writeWorkerRole("verifier", { provider: "claude", model: "" });
+  db.exec("DELETE FROM flight_plan_setting");
   store.__resetRulesStore();
   store.__setRulesClock(() => Date.now());
 });
@@ -63,7 +68,7 @@ afterAll(() => {
 
 describe("who may write what", () => {
   test("an agent going stricter applies at once, with no card", async () => {
-    expect(store.check(ROOT, "Bash", bash("git push origin main")).decision).toBe("allow");
+    expect(store.check(ROOT, "Bash", bash("git push origin feat-x")).decision).toBe("allow");
     const r = await store.setRule({ ...push, setting: "never" }, agent);
     expect(r.ok && r.write).toMatchObject({ applied: true, waitsForPerson: false });
     expect(cards).toHaveLength(0);
@@ -303,8 +308,11 @@ describe("precedence and room", () => {
     for (const match of ["Bash", "Edit", "Write", "Bash(git push --force-with-lease:*)"]) {
       expect(await store.setRule({ root: ROOT, match, setting: "allow" }, person)).toMatchObject({ ok: true });
     }
-    expect(store.check(ROOT, "Bash", bash("git push --force-with-lease origin main")).decision).toBe("allow");
-    expect(store.check(ROOT, "Bash", bash("git push --force origin main")).decision).toBe("ask");
+    expect(store.check(ROOT, "Bash", bash("git push --force-with-lease origin ORBIT-1042-fix")).decision).toBe("allow");
+    /* Allowing a force push is not allowing one to the trunk: only a rule for that same action could. */
+    expect(store.check(ROOT, "Bash", bash("git push --force-with-lease origin main")).decision).toBe("never");
+    /* A force push to the trunk is never now: the base rule reads the destination, whatever allows git push. */
+    expect(store.check(ROOT, "Bash", bash("git push --force origin main")).decision).toBe("never");
     /* A narrower rule still wins: the base never on merging is untouched. */
     expect(store.check(ROOT, "Bash", bash("gh pr merge 12")).decision).toBe("never");
   });
@@ -448,5 +456,85 @@ describe("the seat and the checks its flow gives away", () => {
       .toMatchObject({ ok: false, status: 400 });
     expect(await store.setRule({ root: "*", action: "launch.mode", match: "", setting: "allow", mode: "auto", role: "seat" }, person))
       .toMatchObject({ ok: false, status: 400 });
+  });
+});
+
+/* A Claude Code PreToolUse payload, as the hook reads it: the tool name the rule matches must be this one. */
+const AGENT_PAYLOAD = (await Bun.file(new URL("./fixtures/claude-pretooluse-agent.json", import.meta.url)).json()) as {
+  tool_name: string; tool_input: Record<string, unknown>; permission_mode: string;
+};
+
+describe("the seat and the jobs its flow gives to a worker", () => {
+  expect(AGENT_PAYLOAD.tool_name).toBe(SEAT_DELEGATES_TOOL);
+  const payload = AGENT_PAYLOAD;
+  const agentCall = payload.tool_input;
+
+  test("an Inspector on OpenCode refuses the seat the Agent tool, naming the block, the engine and the start line", () => {
+    expect(cfg.writeWorkerRole("reviewer", { provider: "opencode", model: "glm-4.6" }).ok).toBe(true);
+    const d = store.check(ROOT, payload.tool_name, agentCall, payload.permission_mode, "seat");
+    expect(d.decision).toBe("never");
+    expect(d.reason).toContain("Inspector block (OpenCode)");
+    expect(d.reason).toContain("--role reviewer");
+    expect(d.reason).toContain("--cwd <checkout>");
+    expect(store.view(ROOT).derived.map((r) => r.id)).toContain(SEAT_DELEGATES_ID);
+    // a worker keeps its own answer, and the seat's Bash calls are not touched
+    expect(store.check(ROOT, payload.tool_name, agentCall).decision).toBe("unknown");
+    expect(store.check(ROOT, "Bash", bash("git status"), undefined, "seat").decision).toBe("unknown");
+  });
+
+  test("a Verifier block on OpenCode refuses it too, and the why lists the path's workers with their engines", () => {
+    cfg.writeWorkerRole("reviewer", { provider: "opencode", model: "glm-4.6" });
+    cfg.writeWorkerRole("verifier", { provider: "opencode", model: "glm-4.6" });
+    const why = store.view(ROOT).derived.find((r) => r.id === SEAT_DELEGATES_ID)!.why!;
+    expect(why).toContain("Inspector block (OpenCode)");
+    expect(why).toContain("The path's workers: Inspector (OpenCode), Verifier (OpenCode).");
+    expect(why).toContain("--role reviewer");
+  });
+
+  test("a flow whose worker blocks all run on the chair's engine leaves the Agent tool alone", () => {
+    expect(store.check(ROOT, payload.tool_name, agentCall, payload.permission_mode, "seat").decision).toBe("unknown");
+    expect(store.view(ROOT).derived.map((r) => r.id)).toEqual([SEAT_CHECKS_ID]);
+  });
+
+  test("the person turns the guard off for one project; an agent may not", () => {
+    cfg.writeWorkerRole("reviewer", { provider: "opencode", model: "glm-4.6" });
+    expect(store.check(ROOT, payload.tool_name, agentCall, payload.permission_mode, "seat").decision).toBe("never");
+    Store.putSetting(ROOT, "flow.delegationGuard", false);
+    expect(store.check(ROOT, payload.tool_name, agentCall, payload.permission_mode, "seat").decision).toBe("unknown");
+    expect(store.view(ROOT).derived.map((r) => r.id)).toEqual([SEAT_CHECKS_ID]);
+    // an agent's off is refused, its on applies: turning the guard on is the safer direction
+    expect(agentVerdict("flow.delegationGuard", true, false, true)).toBe("refuse");
+    expect(agentVerdict("flow.delegationGuard", false, true, false)).toBe("apply");
+  });
+
+  test("the derived rule is never stored, a stored allow cannot loosen it, and nobody takes it out", async () => {
+    cfg.writeWorkerRole("reviewer", { provider: "opencode", model: "glm-4.6" });
+    expect((await store.setRule({ root: ROOT, match: SEAT_DELEGATES_TOOL, setting: "allow" }, person)).ok).toBe(true);
+    const v = store.view(ROOT);
+    expect(v.learned.map((r) => r.match)).toContain(SEAT_DELEGATES_TOOL);
+    expect(v.derived.map((r) => r.id)).toContain(SEAT_DELEGATES_ID);
+    // the stricter derived rule speaks for the seat's call; the stored allow is every other agent's
+    expect(store.check(ROOT, payload.tool_name, agentCall, undefined, "seat").decision).toBe("never");
+    expect(store.check(ROOT, payload.tool_name, agentCall).decision).toBe("allow");
+    // there is no row to remove: the derived rule is not the person's to take out either
+    expect(await store.setRule({ root: ROOT, match: SEAT_DELEGATES_TOOL, role: "seat", remove: true }, person)).toMatchObject({ ok: false, status: 404 });
+  });
+
+  test("both names the engine gives the subagent tool are refused, and a stored `Agent(*)` allow does not loosen it", async () => {
+    cfg.writeWorkerRole("reviewer", { provider: "opencode", model: "glm-4.6" });
+    for (const tool of ["Agent", "Task"]) expect(store.check(ROOT, tool, agentCall, payload.permission_mode, "seat").decision, tool).toBe("never");
+    expect((await store.setRule({ root: ROOT, match: "Agent(*)", setting: "allow" }, person)).ok).toBe(true);
+    expect(store.view(ROOT).learned.map((r) => r.match)).toContain("Agent(*)");
+    for (const tool of ["Agent", "Task"]) expect(store.check(ROOT, tool, agentCall, undefined, "seat").decision, tool).toBe("never");
+    // the stored allow is every other agent's
+    expect(store.check(ROOT, "Agent", agentCall).decision).toBe("allow");
+    expect(store.check(ROOT, "Task", agentCall).decision).toBe("unknown");
+  });
+
+  test("an agent's looser Agent rule does not apply by itself while the guard is on", async () => {
+    cfg.writeWorkerRole("reviewer", { provider: "opencode", model: "glm-4.6" });
+    const r = await store.setRule({ root: ROOT, match: SEAT_DELEGATES_TOOL, setting: "allow" }, agent);
+    expect(r.ok && r.write).toMatchObject({ applied: false, waitsForPerson: true });
+    expect(store.check(ROOT, payload.tool_name, agentCall, undefined, "seat").decision).toBe("never");
   });
 });

@@ -85,7 +85,7 @@ describe("applyScope", () => {
   test("scoped keeps only this project's containers", () => {
     const r = applyScope([mine, theirs], key);
     expect(r.containers.map((x) => x.id)).toEqual(["aaa"]);
-    expect(r.scope).toEqual({ workspace: "/home/x/code/myapp", project: "myapp", matched: 1, showingAll: false });
+    expect(r.scope).toEqual({ workspace: "/home/x/code/myapp", project: "myapp", matched: 1, showingAll: false, hidden: 1 });
   });
 
   test("no match falls back to the full list with showingAll set", () => {

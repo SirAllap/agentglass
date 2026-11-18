@@ -11,8 +11,10 @@ export function forgetCleanedPr(a: { repo: string; pr: number; worktree: string 
  * Housekeeping entries and the PR badge's reason both read it. `cleaning` and
  * `cleaned` make a second run of the same pull request impossible; `blocked`
  * may be looked at again (a safety block can clear) but not within an hour.
- * Rows age out after 30 days. Ceiling: no history beyond that, and a failed
- * run is not retried by itself.
+ * `waiting` marks the one block that clears on its own when the card's tab or
+ * session closes, so the next PR-list read asks again (cleanupAuto.onPrsGone);
+ * any other block is never retried. Rows age out after 30 days. Ceiling: no
+ * history beyond that, and a failed run is not retried by itself.
  */
 db.exec(`
 CREATE TABLE IF NOT EXISTS cleanup_auto (
@@ -27,16 +29,18 @@ CREATE TABLE IF NOT EXISTS cleanup_auto (
   total INTEGER NOT NULL DEFAULT 0,
   freed INTEGER NOT NULL DEFAULT 0,
   report TEXT NOT NULL DEFAULT '',
+  waiting INTEGER NOT NULL DEFAULT 0,
   started_at INTEGER NOT NULL,
   ended_at INTEGER,
   PRIMARY KEY (repo, pr)
 );
 `);
+try { db.exec("ALTER TABLE cleanup_auto ADD COLUMN waiting INTEGER NOT NULL DEFAULT 0"); } catch { /* already present */ }
 
 export type AutoState = "cleaning" | "cleaned" | "blocked" | "failed" | "nothing";
 export interface AutoRow {
   repo: string; pr: number; state: AutoState; label: string; slug: string; title: string; reason: string;
-  done: number; total: number; freed: number; report: string; started_at: number; ended_at: number | null;
+  done: number; total: number; freed: number; report: string; waiting: number; started_at: number; ended_at: number | null;
 }
 const RECHECK_MS = 3_600_000;
 const KEEP_MS = 30 * 86_400_000;
@@ -48,6 +52,9 @@ export const markInterrupted = (): void => { db.query(`UPDATE cleanup_auto SET s
 markInterrupted();
 export const interruptedPrs = (repo: string): number[] =>
   db.query<{ pr: number }, [string, string]>(`SELECT pr FROM cleanup_auto WHERE repo = ? AND state = 'blocked' AND reason = ?`).all(repo, INTERRUPTED).map((r) => r.pr);
+/** Blocked only by a tab or session in the checkout, and asked an hour ago: the one block a later read may find gone. */
+export const waitingPrs = (repo: string, before: number): number[] =>
+  db.query<{ pr: number }, [string, number]>(`SELECT pr FROM cleanup_auto WHERE repo = ? AND state = 'blocked' AND waiting = 1 AND started_at <= ?`).all(repo, before).map((r) => r.pr);
 
 export const autoRow = (repo: string, pr: number): AutoRow | null =>
   db.query<AutoRow, [string, number]>(`SELECT * FROM cleanup_auto WHERE repo = ? AND pr = ?`).get(repo, pr);
@@ -60,9 +67,9 @@ export const autoRow = (repo: string, pr: number): AutoRow | null =>
 export function claimAuto(a: { repo: string; pr: number; label: string; slug: string; title: string; total: number; now: number }): boolean {
   db.query(`DELETE FROM cleanup_auto WHERE started_at < ?`).run(a.now - KEEP_MS);
   const r = db.query(
-    `INSERT INTO cleanup_auto (repo, pr, state, label, slug, title, total, started_at) VALUES (?, ?, 'cleaning', ?, ?, ?, ?, ?)
+    `INSERT INTO cleanup_auto (repo, pr, state, label, slug, title, total, waiting, started_at) VALUES (?, ?, 'cleaning', ?, ?, ?, ?, 0, ?)
      ON CONFLICT(repo, pr) DO UPDATE SET state = 'cleaning', label = excluded.label, slug = excluded.slug, title = excluded.title,
-       reason = '', done = 0, total = excluded.total, freed = 0, report = '', started_at = excluded.started_at, ended_at = NULL
+       reason = '', done = 0, total = excluded.total, freed = 0, report = '', waiting = 0, started_at = excluded.started_at, ended_at = NULL
      WHERE cleanup_auto.state = 'blocked' AND cleanup_auto.started_at <= ?`,
   ).run(a.repo, a.pr, a.label, a.slug, a.title, a.total, a.now, a.now - RECHECK_MS);
   return r.changes === 1;
@@ -71,15 +78,16 @@ export const progressAuto = (repo: string, pr: number, done: number, total: numb
   db.query(`UPDATE cleanup_auto SET done = ?, total = ?, freed = ? WHERE repo = ? AND pr = ? AND state = 'cleaning'`).run(done, total, freed, repo, pr);
 };
 export function finishAuto(repo: string, pr: number, f: { state: Exclude<AutoState, "cleaning">; reason?: string; freed?: number; report?: unknown; now: number }): void {
-  db.query(`UPDATE cleanup_auto SET state = ?, reason = ?, freed = ?, report = ?, ended_at = ? WHERE repo = ? AND pr = ?`)
+  db.query(`UPDATE cleanup_auto SET state = ?, reason = ?, freed = ?, report = ?, waiting = 0, ended_at = ? WHERE repo = ? AND pr = ?`)
     .run(f.state, f.reason ?? "", f.freed ?? 0, f.report === undefined ? "" : JSON.stringify(f.report), f.now, repo, pr);
 }
-/** A blocked pull request, recorded for the badge. Inserts when nothing was claimed; never overwrites a run. */
-export function noteBlocked(a: { repo: string; pr: number; label: string; slug: string; title: string; reason: string; now: number }): void {
+/** A blocked pull request, recorded for the badge. Inserts when nothing was claimed; never overwrites a run. `waiting` is the live-session block. */
+export function noteBlocked(a: { repo: string; pr: number; label: string; slug: string; title: string; reason: string; waiting?: boolean; now: number }): void {
+  const w = a.waiting ? 1 : 0;
   db.query(
-    `INSERT INTO cleanup_auto (repo, pr, state, label, slug, title, reason, started_at, ended_at) VALUES (?, ?, 'blocked', ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(repo, pr) DO UPDATE SET reason = excluded.reason, started_at = excluded.started_at, ended_at = excluded.ended_at WHERE cleanup_auto.state = 'blocked'`,
-  ).run(a.repo, a.pr, a.label, a.slug, a.title, a.reason, a.now, a.now);
+    `INSERT INTO cleanup_auto (repo, pr, state, label, slug, title, reason, waiting, started_at, ended_at) VALUES (?, ?, 'blocked', ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(repo, pr) DO UPDATE SET reason = excluded.reason, waiting = excluded.waiting, started_at = excluded.started_at, ended_at = excluded.ended_at WHERE cleanup_auto.state = 'blocked'`,
+  ).run(a.repo, a.pr, a.label, a.slug, a.title, a.reason, w, a.now, a.now);
 }
 /** Newest first. `blocked` and `nothing` rows are for the badge and stay out of the Lantern list. */
 export const autoRows = (limit = 20, repo?: string): AutoRow[] =>

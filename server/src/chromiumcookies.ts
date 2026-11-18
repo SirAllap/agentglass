@@ -21,8 +21,8 @@
  */
 import { createDecipheriv, pbkdf2Sync } from "node:crypto";
 import { Database } from "bun:sqlite";
-import type { CookieRow } from "./cookieimport.ts";
-import { keyringPassword } from "./secretservice.ts";
+import { chromiumPartitionKey, type CookieRow } from "./cookieimport.ts";
+import { keyringLookup, type KeyringLookup } from "./secretservice.ts";
 
 /** The prefix a Chromium value carries, and what it means about the key. */
 export type Scheme = "v10" | "v11" | "other";
@@ -52,11 +52,51 @@ export const keyringAsks = (app: string): Record<string, string>[] => [
  * caller finds out it did not work when nothing decrypts.
  */
 export async function chromiumPassword(app: string): Promise<Buffer> {
+  return (await chromiumKey(app)).password;
+}
+
+/** Why a key came from where it came. "found" is the keyring's; every other
+ *  state is the "peanuts" fallback, which only opens a jar written without a
+ *  keyring (`v10`). */
+export type KeyState = "found" | "no-answer" | "locked" | "absent";
+
+let lookup: (attrs: Record<string, string>) => Promise<KeyringLookup> = keyringLookup;
+/** Test seam: a fake keyring. A suite must never touch the developer's own. */
+export function __setKeyringLookup(fn: ((attrs: Record<string, string>) => Promise<KeyringLookup>) | null): void {
+  lookup = fn ?? keyringLookup;
+}
+
+/** The password and the state it was reached in. Locked wins over absent, and
+ *  no-answer over both: those are what a person can do something about. */
+export async function chromiumKey(app: string): Promise<{ state: KeyState; password: Buffer }> {
+  let state: KeyState = "absent";
   for (const attrs of keyringAsks(app)) {
-    const got = await keyringPassword(attrs);
-    if (got?.length) return got;
+    const got = await lookup(attrs);
+    if (got.state === "found" && got.value.length) return { state: "found", password: got.value };
+    if (got.state === "no-answer") state = "no-answer";
+    else if (got.state === "locked" && state !== "no-answer") state = "locked";
   }
-  return Buffer.from(NO_KEYRING_PASSWORD, "utf8");
+  return { state, password: Buffer.from(NO_KEYRING_PASSWORD, "utf8") };
+}
+
+/** What to tell the person when a jar did not open, by the key's state. */
+export type ChromiumVerdict = "ok" | "no-answer" | "locked" | "wrong-key" | "no-key";
+
+export function chromiumVerdict(state: KeyState, decrypted: number, failed: number): ChromiumVerdict {
+  if (decrypted > 0 || failed === 0) return "ok";
+  if (state === "found") return "wrong-key";
+  if (state === "absent") return "no-key";
+  return state;
+}
+
+export function chromiumWhy(verdict: ChromiumVerdict, label: string): string {
+  switch (verdict) {
+    case "no-answer": return `No keyring answered, so ${label}'s key could not be asked for.`;
+    case "locked": return `The keyring is locked. Unlock it to read ${label}.`;
+    case "wrong-key": return `The keyring's key for ${label} does not open its cookies.`;
+    case "no-key": return `The keyring has no key for ${label}.`;
+    default: return "";
+  }
 }
 
 export function deriveKey(password: Buffer): Buffer {
@@ -119,6 +159,14 @@ export function chromeEpochSeconds(micros: number): number {
   return Math.floor(micros / 1_000_000) - 11_644_473_600;
 }
 
+/** CHIPS: a readable `top_frame_site_key` is a partition key CDP can set;
+ *  anything else stays a partition this cannot carry. */
+function partitionOf(raw: string): Pick<CookieRow, "partition" | "partitionKey"> {
+  if (!raw) return {};
+  const pk = chromiumPartitionKey(raw);
+  return pk ? { partitionKey: pk } : { partition: raw };
+}
+
 export interface ChromiumRead {
   rows: CookieRow[];
   /** How many values would not decrypt. Non-zero with a non-zero `rows` means
@@ -164,7 +212,7 @@ export function readChromium(dbPath: string, key: Buffer): ChromiumRead {
         // Chromium: 0 none, 1 lax, 2 strict, -1 unspecified. Firefox's numbers
         // differ, and planImport is told which browser it is looking at.
         sameSite: Number(r.samesite ?? -1),
-        partition: String(r.top_frame_site_key ?? "") || undefined,
+        ...partitionOf(String(r.top_frame_site_key ?? "")),
       });
     }
     return { rows, failed };

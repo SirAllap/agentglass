@@ -51,8 +51,8 @@ function build(): void {
 describe("revert", () => {
   beforeEach(build);
 
-  it("creates a new commit undoing exactly the picked one", () => {
-    const r = revertCommit(repo, hash("HEAD")); // feat four: a.txt "four" -> "one"
+  it("creates a new commit undoing exactly the picked one", async () => {
+    const r = await revertCommit(repo, hash("HEAD")); // feat four: a.txt "four" -> "one"
     expect(r.ok).toBe(true);
     expect(subject()).toBe(`Revert "feat four"`);
     expect(read("a.txt")).toBe("one\n");
@@ -60,28 +60,28 @@ describe("revert", () => {
     expect(read("c.txt")).toBe("three\n");
   });
 
-  it("pauses as `reverting` on a conflict, and continue commits the resolution", () => {
+  it("pauses as `reverting` on a conflict, and continue commits the resolution", async () => {
     // feat one changed a.txt to "one"; feat four changed it to "four". The
     // revert of feat one expects "one" and finds "four" — a real conflict.
-    const r = revertCommit(repo, hash("HEAD~3"));
+    const r = await revertCommit(repo, hash("HEAD~3"));
     expect(r.ok).toBe(false);
-    expect(conflicts(repo).state).toBe("reverting");
-    expect(conflicts(repo).files.some((f) => f.endsWith("a.txt"))).toBe(true);
-    expect(resolveWith(repo, "a.txt", "theirs").ok).toBe(true);
-    const fin = mergeContinue(repo);
+    expect((await conflicts(repo)).state).toBe("reverting");
+    expect((await conflicts(repo)).files.some((f) => f.endsWith("a.txt"))).toBe(true);
+    expect((await resolveWith(repo, "a.txt", "theirs")).ok).toBe(true);
+    const fin = await mergeContinue(repo);
     expect(fin.ok).toBe(true);
-    expect(conflicts(repo).state).toBe("clean");
+    expect((await conflicts(repo)).state).toBe("clean");
     expect(subject()).toBe(`Revert "feat one"`);
     // "theirs" in a revert is the undone state — a.txt back to "seed", the
     // file's content before feat one changed it.
     expect(read("a.txt")).toBe("seed\n");
   });
 
-  it("abort puts the branch back exactly", () => {
+  it("abort puts the branch back exactly", async () => {
     const before = subject();
-    const r = revertCommit(repo, hash("HEAD~3"));
+    const r = await revertCommit(repo, hash("HEAD~3"));
     expect(r.ok).toBe(false);
-    expect(mergeAbort(repo).ok).toBe(true);
+    expect((await mergeAbort(repo)).ok).toBe(true);
     expect(subject()).toBe(before);
     expect(git("status", "--porcelain").stdout.toString().trim()).toBe("");
   });
@@ -90,26 +90,26 @@ describe("revert", () => {
 describe("amend", () => {
   beforeEach(build);
 
-  it("replaces the tip's message and folds staged changes", () => {
+  it("replaces the tip's message and folds staged changes", async () => {
     writeFileSync(join(repo, "a.txt"), "four edited\n");
-    expect(stage(repo, ["a.txt"]).ok).toBe(true);
-    const r = amendCommit(repo, "feat four edited", "");
+    expect((await stage(repo, ["a.txt"])).ok).toBe(true);
+    const r = await amendCommit(repo, "feat four edited", "");
     expect(r.ok).toBe(true);
     expect(subject()).toBe("feat four edited");
     expect(at("HEAD", "a.txt")).toBe("four edited\n");
     expect(git("rev-list", "--count", "HEAD").stdout.toString().trim()).toBe("5");
   });
 
-  it("refuses with unstaged changes so they cannot be silently dropped", () => {
+  it("refuses with unstaged changes so they cannot be silently dropped", async () => {
     writeFileSync(join(repo, "a.txt"), "dirty\n");
-    const r = amendCommit(repo, "new title", "");
+    const r = await amendCommit(repo, "new title", "");
     expect(r.ok).toBe(false);
     expect(r.error).toContain("unstaged");
     expect(subject()).toBe("feat four");
   });
 
-  it("refuses with nothing staged", () => {
-    const r = amendCommit(repo, "new title", "");
+  it("refuses with nothing staged", async () => {
+    const r = await amendCommit(repo, "new title", "");
     expect(r.ok).toBe(false);
     expect(r.error).toContain("nothing staged");
   });
@@ -118,9 +118,9 @@ describe("amend", () => {
 describe("squash", () => {
   beforeEach(build);
 
-  it("folds a contiguous tip-run into one commit with the tree preserved", () => {
+  it("folds a contiguous tip-run into one commit with the tree preserved", async () => {
     const tip = hash("HEAD");
-    const r = squashCommits(repo, hash("HEAD~1"), tip);
+    const r = await squashCommits(repo, hash("HEAD~1"), tip);
     expect(r.ok).toBe(true);
     // seed, feat one, feat two, then one commit holding "three"+"four".
     expect(git("rev-list", "--count", "HEAD").stdout.toString().trim()).toBe("4");
@@ -136,20 +136,20 @@ describe("squash", () => {
     expect(git("log", "-1", "--format=%b").stdout.toString()).toContain("- feat three");
   });
 
-  it("refuses a range that is not contiguous to HEAD", () => {
-    const r = squashCommits(repo, hash("HEAD~2"), hash("HEAD~1"));
+  it("refuses a range that is not contiguous to HEAD", async () => {
+    const r = await squashCommits(repo, hash("HEAD~2"), hash("HEAD~1"));
     expect(r.ok).toBe(false);
     expect(r.error).toContain("contiguous");
     expect(subject()).toBe("feat four");
   });
 
-  it("refuses a newest that is not an ancestor of HEAD", () => {
+  it("refuses a newest that is not an ancestor of HEAD", async () => {
     git("checkout", "-q", "-b", "side", "HEAD~2");
     writeFileSync(join(repo, "d.txt"), "side\n");
     git("add", "-A"); git("commit", "-qm", "side work");
     const side = hash("HEAD");
     git("checkout", "-q", "main");
-    const r = squashCommits(repo, hash("HEAD"), side);
+    const r = await squashCommits(repo, hash("HEAD"), side);
     expect(r.ok).toBe(false);
     expect(r.error).toContain("not in this branch's history");
   });

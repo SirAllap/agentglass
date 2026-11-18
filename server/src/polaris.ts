@@ -9,16 +9,19 @@
  */
 import { randomBytes } from "node:crypto";
 import { basename } from "node:path";
-import { canRelaunch, classifyPr, droppedJob, type PolarisActionRequest, type PolarisAsk, type PolarisRequestState, type BaseRed, type ItemsAnswer, type PolarisCheck, type PolarisItem, type PolarisJob, type PrFacts, type RunRef } from "../../shared/polaris.ts";
+import { canRelaunch, classifyPr, droppedJob, type PolarisActionRequest, type PolarisAsk, type PolarisRequestState, type BaseRed, type ItemsAnswer, type PolarisCheck, type PolarisItem, type PolarisJob, type PolarisSettings, type PrFacts, type RunRef } from "../../shared/polaris.ts";
 export type { ItemsAnswer, PolarisItem, RunRef };
 import { withDoor, type DoorValue } from "../../shared/polaris.ts";
+import { __resetSignals, botVerdict, overlapSignals, trackerCards, withSignals, type BotCounts, type CardState, type OverlapRow, type SignalSources } from "./polarisSignals.ts";
 import { REQUEST_TTL_MS } from "../../shared/settingClass.ts";
-import type { PrCheckRollup, PrSummary } from "../../shared/types.ts";
+import type { PrCheckRollup, PrListResponse, PrSummary } from "../../shared/types.ts";
 import { polarisRoots, readPolaris, readStoredPolaris, writePolaris } from "./config.ts";
 import { recordAction } from "./db.ts";
 import { __requiredCaches, fastForwardLocal, gh, listPrs, localHead, prBranches, prRollup, repoIdFor } from "./prs.ts";
 import { listAgents, promptAgent, screenOf, stateOfScreen } from "./agentops.ts";
 import { projectRootOf } from "./git.ts";
+import { mapLimit } from "./skills.ts";
+import { setIntervalAs } from "./loopwatch.ts";
 
 export const ACTION_TYPES = ["relaunch", "beacon-draft", "beacon-edit", "beacon-discard", "beacon-send-on-click", "dock", "ignore", "propose", "sync"] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
@@ -44,6 +47,8 @@ export interface BaseChecks { sha: string; checks: { name: string; state: "succe
 
 /** Everything outside the app, behind one seam so a test can watch it. */
 export interface PolarisIo {
+  /** The project's open pull requests, from the board's own list. Read only. */
+  list?(root: string): Promise<PrListResponse>;
   /** Ask GitHub Actions to run one job again. The only write to GitHub in this file. */
   rerunJob(root: string, jobId: number): Promise<{ ok: boolean; error?: string }>;
   readJobs(root: string, runId: number): Promise<(PolarisJob & { id: number; name: string; attempt: number })[] | null>;
@@ -65,6 +70,12 @@ export interface PolarisIo {
   sendTo?(paneId: string, text: string): Promise<string>;
   /** The head commit of an open pull request, read by the server itself: what an agent's ask is bound to. Read only. */
   headOf?(root: string, number: number): Promise<string | null>;
+  /** The tracker cards this app is connected to, from the integration's cache or one list read per five minutes. Null when no tracker is configured. */
+  cards?(): Promise<CardState[] | null>;
+  /** Overlap lines per open pull request, from refs already fetched into this checkout. No network. */
+  overlaps?(root: string, rows: readonly OverlapRow[]): Promise<Map<number, string[]>>;
+  /** The labelled verdicts a bot left on this head commit, or null when no bot login is configured. */
+  botVerdict?(root: string, number: number, headSha: string, bots: readonly string[]): Promise<BotCounts | null>;
 }
 
 /** Who is asking for an action. An agent's name is the `--as` label its CLI stamped. */
@@ -90,11 +101,56 @@ export async function sessionPane(root: string, paneId: string): Promise<{ name:
   return inside ? { name: s.name } : null;
 }
 
+/** GitHub's HTTP status out of gh's text, when it printed one. */
+const statusOf = (r: { stderr: string; stdout: string }): number | undefined => Number(/HTTP (\d{3})/.exec(`${r.stderr}\n${r.stdout}`)?.[1]) || undefined;
+
+/** A refused write in plain words, per action. gh missing and signed out are named first; then the status. */
+export function githubError(what: "rerun" | "update-branch", r: { code: number; stderr: string; stdout: string }): string {
+  const text = `${r.stderr}\n${r.stdout}`;
+  if (r.code === 127) return "gh is not installed here: install the GitHub CLI";
+  if (/gh auth login|not logged in|authentication required|HTTP 401|bad credentials/i.test(text)) return "gh is signed out: run gh auth login";
+  const s = statusOf(r);
+  const words: Record<string, Record<number, string>> = {
+    rerun: { 403: "GitHub refused the rerun: the sign-in lacks the repo or workflow scope, or the run is too old", 404: "GitHub cannot find that job: it is gone, or the sign-in cannot see the repository", 409: "GitHub says that job is still running or already queued", 422: "GitHub says that job cannot be rerun: its run is not finished" },
+    "update-branch": { 403: "GitHub refused the update: the sign-in lacks the repo scope, or the branch is protected", 404: "GitHub cannot find that pull request or repository", 409: "GitHub says the branch moved: reload and try again", 422: "GitHub says the branch cannot be updated: it has conflicts or is already current" },
+  };
+  return (s && words[what]![s]) || r.stderr.trim().slice(0, 200) || (what === "rerun" ? "gh run rerun failed" : "update-branch failed");
+}
+
 export async function rerunJob(root: string, jobId: number): Promise<{ ok: boolean; error?: string }> {
   const repo = await repoIdFor(root);
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
   const r = await gh(["run", "rerun", "--job", String(jobId), "-R", repo.nameWithOwner], root);
-  return r.code === 0 ? { ok: true } : { ok: false, error: r.stderr.trim().slice(0, 200) || "gh run rerun failed" };
+  return r.code === 0 ? { ok: true } : { ok: false, error: githubError("rerun", r) };
+}
+
+export interface GithubStatus { ok: boolean; repo?: string; login?: string; auth: "ok" | "signed-out" | "no-gh"; scopes: string[]; canRerun: boolean; canUpdateBranch: boolean; problem?: string }
+const githubCache = new Map<string, { at: number; v: GithubStatus }>();
+const GITHUB_TTL_MS = 60_000;
+
+/** Can Polaris reach GitHub for this project? Read only: the remote, then `gh auth status`. Names only, never a token. Held 60 s. */
+export async function githubStatus(root: string, run: typeof gh = gh, now = Date.now()): Promise<GithubStatus> {
+  const hit = githubCache.get(root);
+  if (hit && now - hit.at < GITHUB_TTL_MS) return hit.v;
+  const none = (auth: GithubStatus["auth"], problem: string, repo?: string): GithubStatus => ({ ok: false, auth, scopes: [], canRerun: false, canUpdateBranch: false, problem, ...(repo ? { repo } : {}) });
+  let v: GithubStatus;
+  const repo = await repoIdFor(root);
+  const a = await run(["auth", "status", "--hostname", repo?.host ?? "github.com"], root);
+  const text = `${a.stdout}\n${a.stderr}`;
+  if (a.code === 127) v = none("no-gh", "gh is not installed here: install the GitHub CLI", repo?.nameWithOwner);
+  else if (a.code !== 0 && !/not logged in|gh auth login|no .*accounts?|signed out/i.test(text)) return none("signed-out", "gh could not check its sign-in (network, timeout or a bad token): try again", repo?.nameWithOwner); // not cached: it may pass a second later
+  else if (a.code !== 0) v = none("signed-out", "gh is signed out: run gh auth login", repo?.nameWithOwner);
+  else {
+    const login = /account (\S+)/.exec(text)?.[1];
+    const scopes = [...(/Token scopes?:(.*)/i.exec(text)?.[1] ?? "").matchAll(/[A-Za-z_:.-]+/g)].map((m) => m[0]);
+    // A fine-grained token lists no scopes: that is not proof it cannot write, so only a listed set without repo/workflow says no.
+    const writes = (need: string[]) => scopes.length === 0 || scopes.some((s) => need.includes(s));
+    v = repo
+      ? { ok: true, auth: "ok", repo: repo.nameWithOwner, ...(login ? { login } : {}), scopes, canRerun: writes(["repo", "workflow"]), canUpdateBranch: writes(["repo"]) }
+      : { ...none("ok", "no GitHub remote on this repository"), ...(login ? { login } : {}), auth: "ok", scopes };
+  }
+  githubCache.set(root, { at: now, v });
+  return v;
 }
 
 export async function updateBranch(root: string, number: number, expectedHeadSha: string): Promise<{ ok: boolean; status?: number; error?: string }> {
@@ -102,8 +158,8 @@ export async function updateBranch(root: string, number: number, expectedHeadSha
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
   const r = await gh(["api", "-X", "PUT", `repos/${repo.nameWithOwner}/pulls/${number}/update-branch`, "-f", `expected_head_sha=${expectedHeadSha}`], root);
   if (r.code === 0) return { ok: true };
-  const status = Number(/HTTP (\d{3})/.exec(`${r.stderr}\n${r.stdout}`)?.[1]) || undefined;
-  return { ok: false, ...(status ? { status } : {}), error: r.stderr.trim().slice(0, 200) || "update-branch failed" };
+  const status = statusOf(r);
+  return { ok: false, ...(status ? { status } : {}), error: githubError("update-branch", r) };
 }
 
 export async function localAfter(root: string, number: number): Promise<{ state: "absent" | "fast-forwarded" | "dirty" | "diverged" | "busy"; branch: string }> {
@@ -176,7 +232,7 @@ export async function headOfPr(root: string, number: number, run: typeof gh = gh
 async function headOf(root: string, number: number): Promise<string | null> {
   return headOfPr(root, number);
 }
-const liveIo: PolarisIo = { rerunJob, readJobs, sessionFor, sessionPane, checksFor, testedBase, baseChecks, updateBranch, localAfter, headOf };
+const liveIo: PolarisIo = { rerunJob, readJobs, sessionFor, sessionPane, checksFor, testedBase, baseChecks, updateBranch, localAfter, headOf, cards: trackerCards, overlaps: overlapSignals, botVerdict };
 
 /** Drafts and the things said no to, kept in memory: a restart drops them, the safe way to lose one. */
 const drafts = new Map<string, string>();
@@ -194,7 +250,7 @@ export const __draftOf = (root: string, number: number, reason: string): string 
 /** A test writes the draft back after an approval, so replay is proven by the state guard and not by the draft being gone. */
 export const __setDraft = (root: string, number: number, reason: string, text: string): void => { drafts.set(key({ root, number, reason }), text); }; // test seam
 export const __syncConflicted = (root: string, number: number, headSha: string): boolean => syncConflict.has(`${root}\0${number}\0${headSha}`);
-export const __resetPolaris = (): void => { drafts.clear(); sent.clear(); ignored.clear(); discarded.clear(); proposals.clear(); syncConflict.clear(); synced.clear(); signalled.clear(); woken.clear(); requests.clear(); asked.clear(); testedCache.clear(); settledBase.clear(); baseSink = null; jobCache.clear(); tried.clear(); lastSweep.clear(); };
+export const __resetPolaris = (): void => { drafts.clear(); sent.clear(); ignored.clear(); discarded.clear(); proposals.clear(); syncConflict.clear(); synced.clear(); signalled.clear(); woken.clear(); requests.clear(); asked.clear(); testedCache.clear(); settledBase.clear(); baseSink = null; jobCache.clear(); githubCache.clear(); tried.clear(); lastSweep.clear(); __resetSignals(); };
 
 const refuse = (error: string): ActionResult => ({ ok: false, error });
 
@@ -513,16 +569,36 @@ export async function basesOf(items: PolarisItem[], baseOf: Map<number, string>,
   return bases;
 }
 
+/** One verdict read per open pull request, but only a few at a time: each is up to five `gh` reads, and the section answers before a long list is walked. */
+const BOT_READS = 4;
+
+/** The three quiet lines, only while the Signals door is on and the project has something to show. */
+export async function signalSources(
+  root: string, settings: PolarisSettings, rows: readonly { number: number; head: string; base: string; headSha: string }[], io: PolarisIo,
+): Promise<SignalSources | null> {
+  if (settings.doors.signals.mode !== "on" || rows.length === 0) return null;
+  const overlaps = await (io.overlaps?.(root, rows) ?? Promise.resolve(new Map<number, string[]>()));
+  // The card read belongs to the cards door: off, the tracker is not asked at all.
+  const cards = settings.doors.cards.mode === "on" ? await (io.cards?.() ?? Promise.resolve(null)) : null;
+  const bots = settings.botReviewers;
+  const counts = new Map<number, BotCounts>();
+  if (bots.length) {
+    const verdicts = await mapLimit([...rows], BOT_READS, (row) => io.botVerdict?.(root, row.number, row.headSha, bots) ?? Promise.resolve(null));
+    verdicts.forEach((c, i) => { if (c) counts.set(rows[i]!.number, c); });
+  }
+  return { cards, overlaps, bots: counts };
+}
+
 /** A verdict for each open pull request, from the board's own list. gh missing or signed out reads as Uncharted, with the reason. */
 export async function polarisItems(root: string, io: PolarisIo = liveIo): Promise<ItemsAnswer> {
   const { settings } = readPolaris(root);
   if (!settings.enabled || settings.doors.follow.mode === "off") return { ok: true, enabled: settings.enabled, items: [] };
-  let list = await listPrs(root, "all", "open");
+  let list = await (io.list?.(root) ?? listPrs(root, "all", "open"));
   // A cold cache answers "no rows" while the first read is still in flight, which the section drew as "No open pull requests".
   // shortcut: waits at most 8 s for that first read, then answers with what it has; a slower one fills in on the next re-read.
   for (let waited = 0; list.loading && !list.prs.length && !list.fetchedAt && waited < 8000; waited += 400) {
     await new Promise((r) => setTimeout(r, 400));
-    list = await listPrs(root, "all", "open");
+    list = await (io.list?.(root) ?? listPrs(root, "all", "open"));
   }
   if (!list.repo || list.needsAuth) return { ok: true, enabled: true, items: [], uncharted: list.error ?? "GitHub is not reachable from here" };
   const d = settings.doors;
@@ -564,7 +640,10 @@ export async function polarisItems(root: string, io: PolarisIo = liveIo): Promis
       headSha: p.headSha ?? "", canSync: false, syncDraft: drafts.get(`${root}\0${p.number}\0synced`) ?? null, ...(v.reason === "inherited" && inherited ? { inherited } : {}) });
   }
   const bases = await basesOf(items, new Map(list.prs.map((p) => [p.number, p.baseRefName])), pending, readBase);
-  return { ok: true, enabled: true, items, ...(bases.length ? { bases } : {}) };
+  // The three quiet lines, only while the Signals door is on. They are read from what is already here:
+  // the tracker's cache, the checkout's refs, and three lists of the head commit for the bot verdict (up to five pages each).
+  const sources = await signalSources(root, settings, list.prs.map((p) => ({ number: p.number, head: p.headRefName, base: p.baseRefName, headSha: p.headSha ?? "" })), io);
+  return { ok: true, enabled: true, items: sources ? withSignals(items, sources) : items, ...(bases.length ? { bases } : {}) };
 }
 
 const signalled = new Set<string>();
@@ -595,7 +674,7 @@ export async function sweep(root: string, io: PolarisIo = liveIo, now = Date.now
       baseSink?.({ root, base: b.base, tipSha: b.tipSha, checks: b.checks, canSync: b.canSync });
     }
   }
-  // diagnose wakes only in auto (click puts a button before the person); course wakes in any mode but off.
+  // diagnose wakes only in auto (click is stored and acts on nothing: badged Not wired yet); course wakes in any mode but off.
   const wakes = { failing: settings.doors.diagnose.mode === "auto", behind: settings.doors.course.mode !== "off" };
   for (const it of items) {
     // An ignored pull request is one the person asked not to be told about; the wake is what that means.
@@ -635,5 +714,5 @@ export async function wakeForRepo(
 
 /** The timer behind the events: a pass per project at most every lookAgain.minutes, and the shortest minutes is 5, so this wakes every 5. */
 export function startPolaris(): void {
-  setInterval(() => { for (const r of polarisRoots()) void sweep(r).catch(() => {}); }, 5 * 60_000).unref();
+  setIntervalAs("polaris sweep", () => { for (const r of polarisRoots()) void sweep(r).catch(() => {}); }, 5 * 60_000).unref();
 }

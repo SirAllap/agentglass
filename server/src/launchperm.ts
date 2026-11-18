@@ -18,6 +18,7 @@ import { agentProvider } from "../../shared/agentKinds.ts";
 import { isLaunchMode, LAUNCH_MODES, type LaunchMode } from "../../shared/launchModes.ts";
 import { launchDeny, launchFlagOverrides, launchMode } from "./config.ts";
 import { supportsFlag } from "./agents/launch.ts";
+import { launchDenyIn } from "./agentRulesStore.ts";
 
 export interface LaunchPerm { mode: LaunchMode; deny: string[] }
 
@@ -25,15 +26,17 @@ export interface LaunchPerm { mode: LaunchMode; deny: string[] }
  * The mode one launch starts in: an override that names a real mode (a prompt's
  * own setting, a one-off "Run with…"), else the old `yolo` boolean, else the
  * global setting. The deny list is the global one, plus what the caller itself must never allow (a flight-plan builder's): an item can loosen
- * how often it is asked, never what it may not do.
+ * how often it is asked, never what it may not do. Given the checkout the
+ * agent works in, the global list is read through that project's rules: its
+ * own nevers join, and what the person opened for it leaves.
  */
-export function launchPerm(override?: unknown, yolo?: boolean, byAgent = false, alsoDeny: readonly string[] = []): LaunchPerm {
+export function launchPerm(override?: unknown, yolo?: boolean, byAgent = false, alsoDeny: readonly string[] = [], root = ""): LaunchPerm {
   const global = launchMode();
   let mode = isLaunchMode(override) ? override : yolo === true ? "bypassPermissions" : global;
   // An agent asking for a looser mode than the person's setting is an escalation, the
   // same as at the settings door: it gets the setting. Stricter is always fine.
   if (byAgent && LAUNCH_MODES.indexOf(mode) > LAUNCH_MODES.indexOf(global)) mode = global;
-  return { mode, deny: [...new Set([...launchDeny(), ...alsoDeny])] };
+  return { mode, deny: [...new Set([...(root ? launchDenyIn(root) : launchDeny()), ...alsoDeny])] };
 }
 
 /**

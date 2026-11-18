@@ -13,6 +13,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { WalkthroughResult, WalkthroughInputFile } from "../../shared/types.ts";
 import { stripSecrets } from "../../shared/scrub.ts";
 import { outboundDestination } from "./egress.ts";
+import { envLimit } from "./config.ts";
+import { runChild } from "./broker/brokerRun.ts";
 
 // Haiku by default: the task is a one-liner per file, so a small fast model is
 // plenty and keeps latency + token cost low. Override with the env var to trade
@@ -36,7 +38,7 @@ export function walkthroughEnabled(
   env: Record<string, string | undefined> = process.env,
   localClaude: string | null = claudeBin(),
 ): boolean {
-  return env.AGENTGLASS_WALKTHROUGH_DISABLED !== "1"
+  return envLimit("AGENTGLASS_WALKTHROUGH_DISABLED", env) !== "1"
     && (!!localClaude || !!(env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN));
 }
 
@@ -243,23 +245,14 @@ async function viaClaudeCli(sent: SentFile[]): Promise<WalkthroughResult> {
     JSON.stringify(sent, null, 2),
   ].join("\n");
 
-  const proc = Bun.spawn([bin, "-p", "--output-format", "json", "--max-turns", "1", "--model", MODEL], {
-    stdin: new TextEncoder().encode(prompt),
-    stdout: "pipe",
-    stderr: "pipe",
+  // Through the spawn broker: a fork of the server stalls every request.
+  // Kill a hung CLI rather than await it forever.
+  const r = await runChild([bin, "-p", "--output-format", "json", "--max-turns", "1", "--model", MODEL], {
+    stdin: prompt,
     env: walkthroughEnv(),
+    timeoutMs: CLI_TIMEOUT_MS,
   });
-  // Kill a hung CLI rather than await it forever; the timer is cleared once the
-  // process settles, so a normal run pays nothing for it.
-  let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; try { proc.kill(); } catch { /* already gone */ } }, CLI_TIMEOUT_MS);
-  let out: string, err: string, code: number;
-  try {
-    [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-    code = await proc.exited;
-  } finally {
-    clearTimeout(timer);
-  }
+  const out = r.stdout, err = r.stderr || (r.error ?? ""), code = r.code, timedOut = r.timedOut;
   if (timedOut) throw new Error(`claude timed out after ${CLI_TIMEOUT_MS / 1000}s`);
   if (code !== 0) throw new Error(err.trim() || `claude exited with code ${code}`);
 
@@ -295,7 +288,7 @@ export async function generateWalkthrough(files: WalkthroughInputFile[]): Promis
       available: false,
       reviewFocus: "",
       files: [],
-      error: process.env.AGENTGLASS_WALKTHROUGH_DISABLED === "1"
+      error: envLimit("AGENTGLASS_WALKTHROUGH_DISABLED") === "1"
         ? "walkthroughs are disabled by AGENTGLASS_WALKTHROUGH_DISABLED=1"
         : "no local `claude` CLI and no ANTHROPIC_API_KEY — install Claude Code or set a key to enable walkthroughs",
     };

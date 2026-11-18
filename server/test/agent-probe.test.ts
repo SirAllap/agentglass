@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { probeAgents, agentState, ROSTER } from "../src/agentprobe.ts";
+import { probeAgents, agentState, ROSTER, lastSeen } from "../src/agentprobe.ts";
 import type { AgentProbe } from "../../shared/types.ts";
 
 let home: string;
@@ -185,5 +185,42 @@ describe("reading a config that already exists", () => {
     expect(by(probeAgents(has("codex"), never), "codex").connected).toBe(true);
     writeFileSync(path, '[otel]\nexporter = { otlp-http = { endpoint = "https://otel.corp.example", protocol = "binary" } }\n');
     expect(by(probeAgents(has("codex"), never), "codex").connected).toBe(false);
+  });
+});
+
+describe("last seen is kept until an event is written", () => {
+  test("a new event shows up on the next probe", async () => {
+    const { insertEvent } = await import("../src/db.ts");
+    const match = ROSTER.find((r) => r.id === "gemini")!.match;
+    const seen = () => by(probeAgents(has("gemini")), "gemini").seenAt;
+    const before = seen();
+    expect(seen()).toBe(before);
+    const ts = Date.now() + 1_000_000;
+    insertEvent({ source_app: `orbit-${match}`, session_id: "orbit-s1", hook_event_type: "Stop", timestamp: ts, payload: {}, usage: {}, is_error: 0 } as any);
+    expect(seen()).toBe(ts);
+  });
+});
+
+describe("last-seen lookup equals the old LIKE query", () => {
+  test("mixed-case source_app and fragments give the same answer", async () => {
+    const { Database } = await import("bun:sqlite");
+    const d = new Database(":memory:");
+    d.exec("CREATE TABLE events (id INTEGER PRIMARY KEY, source_app TEXT NOT NULL, timestamp INTEGER NOT NULL)");
+    const apps = ["Claude-Code", "CODEX_cli", "gemini-CLI", "Orbit-W1", "orbit-w2", "other"];
+    apps.forEach((a, i) => { d.run("INSERT INTO events(source_app,timestamp) VALUES (?,?)", [a, 100 + i]); d.run("INSERT INTO events(source_app,timestamp) VALUES (?,?)", [a, 10 + i]); });
+    for (const m of ["claude", "CODEX", "Gemini", "orbit", "ORBIT-W", "none", "o"]) {
+      const old = (d.query("SELECT MAX(timestamp) AS t FROM events WHERE source_app LIKE '%' || ? || '%'").get(m) as { t: number | null }).t;
+      expect(lastSeen(m, d as any)).toBe(old);
+    }
+  });
+
+  test("an underscore in the fragment is a literal character, not a wildcard (chosen difference from LIKE)", async () => {
+    const { Database } = await import("bun:sqlite");
+    const d = new Database(":memory:");
+    d.exec("CREATE TABLE events (id INTEGER PRIMARY KEY, source_app TEXT NOT NULL, timestamp INTEGER NOT NULL)");
+    d.run("INSERT INTO events(source_app,timestamp) VALUES ('codex-cli', 5)");
+    expect(lastSeen("codex_cli", d as any)).toBeNull();
+    d.run("INSERT INTO events(source_app,timestamp) VALUES ('CODEX_cli', 9)");
+    expect(lastSeen("codex_cli", d as any)).toBe(9);
   });
 });

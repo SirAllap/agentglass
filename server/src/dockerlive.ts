@@ -25,6 +25,7 @@
 import type { DockerLiveMessage, DockerLiveScope, DockerStat } from "../../shared/types.ts";
 import { dockerBin, invalidateOverview, statFromRow } from "./docker.ts";
 import { spawnWatched } from "./dockerwatch.ts";
+import { setTimeoutAs } from "./loopwatch.ts";
 
 const COALESCE_MS = 250;
 const STATS_FLUSH_MS = 150;
@@ -134,7 +135,7 @@ class Watched {
       p = spawnWatched(bin, this.args);
     } catch { this.lost(); return; }
     this.proc = p;
-    this.upTimer = setTimeout(() => {
+    this.upTimer = setTimeoutAs("docker live up timer", () => {
       if (this.proc !== p) return;
       this.fails = 0;
       this.onState(true);
@@ -168,7 +169,7 @@ class Watched {
     this.upTimer = null;
     if (!this.running) return;
     this.onState(false);
-    this.retry = setTimeout(() => this.spawn(), backoffMs(this.fails++));
+    this.retry = setTimeoutAs("docker live respawn", () => this.spawn(), backoffMs(this.fails++));
   }
 }
 
@@ -192,7 +193,7 @@ const events = new Watched(
     const scopes = scopesFor(line);
     if (!scopes.length) return;
     for (const s of scopes) pending.add(s);
-    coalesce ??= setTimeout(() => {
+    coalesce ??= setTimeoutAs("docker live coalesce", () => {
       coalesce = null;
       const out = pending;
       pending = new Set();
@@ -217,7 +218,7 @@ const stats = new Watched(
   ["stats", "--no-trunc", "--format", "{{json .}}"],
   (line) => {
     statsBatch.push(line);
-    statsFlush ??= setTimeout(() => {
+    statsFlush ??= setTimeoutAs("docker live stats flush", () => {
       statsFlush = null;
       const byId = new Map(statsFromChunk(statsBatch.join("\n")).map((s) => [s.id, s]));
       statsBatch = [];
@@ -278,7 +279,7 @@ export function liveResponse(signal: AbortSignal): Response {
   if (!off) return new Response(JSON.stringify({ ok: false, error: "too many live docker feeds are already open" }), { status: 429, headers: { "content-type": "application/json" } });
   // The comment makes the browser's `open` fire now instead of at the first event.
   write("retry: 2000\n: open\n\n");
-  beat = setInterval(() => write(": ping\n\n"), HEARTBEAT_MS);
+  beat = setInterval(() => write(": ping\n\n"), HEARTBEAT_MS); // loop-ok: one string written to an SSE stream
   signal.addEventListener("abort", leave, { once: true });
   return new Response(stream, {
     headers: {

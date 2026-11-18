@@ -1,3 +1,4 @@
+import { setTimeoutAs } from "./loopwatch.ts";
 /*
  * "This pull request's head or labels changed", worked out from reads the app
  * already makes.
@@ -133,7 +134,7 @@ export function observePr(repo: string, repoKey: string, number: number, seen: {
   }
   const differs = (!!t.latestHead && !!t.head && t.latestHead !== t.head) || !same(t.latestLabels, t.labels);
   if (differs && !t.timer) {
-    t.timer = setTimeout(() => fire(key), coalesceMs);
+    t.timer = setTimeoutAs("pr changed fire", () => fire(key), coalesceMs);
     (t.timer as { unref?: () => void }).unref?.();
   }
 }

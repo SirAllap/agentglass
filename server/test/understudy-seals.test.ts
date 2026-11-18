@@ -205,6 +205,10 @@ describe("seal: a child agent inherits none of this app's reach", () => {
      * Enumerated by binary, so a THIRD kind appearing — a shell, a second
      * agent — fails here rather than blending into a list of things that were
      * always fine.
+     *
+     * A child starts either with Bun.spawn or through the spawn broker
+     * (runChild): e84efe89b moved the judge to the broker so a start does not
+     * fork the server. Both count, or a move to the broker hides a child.
      */
     const { readdirSync, readFileSync } = await import("node:fs");
     const { join, dirname } = await import("node:path");
@@ -214,7 +218,7 @@ describe("seal: a child agent inherits none of this app's reach", () => {
     for (const f of readdirSync(dir).filter((x) => x.startsWith("understudy") && x.endsWith(".ts"))) {
       readFileSync(join(dir, f), "utf8").split("\n").forEach((line, i) => {
         const code = line.replace(/^\s*(\/\/|\*|\/\*).*$/, "");
-        if (/\bBun\.spawn\s*\(/.test(code)) spawns.push({ where: `${f}:${i + 1}`, line: code });
+        if (/\b(?:Bun\.spawn|runChild)\s*\(/.test(code)) spawns.push({ where: `${f}:${i + 1}`, line: code });
       });
     }
     expect(spawns.length, "there should be children to check").toBeGreaterThan(0);

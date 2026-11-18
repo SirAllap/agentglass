@@ -44,8 +44,20 @@ export function placeAfter(windows: PlaceWindow[], name: string, from?: string):
   return from && windows.some((w) => w.id === from) ? from : null;
 }
 
-/** Arguments that put a new window there: `["-a", "-t", "@7"]`, or `["-t", target]` for the end. */
-export function placeArgs(windows: PlaceWindow[], name: string, endTarget: string, from?: string): string[] {
+/** Arguments that put a new window there: `["-a", "-t", "@7"]`, or `["-t", target]` for the end.
+ *
+ *  `slot` is the index a window of this NAME had before its turn ended: a
+ *  resumed turn is the same tab, so it takes its place back instead of the
+ *  group's end (which moved every tab after it). With `renumber-windows` on,
+ *  the window now AT that index is the one that followed it, so the new one goes
+ *  before it; with the index free it takes it; past the end it is the end. */
+export function placeArgs(windows: PlaceWindow[], name: string, endTarget: string, from?: string, slot?: number): string[] {
+  if (slot !== undefined && Number.isInteger(slot) && slot >= 0) {
+    const at = windows.find((w) => w.index === slot);
+    if (at) return ["-b", "-t", at.id];
+    const last = windows.reduce((m, w) => Math.max(m, w.index), -1);
+    if (slot <= last + 1) return ["-t", `${endTarget.replace(/:?$/, ":")}${slot}`];
+  }
   const after = placeAfter(windows, name, from);
   return after ? ["-a", "-t", after] : ["-t", endTarget];
 }

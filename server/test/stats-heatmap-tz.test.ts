@@ -10,12 +10,16 @@
 // the viewer is not sitting at the server.
 import { describe, expect, test, beforeAll } from "bun:test";
 import { mkdtempSync, mkdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const dir = mkdtempSync(join(tmpdir(), "agx-heatmaptz-"));
 const ROOT = join(dir, "proj");
 mkdirSync(ROOT, { recursive: true });
+// Own repo: a TMPDIR under the checkout would widen this scope to the whole
+// repo, and the shared DB's rows from other stats files would light cells here.
+spawnSync("git", ["init", "-q", ROOT]);
 process.env.AGENTGLASS_DB = join(dir, "heat.db");
 process.env.AGENTGLASS_ROOT = ROOT;
 process.env.XDG_CONFIG_HOME = dir;

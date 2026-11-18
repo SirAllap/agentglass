@@ -36,7 +36,7 @@ test("it never writes to the remote", () => {
   }
 });
 
-test("two remotes are fetched one at a time, because --atomic refuses --all", () => {
+test("two remotes are fetched one at a time, because --atomic refuses --all", async () => {
   expect(FETCH_ARGV as readonly string[]).not.toContain("--all");
   const { mkdtempSync, rmSync } = require("node:fs");
   const { tmpdir } = require("node:os");
@@ -45,7 +45,7 @@ test("two remotes are fetched one at a time, because --atomic refuses --all", ()
   try {
     sh(dir, "init", "-q", "w"); sh(dir, "init", "-q", "--bare", "a.git"); sh(dir, "init", "-q", "--bare", "b.git");
     sh(`${dir}/w`, "remote", "add", "o1", `${dir}/a.git`); sh(`${dir}/w`, "remote", "add", "o2", `${dir}/b.git`);
-    const argvs = fetchArgvs(`${dir}/w`);
+    const argvs = await fetchArgvs(`${dir}/w`);
     expect(argvs).toEqual([[...FETCH_ARGV, "o1"], [...FETCH_ARGV, "o2"]]);
     for (const a of argvs) expect(sh(`${dir}/w`, ...a).exitCode).toBe(0);
   } finally { rmSync(dir, { recursive: true, force: true }); }

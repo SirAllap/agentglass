@@ -22,17 +22,21 @@ import { failingTests, refreshFailingTests, type LensSources, type MainRun, type
 import { readCheckFailures, cachedSummaries, type LogRead, type AnnotationsRead, type OutputRead, type CheckAnnotation } from "./ciFailures.ts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { failed } from "./refused.ts";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
+import { agentglassCacheDir } from "./cachedir.ts";
 import { dirname, join, resolve } from "node:path";
-import { gitAsync, safeAbs, repoRootOf } from "./git.ts";
+import { git, gitAsync, safeAbs, repoRootOf, repoRootOfAsync } from "./git.ts";
+import { brokerExec, brokerUp } from "./broker/brokerHost.ts";
 import { splitFileLines } from "../../shared/diffGaps.ts";
 import { makeViewTempDir } from "./viewtemp.ts";
-import { inScopeReal, staysIn } from "./config.ts";
+import { inScopeReal, staysIn, envLimit } from "./config.ts";
 import { recipePromptText } from "./reviewPrompts.ts";
 import { readClosed, writeClosed, type StoredClosed } from "./prClosedStore.ts";
 import { SEL_CLOSED, SEL_FAILING_NAMES, closedFactsFromNode, failingNames } from "./prClosedFacts.ts";
 import { boardHolding, knownStatuses } from "./clickupviews.ts";
+import { workflowStatusRead } from "./jiraboards.ts";
 import { boardHolding as jiraBoardHolding } from "./jiraviews.ts";
+import { trackerChoiceFor } from "./trackerProjects.ts";
 import { heldCard as heldJiraCard, readJiraRef, resolveJiraCards, siteKeys } from "./jiraprcards.ts";
 import type {
   PrRepoId, PrSummary, PrBranchSummary, PrDetail, PrListResponse, PrActionResult, PrCheck, PrCheckRollup,
@@ -41,6 +45,8 @@ import type {
   PrAuthored, PrReaction, PrEvent, PrCheckJob, PrReviewer, PrMergePolicy, PrMergeGate, PrMergeMethod, PrLocalHead, FailingTests, ReviewPerson,
 } from "../../shared/types.ts";
 import { CARD_PEOPLE_MAX } from "../../shared/cardPeople.ts";
+import { isBotLogin } from "../../shared/botLogin.ts";
+import { reviewStatesOf } from "../../shared/reviewStates.ts";
 import { isJiraAvatarHost } from "../../shared/avatarHost.ts";
 import type { ProviderTask } from "../../shared/providers.ts";
 import { cardIdIn } from "../../shared/cardRef.ts";
@@ -49,9 +55,14 @@ import { problemFromSummary, STATUS_SUMMARY_URL, type GithubProblem } from "../.
 import { observePr, claimRefresh } from "./prChanged.ts";
 import { factsOf, unstickLive, NO_WORDS, type Look } from "../../shared/unstick.ts";
 import { hasUrlCredentials } from "../../shared/urlCredentials.ts";
+import { setTimeoutAs } from "./loopwatch.ts";
+import { getLock, locksOf } from "./mergeLockStore.ts";
+import { mergeLockState, type MergeLock, type MergeLockState } from "../../shared/mergeLock.ts";
+import { approveHeldRuns, readHeldRuns } from "./heldRunsGh.ts";
+import type { HeldRun } from "../../shared/heldRuns.ts";
 
 /** Same escape hatch the git writes use, so one variable disables both. */
-const WRITE_ENABLED = process.env.AGENTGLASS_GIT_WRITE_DISABLED !== "1";
+const WRITE_ENABLED = envLimit("AGENTGLASS_GIT_WRITE_DISABLED") !== "1";
 
 const GH_TIMEOUT_MS = 25_000;
 
@@ -81,6 +92,9 @@ function ghBin(): string | null {
 }
 
 export interface GhResult { code: number; stdout: string; stderr: string }
+
+/** The most one stream of a gh call through the spawn broker may carry back. */
+const BROKER_GH_MAX = 32 * 1024 * 1024;
 
 /**
  * Always async, always time-bounded.
@@ -118,6 +132,25 @@ export async function gh(args: string[], cwd?: string, stdin?: string, timeoutMs
     if (held) return { code: 1, stdout: "", stderr: `GitHub API rate limit exceeded; no request is sent until ${new Date(held).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` };
   }
   try {
+    /* Started by the spawn broker when there is one (broker/wire.ts: the fork of
+       this process was measured holding the only thread 2.4 s while gh and git
+       children started; the PR poll is where most gh calls come from). No broker,
+       or a line it would not take, and the call is started here as before. A call
+       the broker died holding answers as a failure and is not sent twice: it may
+       have been a merge or a posted comment. */
+    const via = brokerExec({
+      argv: [bin, ...args], cwd: cwd || undefined, stdin,
+      env: { ...process.env, GH_PROMPT_DISABLED: "1", NO_COLOR: "1" },
+      timeoutMs, maxBytes: BROKER_GH_MAX,
+    });
+    if (via) {
+      const a = await via.done;
+      if (a.error !== undefined) return { code: 1, stdout: "", stderr: a.error };
+      if (a.lost) return { code: 1, stdout: "", stderr: "gh was handed to the spawn broker, which stopped before it answered; not sent again, because it may have run" };
+      if (a.truncated) return { code: 1, stdout: "", stderr: `gh answered more than ${BROKER_GH_MAX / (1024 * 1024)} MB; not read` };
+      if (graphql && (a.code ?? 1) !== 0 && LIMIT_TEXT.test(`${a.stdout} ${a.stderr}`)) noteLimitedBlind();
+      return { code: a.code ?? 1, stdout: a.stdout, stderr: a.stderr };
+    }
     const proc = Bun.spawn([bin, ...args], {
       cwd: cwd || undefined,
       stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin),
@@ -342,6 +375,10 @@ export async function prsForBranch(root: string, branchIn: unknown): Promise<{
   if (!branch || branch.startsWith("-") || /\s/.test(branch)) return { ok: false, into: [], error: "no branch" };
   const id = await repoIdFor(root);
   if (!id) return { ok: false, into: [], error: "no GitHub remote here" };
+  /* Right after boot the spawn broker is not up and gh would be forked on the
+     loop (2.4 s measured, broker/wire.ts). Wait for it, bounded; if it never
+     comes the call goes on as before. */
+  await brokerUp();
 
   /*
    * The cheap field set, deliberately — and the caller has to know it.
@@ -528,7 +565,25 @@ const ROLLUP_TTL_MS = 30_000;
 
 const BEHIND_TTL_MS = 60_000;
 
-export async function branchBehind(root: string, number: number, fresh = false): Promise<{ ok: boolean; behind?: number; ahead?: number; local?: PrLocalHead; refSha?: string; error?: string }> {
+type CompareCommit = { sha?: string; commit?: { message?: string } };
+const COMPARE_PAGE = 100;
+
+/** The newest commits the base has and the branch lacks. A comparison lists
+ *  oldest first, 100 to a page, so with more than 100 behind the newest are on
+ *  the last page; when that page holds fewer than five, the one before tops it up. */
+async function incomingNewest(id: { owner: string; name: string }, pr: { base: string; head: string }, behindBy: number, root: string): Promise<{ commits: CompareCommit[] } | null> {
+  const last = Math.max(1, Math.ceil(behindBy / COMPARE_PAGE));
+  const page = (n: number) => ghJson<{ commits?: CompareCommit[] }>(
+    ["api", `repos/${id.owner}/${id.name}/compare/${encodeURIComponent(pr.head)}...${encodeURIComponent(pr.base)}?per_page=${COMPARE_PAGE}&page=${n}`], root);
+  const tail = await page(last);
+  if (!tail) return null;
+  const commits = tail.commits ?? [];
+  if (commits.length >= 5 || last === 1) return { commits };
+  const before = await page(last - 1);
+  return { commits: [...(before?.commits ?? []), ...commits] };
+}
+
+export async function branchBehind(root: string, number: number, fresh = false): Promise<{ ok: boolean; behind?: number; ahead?: number; incoming?: { sha: string; title: string }[]; local?: PrLocalHead; refSha?: string; error?: string }> {
   const id = await repoIdFor(root);
   if (!id) return { ok: false, error: "no GitHub remote here" };
   const pr = await prBranches(root, number);
@@ -544,6 +599,19 @@ export async function branchBehind(root: string, number: number, fresh = false):
       ["api", `repos/${id.owner}/${id.name}/compare/${encodeURIComponent(pr.base)}...${encodeURIComponent(pr.head)}?per_page=1`], root),
     { fresh, keep: (v) => v != null });
   if (!cmp) return { ok: false, error: "GitHub would not compare those branches" };
+  /* What the base brings: the commits the base has and the branch lacks, newest
+     first, for the phone's "What main brings". Read only when something is
+     behind, from the reversed comparison, and cached like the count. */
+  const behindBy = Number(cmp.behind_by ?? 0);
+  const incoming = behindBy > 0
+    ? await ttlRead(`incoming\u0000${id.key}\u0000${pr.base}\u0000${pr.head}\u0000${sha}`, BEHIND_TTL_MS, () =>
+      incomingNewest(id, pr, behindBy, root),
+      { fresh, keep: (v) => v != null })
+    : null;
+  const brings = (incoming?.commits ?? []).slice(-5).reverse().map((c) => ({
+    sha: String(c.sha ?? "").slice(0, 5),
+    title: String(c.commit?.message ?? "").split("\n")[0]!.slice(0, 120),
+  })).filter((c) => c.sha && c.title);
   // Local state rides along. It is git only — no network — so it costs a few
   // milliseconds on a call the panel already makes, rather than a second round
   // trip for the one thing the button was never telling anybody.
@@ -551,7 +619,7 @@ export async function branchBehind(root: string, number: number, fresh = false):
   /* Where the branch really is on GitHub (git only, no API budget). The pull
      request can lag behind it after an Update branch; the panel compares. */
   const refSha = (await remoteHeadOf(root, pr.head)) ?? undefined;
-  return { ok: true, behind: Number(cmp.behind_by ?? 0), ahead: Number(cmp.ahead_by ?? 0), local, refSha };
+  return { ok: true, behind: behindBy, ahead: Number(cmp.ahead_by ?? 0), ...(brings.length ? { incoming: brings } : {}), local, refSha };
 }
 
 /** The upstream this branch tracks, as a remote name and the ref that follows
@@ -827,7 +895,7 @@ export async function repoIdFor(rootIn: unknown): Promise<PrRepoId | null> {
   if (f) return { key: `github.com/${f[1]}/${f[2]}`, host: "github.com", owner: f[1]!, name: f[2]!, nameWithOwner: `${f[1]}/${f[2]}` };
   const abs = safeAbs(rootIn);
   if (!abs) return null;
-  const root = repoRootOf(abs);
+  const root = await repoRootOfAsync(abs);
   if (!root) return null;
   const hit = idCache.get(root);
   if (hit && Date.now() - hit.at < ID_TTL_MS) return hit.id;
@@ -850,6 +918,59 @@ export async function repoIdFor(rootIn: unknown): Promise<PrRepoId | null> {
   })();
   idInflight.set(root, p);
   return p;
+}
+
+const remoteNamesCache = new Map<string, { at: number; names: string[] }>();
+
+/**
+ * Every `owner/name` a checkout's remotes name — `upstream` AND `origin`, not
+ * just the one `repoIdFor` prefers — read without blocking the loop and cached
+ * for five minutes. For a fork, both the fork and its upstream are its own.
+ */
+export async function repoNamesOf(rootIn: unknown): Promise<string[]> {
+  const f = foreignOf(rootIn);
+  if (f) return [`${f[1]}/${f[2]}`];
+  const abs = safeAbs(rootIn);
+  const root = abs ? await repoRootOfAsync(abs) : null;
+  if (!root) return [];
+  const hit = remoteNamesCache.get(root);
+  if (hit && Date.now() - hit.at < ID_TTL_MS) return hit.names;
+  const names: string[] = [];
+  for (const remote of ["upstream", "origin"]) {
+    const r = await gitAsync(root, ["remote", "get-url", remote]);
+    const id = r.code === 0 ? parseRemote(r.stdout.trim()) : null;
+    if (id) names.push(id.nameWithOwner);
+  }
+  remoteNamesCache.set(root, { at: Date.now(), names });
+  return names;
+}
+
+/**
+ * The `owner/name` a checkout is, without awaiting.
+ *
+ * The settings door reads a value synchronously, and a repository's tracker
+ * choice is kept per repository. Same remote order as `repoIdFor` — `upstream`
+ * first, because on a fork the pull requests live there — and the same
+ * five-minute cache, so one `settings get` costs one `git`. A root that is not
+ * a checkout answers null rather than guessing.
+ */
+export function repoNameOf(rootIn: unknown): string | null {
+  const f = foreignOf(rootIn);
+  if (f) return `${f[1]}/${f[2]}`;
+  const abs = safeAbs(rootIn);
+  const root = abs ? repoRootOf(abs) : null;
+  if (!root) return null;
+  const hit = idCache.get(root);
+  if (hit && Date.now() - hit.at < ID_TTL_MS) return hit.id?.nameWithOwner ?? null;
+  let id: PrRepoId | null = null;
+  for (const remote of ["upstream", "origin"]) {
+    const r = git(root, ["remote", "get-url", remote]);
+    if (r.code !== 0) continue;
+    id = parseRemote(r.stdout.trim());
+    if (id) break;
+  }
+  idCache.set(root, { at: Date.now(), id });
+  return id?.nameWithOwner ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1118,6 +1239,46 @@ export function noteTalk(repo: PrRepoId, pr: PrSummary): void {
   for (const fn of talkListeners) { try { fn(n); } catch { /* a listener must not break the poll */ } }
 }
 
+/** A bot's review changed on an open pull request: who, and where. */
+export interface PrBotReview { number: number; title: string; url: string; who: string }
+
+/** The last bot verdict's node id seen per pull request, and the last state
+ *  seen per extra-listed login, so a standing verdict read again (nothing
+ *  changed) is never announced twice. Keyed per project: two projects
+ *  watching the same repository each get their own first sight. */
+const botReviewLatch = new Map<string, string>();
+
+/**
+ * A bot review change, for one pull request of one project — null when
+ * nothing changed since the last look.
+ *
+ * GitHub's own bot test (`isBotLogin`) covers the default case for free:
+ * `botReview` is already computed on the second pass. `extraBots` names
+ * logins this project added that GitHub does not mark as a bot; those show up
+ * in `humanReview.people` instead (a "person" GitHub's test missed), so their
+ * state is watched there, one latch entry per login.
+ */
+export function noteBotReview(root: string, pr: PrSummary, extraBots: readonly string[] = []): PrBotReview | null {
+  const key = `${root}\0${pr.number}`;
+  const seen = (sub: string, id: string | null): boolean => {
+    const k = `${key}\0${sub}`;
+    const prev = botReviewLatch.get(k);
+    botReviewLatch.set(k, id ?? "");
+    // First sight is the standing state of the world, not news — same rule as noteTalk.
+    return prev !== undefined && id !== null && id !== prev;
+  };
+  let who = "";
+  if (pr.botReview !== undefined && seen("standing", pr.botReview?.nodeId ?? null)) who = "a bot";
+  const extra = new Set(extraBots.map((l) => l.toLowerCase()));
+  if (!who && extra.size && pr.humanReview?.people) {
+    for (const p of pr.humanReview.people) {
+      if (!extra.has(p.login.toLowerCase())) continue;
+      if (seen(`extra:${p.login.toLowerCase()}`, p.state)) who = p.login;
+    }
+  }
+  return who ? { number: pr.number, title: pr.title, url: pr.url, who } : null;
+}
+
 // ---------------------------------------------------------------------------
 // list
 // ---------------------------------------------------------------------------
@@ -1255,7 +1416,7 @@ export async function prBaseOf(rootIn: string, branch: string): Promise<string |
  * toggle flipped in the app decided whether a test passed. One env var, set by
  * the tests, keeps every one of these inside its own temporary directory.
  */
-const CACHE_DIR = process.env.AGENTGLASS_CACHE_DIR || join(homedir(), ".cache", "agentglass");
+const CACHE_DIR = agentglassCacheDir();
 const CACHE_FILE = join(CACHE_DIR, "pr-list.json");
 const CACHE_MAX_ENTRIES = 24;
 let cacheWriteTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1276,7 +1437,7 @@ function loadDiskCache(): void {
 function saveDiskCache(): void {
   if (cacheWriteTimer) clearTimeout(cacheWriteTimer);
   // Debounced: a burst of refreshes writes once.
-  cacheWriteTimer = setTimeout(() => {
+  cacheWriteTimer = setTimeoutAs("pr cache write", () => {
     try {
       const entries = [...listCache.entries()]
         .filter(([, e]) => e.prs.length > 0 && !e.error)
@@ -1462,9 +1623,9 @@ export function humanVerdict(
 ): PrSummary["humanReview"] {
   const rows = Array.isArray(nodes) ? nodes : [];
   const author = (o.author || "").toLowerCase();
-  const strong = new Map<string, { state: string; at: string; url: string }>();
+  const strong = new Map<string, { state: string; at: string; url: string; id: string }>();
   const spoke = new Set<string>();
-  for (const r of rows as { state?: string; author?: { login?: string }; submittedAt?: string; url?: string }[]) {
+  for (const r of rows as { state?: string; author?: { login?: string }; submittedAt?: string; url?: string; id?: string }[]) {
     const who = r.author?.login || "";
     if (!who || isBotLogin(who)) continue;
     /*
@@ -1480,7 +1641,7 @@ export function humanVerdict(
     if (who.toLowerCase() === author) continue;
     spoke.add(who);
     if (r.state === "APPROVED" || r.state === "CHANGES_REQUESTED") {
-      strong.set(who, { state: r.state, at: r.submittedAt || "", url: r.url || "" });
+      strong.set(who, { state: r.state, at: r.submittedAt || "", url: r.url || "", id: r.id || "" });
     } else if (r.state === "DISMISSED") strong.delete(who);
   }
 
@@ -1490,7 +1651,7 @@ export function humanVerdict(
 
   /* The newest of a set, because "when" on this row means "when was this
      decided", and two approvals are decided at different times. */
-  const newest = (rows_: [string, { at: string; url: string }][]) =>
+  const newest = (rows_: [string, { at: string; url: string; id: string }][]) =>
     rows_.slice().sort((a, b) => (b[1].at || "").localeCompare(a[1].at || ""))[0];
 
   const pendingLogins = new Set((o.pending ?? []).map((l) => l.toLowerCase()));
@@ -1528,7 +1689,7 @@ export function humanVerdict(
 
   const build = (
     kind: "approved" | "changes",
-    picked: [string, { state: string; at: string; url: string }][],
+    picked: [string, { state: string; at: string; url: string; id: string }][],
     otherCount: number,
   ): PrSummary["humanReview"] => {
     const top = newest(picked)!;
@@ -1537,6 +1698,9 @@ export function humanVerdict(
       who: picked.map(([login]) => login),
       at: top[1].at || undefined,
       url: top[1].url || undefined,
+      /* Which row in the Conversation this verdict IS, so a card can land on
+         the review rather than on the top of a long page. */
+      nodeId: top[1].id || undefined,
       /*
        * A VERDICT THAT NO LONGER COVERS THE CODE.
        *
@@ -1606,6 +1770,29 @@ export function humanVerdict(
 }
 
 /**
+ * The bot's standing review, and where it is — the same reviews `humanVerdict`
+ * reads, with the bots kept instead of dropped.
+ *
+ * A pull request only a bot has reviewed has no `humanReview`, so the card had
+ * no `url` to land on either: its Review cell opened the Conversation under
+ * Bots and left the reader to find the review. Latest-per-bot like its sibling,
+ * so a bot that approved in August and asked for changes in September is the
+ * second one, and a dismissed review is no verdict at all.
+ */
+export function botReview(nodes: unknown): PrSummary["botReview"] {
+  const rows = Array.isArray(nodes) ? nodes : [];
+  const strong = new Map<string, { at: string; id: string }>();
+  for (const r of rows as { state?: string; author?: { login?: string }; submittedAt?: string; id?: string }[]) {
+    const who = r.author?.login || "";
+    if (!who || !isBotLogin(who) || !r.id) continue;
+    if (r.state === "APPROVED" || r.state === "CHANGES_REQUESTED") strong.set(who, { at: r.submittedAt || "", id: r.id });
+    else if (r.state === "DISMISSED") strong.delete(who);
+  }
+  const top = [...strong.values()].sort((a, b) => (b.at || "").localeCompare(a.at || ""))[0];
+  return top ? { nodeId: top.id } : null;
+}
+
+/**
  * The tracker card a pull request came from, from cache alone.
  *
  * The id is read off the branch — `ORBIT-1042-some-title` — which is a
@@ -1617,6 +1804,13 @@ export function humanVerdict(
  * per row is four hundred requests against a hundred-per-minute budget; the
  * cache answered for eleven of fourteen on a real board, and the three it did
  * not are drawn without a card rather than made to wait for one.
+ *
+ * `repo` is the pull request's repository, and it is what the person's own
+ * choice is read against. Pinned to ClickUp, a row is never given a Jira card;
+ * pinned to Jira it still falls back to the ClickUp card a pull request only
+ * ever named, because the pin is about which tracker is first, not about
+ * blanking the history. Left out (a caller with no repository in hand) it is
+ * "auto", which reads a Jira key before a ClickUp id.
  */
 /*
  * NOTE: `SEARCH_CHECKS` has to ask for `headRefName` and `title`, and for a
@@ -1626,12 +1820,20 @@ export function humanVerdict(
  * nothing. That is the shape of bug this repository keeps paying for, and the
  * reason to check the SCREEN and not the bundle after an install.
  */
-export function cardFor(branch: unknown, title: unknown): PrSummary["card"] | undefined {
+export function cardFor(branch: unknown, title: unknown, repo?: string | null): PrSummary["card"] | undefined {
   const b = typeof branch === "string" ? branch : "";
   const t = typeof title === "string" ? title : "";
-  /* ClickUp answers first where it holds the card: that path is the one every
-     machine had before Jira, and it must not move. */
-  return clickupCardFor(`${b} ${t}`) ?? jiraCardFor(b, t);
+  /* The repository's own choice, then Jira first, then ClickUp: the person's
+     Jira-first rule, and the row the board draws is the card the panel opens.
+     "ClickUp" is strict — a repository pinned to it is never given a Jira card.
+     "Jira" is not allowed to blank an old pull request: it reads Jira first and
+     falls back to the ClickUp card that PR only ever named. */
+  const choice = trackerChoiceFor(repo);
+  if (choice !== "clickup") {
+    const jira = jiraCardFor(b, t);
+    if (jira) return jira;
+  }
+  return clickupCardFor(`${b} ${t}`);
 }
 
 function clickupCardFor(text: string): PrSummary["card"] | undefined {
@@ -1698,7 +1900,7 @@ function cardLine(t: ProviderTask, at: number): NonNullable<PrSummary["card"]> {
 const SEL_TALK = `
       comments(last:10){nodes{createdAt viewerDidAuthor author{login}}}
       reviews(last:60){nodes{
-        submittedAt state viewerDidAuthor author{login} url
+        submittedAt state viewerDidAuthor author{login} url id
       }}
       reviewThreads(first:100){totalCount nodes{isResolved}}`;
 
@@ -1721,7 +1923,7 @@ const SEL_ROW_CHECKS = `
       number additions deletions changedFiles reviewDecision mergeable
       headRefName title
       author{login}
-      reviewRequests(first:5){nodes{requestedReviewer{
+      reviewRequests(first:20){nodes{requestedReviewer{
         ... on User{login}
         ... on Team{name}
       }}}
@@ -1822,6 +2024,9 @@ function searchExpr(repo: PrRepoId, filter: PrFilter, state: PrState, query?: st
       if (/^[A-Za-z][A-Za-z0-9]{1,9}-\d{1,9}$/.test(value)) { parts.push(`"${value.toUpperCase()}"`); inTitleBody = true; }
       continue;
     }
+    /* `-author:x` leaves x's own pull requests out: "reviewed by me, but not mine".
+       Only author is negatable; any other `-key:` stays somebody's words. */
+    if (key === "-author") { parts.push(`-author:${quoteQ(value.toLowerCase() === "me" ? "@me" : value)}`); continue; }
     const q = QUALIFIER[key];
     /* `me` is the account gh is signed in as, GitHub's `@me`. */
     if (q) { parts.push(`${q}:${quoteQ(key === "author" && value.toLowerCase() === "me" ? "@me" : value)}`); continue; }
@@ -1962,7 +2167,7 @@ async function fetchList(repo: PrRepoId, filter: PrFilter, state: PrState, after
   const checksRes = await checksP;
   const checkNodes = checksRes?.data?.search?.nodes ?? [];
   await resolveJiraCards(checkNodes);
-  return { ...early, rows: completeRows(early.rows, checkNodes, me) };
+  return { ...early, rows: completeRows(early.rows, checkNodes, me, repo.nameWithOwner) };
 }
 
 /** The first pass of a page: rows without their checks. */
@@ -1979,12 +2184,12 @@ function barePage(search: any): ListPage {
 }
 
 /** The second pass laid over the first: SEL_ROW_CHECKS' nodes, by number. */
-function completeRows(bare: PrSummary[], checkNodes: any[], me: string): PrSummary[] {
+function completeRows(bare: PrSummary[], checkNodes: any[], me: string, repo?: string | null): PrSummary[] {
   // The second pass carries the costly row fields as well as the rollups, so a
   // row is complete the moment this lands. A PR missing from the answer keeps
   // the first-pass row: `checksLoaded` stays false, the review chip stays off,
   // and the stats stay at zero — all of which read as "not yet", which is true.
-  type SecondPass = { rollup: PrCheckRollup; stats: Pick<PrSummary, "additions" | "deletions" | "changedFiles" |  "reviewDecision" | "humanReview" | "card" | "reviewers" | "headSha" | "mergeable" | "talk" | "openThreads"> };
+  type SecondPass = { rollup: PrCheckRollup; stats: Pick<PrSummary, "additions" | "deletions" | "changedFiles" |  "reviewDecision" | "humanReview" | "botReview" | "reviewStates" | "card" | "reviewers" | "headSha" | "mergeable" | "talk" | "openThreads"> };
   const second = new Map<number, SecondPass>();
   for (const n of checkNodes) {
     if (!n?.number) continue;
@@ -2012,9 +2217,19 @@ function completeRows(bare: PrSummary[], checkNodes: any[], me: string): PrSumma
           headAt: head?.committedDate,
           viewer: me,
         }),
+        /* The bot's own review, for the same reason: a pull request only a bot
+           has reviewed still has a review to land on. */
+        botReview: botReview(n.reviews?.nodes),
+        /* People and bots apart, for the board's review rule fields. Same
+           reviews and requests as above: no extra request. */
+        reviewStates: reviewStatesOf(n.reviews?.nodes, {
+          author: n.author?.login,
+          pending: asked.map((r) => r.login),
+          teams: asked.filter((r) => r.isTeam).map((r) => r.login),
+        }),
         /* The card, from the boards already on disk — no request. See `card`
            on PrSummary for why the ones we have not cached draw nothing. */
-        card: cardFor(n.headRefName, n.title),
+        card: cardFor(n.headRefName, n.title, repo),
         openThreads: unresolvedThreads(n),
         reviewers: asked,
         /* The commit the rollup above belongs to, read off the same node rather
@@ -2062,7 +2277,11 @@ function completeRows(bare: PrSummary[], checkNodes: any[], me: string): PrSumma
    */
   for (const [num, hit] of second) {
     const n = (checkNodes).find((x: { number?: number }) => x?.number === num);
-    if (!Array.isArray(n?.reviews?.nodes)) delete (hit.stats as Partial<typeof hit.stats>).humanReview;
+    if (!Array.isArray(n?.reviews?.nodes)) {
+      delete (hit.stats as Partial<typeof hit.stats>).humanReview;
+      delete (hit.stats as Partial<typeof hit.stats>).botReview;
+      delete (hit.stats as Partial<typeof hit.stats>).reviewStates;
+    }
   }
 
   return bare.map((r) => {
@@ -2192,7 +2411,7 @@ export function carryOver(old: PrSummary | undefined, next: PrSummary): PrSummar
    */
   const carried = { ...next } as Record<string, unknown>;
   const before = old as unknown as Record<string, unknown>;
-  for (const k of ["humanReview", "card", "headSha", "openThreads"] as const) {
+  for (const k of ["humanReview", "botReview", "reviewStates", "card", "headSha", "openThreads"] as const) {
     if (carried[k] === undefined && before[k] !== undefined) carried[k] = before[k];
   }
   if (next.checksLoaded) return carried as unknown as PrSummary;
@@ -2289,12 +2508,12 @@ export async function prRowDetails(rootIn: unknown, numbersIn: unknown, finished
      so it is looked up again on every answer, stored or not. */
   await resolveJiraCards([...nodes, ...fromStore.map(({ s }) => ({ headRefName: s.head, title: s.title }))]);
   for (const { n, s } of fromStore) {
-    const card = cardFor(s.head, s.title);
+    const card = cardFor(s.head, s.title, repo.nameWithOwner);
     rows[n] = card ? { ...s.row, card } : { ...s.row };
   }
   if (!nodes.length) return { ok: true, rows };
   const me = await io.me();
-  const done = completeRows(nodes.map((n) => ({ number: n.number }) as PrSummary), nodes, me);
+  const done = completeRows(nodes.map((n) => ({ number: n.number }) as PrSummary), nodes, me, repo.nameWithOwner);
   /* Check names only for the finished ones that ended red: one small query for all of them. */
   const nodeBy = new Map<number, any>(nodes.map((x) => [x.number, x]));
   const isFinished = (n: number) => finished.has(n) && (nodeBy.get(n)?.state === "MERGED" || nodeBy.get(n)?.state === "CLOSED");
@@ -2325,14 +2544,15 @@ export async function prRowDetails(rootIn: unknown, numbersIn: unknown, finished
   return { ok: true, rows };
 }
 
-async function fetchCheckRollups(repo: PrRepoId, numbers: number[]): Promise<Map<number, PrCheckRollup>> {
+export async function fetchCheckRollups(repo: PrRepoId, numbers: number[], mergeableOut?: Map<number, string>, baseOut?: Map<number, string>): Promise<Map<number, PrCheckRollup>> {
   const out = new Map<number, PrCheckRollup>();
   if (!numbers.length) return out;
   const [owner, name] = repo.nameWithOwner.split("/");
   // Numbers are integers straight off the list, and owner/name come from a
   // parsed remote (no quotes possible), so interpolating them as GraphQL
   // aliases/args is safe — there is no string a caller controls here.
-  const field = `commits(last: 1) { nodes { commit { statusCheckRollup {
+  // `mergeable` rides in the same request when a caller asks for it (mergeableOut): never a second call.
+  const field = `${mergeableOut ? "mergeable " : ""}${baseOut ? "baseRefName " : ""}commits(last: 1) { nodes { commit { statusCheckRollup {
     state
     contexts(first: 0) {
       checkRunCountsByState { state count }
@@ -2347,6 +2567,8 @@ async function fetchCheckRollups(repo: PrRepoId, numbers: number[]): Promise<Map
   for (const n of numbers) {
     const pr = repoData[`p${n}`];
     if (!pr) continue;
+    if (mergeableOut && typeof pr.mergeable === "string") mergeableOut.set(n, pr.mergeable);
+    if (baseOut && typeof pr.baseRefName === "string") baseOut.set(n, pr.baseRefName);
     const rollup = pr.commits?.nodes?.[0]?.commit?.statusCheckRollup;
     const ctx = rollup?.contexts;
     out.set(n, rollupFromCounts(ctx?.checkRunCountsByState, ctx?.statusContextCountsByState, rollup?.state));
@@ -2433,7 +2655,9 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
   const prev = listCache.get(key);
   const startedAt = Date.now();
   const keep = (over: Partial<Entry>): Entry => ({
-    at: prev?.at ?? 0, prs: prev?.prs ?? [], loading: true, checksPending: true, error: prev?.error, began: prev?.began, okAt: prev?.okAt, ...over,
+    at: prev?.at ?? 0, prs: prev?.prs ?? [], loading: true, checksPending: true, error: prev?.error, began: prev?.began, okAt: prev?.okAt,
+    /* The paging facts stay too: a forced read answers from this placeholder, and without them it said hasNext:false, cursor:null — the list stopped at one page. */
+    total: prev?.total, hasNext: prev?.hasNext, cursor: prev?.cursor, fp: prev?.fp, ...over,
   });
   listCache.set(key, keep({}));
 
@@ -2549,7 +2773,10 @@ const SHARED_FIELDS = ["title", "state", "isDraft", "reviewDecision", "updatedAt
   /* The verdict header on the card ("Approved by ada") and on the detail's
      Overview: `reviewDecision` alone left one of the two saying "No review
      asked for yet" after a review landed. */
-  "humanReview"] as const;
+  "humanReview",
+  /* Where that verdict's row is, and the bot's own review when it is the only
+     one — the card's Review cell lands on it (see `botReview`). */
+  "botReview"] as const;
 
 /** `row` brought up to date from a detail read, or `row` itself when the
  *  detail is older (its `updatedAt`) or says nothing new. An UNKNOWN
@@ -2744,29 +2971,46 @@ export function scheduleMergeableRecheck(repo: PrRepoId, rows: PrSummary[], ask:
  * card is blocked or waiting for another reason already.
  */
 const REQUIRED_TTL_MS = 10 * 60_000;
-export const __requiredCaches = { ctx: new Map<string, { at: number; ctx: string[] }>(), names: new Map<string, string[]>() };
+export const __requiredCaches = { ctx: new Map<string, { at: number; ctx: string[]; strict?: boolean }>(), names: new Map<string, string[]>(), states: new Map<string, { state: string; at: number }>() };
 const requiredCtxCache = __requiredCaches.ctx;
 const namesCache = __requiredCaches.names;
+const statesCache = __requiredCaches.states;
+/* Keyed by the head AND how many checks the head has right now: a required job
+   that registers late changes the count, so the names are read again instead of
+   a "never reported" read at 75 checks standing for ever at 76. */
+/** GitHub's merge state moves when the BASE moves (another PR merges), with no change to this head: it is trusted for a minute, then read again. */
+export const MERGE_STATE_TTL_MS = 60_000;
+const namesKey = (repo: PrRepoId, r: PrSummary) => `${repo.key}\u0000${r.number}\u0000${r.headSha}\u0000${r.checks?.total ?? 0}`;
 const requiredAsking = new Set<string>();
 const isCandidate = (r: PrSummary) =>
   r.state === "OPEN" && !r.isDraft && r.reviewDecision === "APPROVED" && !!r.headSha && r.checks?.failure === 0 && r.checks?.pending === 0 && r.checks?.total > 0;
 
-/** `rows` with `requiredMissing` set from what the caches already know. */
+/**
+ * `rows` with `requiredMissing` and `behindBlocks` set from what the caches already know:
+ * the same two facts the detail's merge box reads (mergeBlockers), so a card nobody opened
+ * lands in the column the detail would show. A pure function of the row and the caches,
+ * run on every store of the list; a card that is not a candidate carries neither.
+ */
 export function stampRequired(repo: PrRepoId, rows: PrSummary[]): PrSummary[] {
   return rows.map((r) => {
-    if (!isCandidate(r)) return r.requiredMissing ? { ...r, requiredMissing: undefined } : r;
-    const names = namesCache.get(`${repo.key}\u0000${r.number}\u0000${r.headSha}`);
+    if (!isCandidate(r)) return r.requiredMissing || r.behindBlocks ? { ...r, requiredMissing: undefined, behindBlocks: undefined } : r;
+    const k = namesKey(repo, r);
+    const names = namesCache.get(k);
     const req = requiredCtxCache.get(`${repo.key}\u0000${r.baseRefName}`);
-    if (!names || !req) return r;
+    /* No read for THIS head and check count: claim nothing rather than keep the last one. */
+    if (!names || !req) return r.requiredMissing || r.behindBlocks ? { ...r, requiredMissing: undefined, behindBlocks: undefined } : r;
     const missing = req.ctx.some((c) => !names.includes(c));
-    return missing === !!r.requiredMissing ? r : { ...r, requiredMissing: missing || undefined };
+    /* Behind is a wall only where the base requires up-to-date branches; otherwise it is a hint. */
+    const st = statesCache.get(k);
+    const behind = !!st && Date.now() - st.at < MERGE_STATE_TTL_MS && st.state === "BEHIND" && req.strict === true;
+    return missing === !!r.requiredMissing && behind === !!r.behindBlocks ? r : { ...r, requiredMissing: missing || undefined, behindBlocks: behind || undefined };
   });
 }
 
-const REQUIRED_CTX_FIELDS = `branchProtectionRule{requiredStatusCheckContexts}
+const REQUIRED_CTX_FIELDS = `branchProtectionRule{requiredStatusCheckContexts requiresStrictStatusChecks}
   refUpdateRule{requiredStatusCheckContexts}
-  rules(first:50){nodes{type repositoryRuleset{enforcement} parameters{... on RequiredStatusChecksParameters{requiredStatusChecks{context}}}}}`;
-const NAMES_FIELDS = `commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{... on CheckRun{name} ... on StatusContext{context}}}}}}}`;
+  rules(first:50){nodes{type repositoryRuleset{enforcement} parameters{... on RequiredStatusChecksParameters{strictRequiredStatusChecksPolicy requiredStatusChecks{context}}}}}`;
+const NAMES_FIELDS = `mergeStateStatus commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{... on CheckRun{name} ... on StatusContext{context}}}}}}}`;
 
 export async function scheduleRequiredCheck(
   repo: PrRepoId, rows: PrSummary[],
@@ -2777,7 +3021,13 @@ export async function scheduleRequiredCheck(
     return res?.data?.repository ?? null;
   },
 ): Promise<number> {
-  const cands = rows.filter(isCandidate).filter((r) => !namesCache.has(`${repo.key}\u0000${r.number}\u0000${r.headSha}`));
+  /* Entries of pull requests no list holds as candidates any more (merged, closed, no longer approved and green) are dropped. */
+  const live = new Set<string>();
+  for (const [k, e] of listCache) if (k.startsWith(`${repo.key}\u0000`)) for (const r of e.prs) if (isCandidate(r)) live.add(namesKey(repo, r));
+  for (const r of rows) if (isCandidate(r)) live.add(namesKey(repo, r));
+  for (const k of [...namesCache.keys()]) if (k.startsWith(`${repo.key}\u0000`) && !live.has(k)) { namesCache.delete(k); statesCache.delete(k); }
+  const stale = (r: PrSummary) => Date.now() - (statesCache.get(namesKey(repo, r))?.at ?? 0) >= MERGE_STATE_TTL_MS;
+  const cands = rows.filter(isCandidate).filter((r) => !namesCache.has(namesKey(repo, r)) || stale(r));
   const bases = [...new Set(rows.filter(isCandidate).map((r) => r.baseRefName))]
     .filter((b) => b && !((requiredCtxCache.get(`${repo.key}\u0000${b}`)?.at ?? 0) > Date.now() - REQUIRED_TTL_MS));
   if (!cands.length && !bases.length) return 0;
@@ -2795,11 +3045,18 @@ export async function scheduleRequiredCheck(
       const n = repoNode[`b${i}`];
       if (!n) return;
       const rules = (n.rules?.nodes || []).filter((x: any) => x && (x.repositoryRuleset?.enforcement ?? "ACTIVE") === "ACTIVE");
-      requiredCtxCache.set(`${repo.key}\u0000${b}`, { at: Date.now(), ctx: requiredContextsOf(n.branchProtectionRule, n.refUpdateRule, rules) });
+      const strict = n.branchProtectionRule?.requiresStrictStatusChecks === true
+        || rules.some((x: any) => x.type === "REQUIRED_STATUS_CHECKS" && x.parameters?.strictRequiredStatusChecksPolicy === true);
+      requiredCtxCache.set(`${repo.key}\u0000${b}`, { at: Date.now(), ctx: requiredContextsOf(n.branchProtectionRule, n.refUpdateRule, rules), strict });
     });
     for (const r of cands) {
       const nodes = repoNode[`p${r.number}`]?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.contexts?.nodes;
-      if (Array.isArray(nodes)) namesCache.set(`${repo.key}\u0000${r.number}\u0000${r.headSha}`, nodes.map((c: any) => String(c?.name ?? c?.context ?? "")).filter(Boolean));
+      if (Array.isArray(nodes)) {
+        const own = `${repo.key}\u0000${r.number}\u0000`;
+        for (const old of [...namesCache.keys()]) if (old.startsWith(own)) { namesCache.delete(old); statesCache.delete(old); }
+        namesCache.set(namesKey(repo, r), nodes.map((c: any) => String(c?.name ?? c?.context ?? "")).filter(Boolean));
+        statesCache.set(namesKey(repo, r), { state: String(repoNode[`p${r.number}`]?.mergeStateStatus ?? ""), at: Date.now() });
+      }
     }
     for (const [k, e] of listCache) {
       if (!k.startsWith(`${repo.key}\u0000`)) continue;
@@ -2952,7 +3209,7 @@ function readQueues(repo: PrRepoId): Promise<boolean> {
       const prior = new Map((listCache.get(key)?.prs ?? []).map((q) => [q.number, q]));
       const early = barePage(search);
       await resolveJiraCards(search.nodes ?? []);
-      storePage(repo, filter, "open", key, prior, { ...early, rows: completeRows(early.rows, search.nodes ?? [], me) }, probeFp(search), readStart);
+      storePage(repo, filter, "open", key, prior, { ...early, rows: completeRows(early.rows, search.nodes ?? [], me, repo.nameWithOwner) }, probeFp(search), readStart);
     }
     probeCache.set(repo.key, {
       at: Date.now(),
@@ -3065,22 +3322,73 @@ export type PrFacetOptions = {
    * Empty for anybody with no tracker, which is what keeps the field out of
    * their filter bar altogether.
    */
-  cardStatuses?: { status: string; color?: string; type?: string }[];
+  cardStatuses?: { status: string; color?: string; type?: string; /** Which trackers have it: "jira" / "clickup". The page lists only those its cards belong to. */ trackers?: string[] }[];
 };
 const facetCache = new Map<string, { at: number; data: PrFacetOptions }>();
 /* Twenty minutes: contributors, labels, milestones and base branches change a
    few times a day, and the 5-minute copy expired between a reload and the next
    open, so 7 REST reads and a 68 KB body were repeated for the same lists. */
 const FACET_TTL_MS = 20 * 60_000;
+const FACET_FAILED_TTL_MS = 30_000;
+/** The cache entry for a Jira answer that came after the facets were sent: a failed or partial one expires after FACET_FAILED_TTL_MS, a whole one after the full TTL. */
+export function lateFacetEntry(base: PrFacetOptions, cardStatuses: PrFacetOptions["cardStatuses"], failed: boolean, now: number): { at: number; data: PrFacetOptions } {
+  return { at: failed ? now - FACET_TTL_MS + FACET_FAILED_TTL_MS : now, data: { ...base, cardStatuses } };
+}
 
-export async function facetOptions(rootIn: unknown): Promise<{ ok: boolean; data?: PrFacetOptions; error?: string }> {
+/** The PR rules' card statuses: the Jira workflow rows and the ClickUp boards' statuses, upper case, once each (Jira's first). */
+type CardStatusRow = { status: string; color?: string; type?: string; trackers?: string[] };
+export function mergeCardStatuses(...lists: (CardStatusRow & { tracker?: string })[][]): CardStatusRow[] {
+  const out = new Map<string, CardStatusRow>();
+  for (const l of lists) for (const x of l) {
+    const status = x.status.trim().toUpperCase();
+    if (!status) continue;
+    const had = out.get(status);
+    if (!had) out.set(status, { status, ...(x.color ? { color: x.color } : {}), ...(x.type ? { type: x.type } : {}), ...(x.tracker ? { trackers: [x.tracker] } : {}) });
+    else if (x.tracker && !had.trackers?.includes(x.tracker)) had.trackers = [...(had.trackers ?? []), x.tracker];
+  }
+  return [...out.values()];
+}
+
+/** Jira is asked beside the GitHub reads, and never waited on for long: a slow site must not hold the other facets. */
+const JIRA_FACET_MS = 4_000;
+type JiraFacetRows = { status: string; color?: string; type: string }[];
+/* The last good workflow read: a slow or failed read must not leave the PR board with ClickUp's statuses alone. The read that
+   lost the race keeps running and fills this when it lands. */
+let lastJiraRows: JiraFacetRows = [];
+export function _resetJiraFacetMemory(): void { lastJiraRows = []; }
+export async function jiraFacetRead(read: typeof workflowStatusRead = workflowStatusRead, waitMs = JIRA_FACET_MS, projects: readonly string[] = [], onLate?: (r: { rows: JiraFacetRows; failed: boolean }) => void): Promise<{ rows: JiraFacetRows; failed: boolean }> {
+  const lost = { rows: [] as JiraFacetRows, failed: true };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let raced = false;
+  // Partial beats nothing: any rows are remembered, even when one project refused its read.
+  const reading = read(projects).then((r) => { if (r.rows.length) { lastJiraRows = r.rows; if (raced) onLate?.(r); } return r; }, () => lost);
+  // loop-ok: the timer only marks the race lost and settles the promise
+  try {
+    const got = await Promise.race([reading, new Promise<typeof lost>((res) => { timer = setTimeout(() => { raced = true; res(lost); }, waitMs); })]);
+    return got.rows.length ? got : { rows: lastJiraRows, failed: true };
+  } finally { clearTimeout(timer); }
+}
+
+export async function facetOptions(rootIn: unknown, projectsIn: readonly string[] = []): Promise<{ ok: boolean; data?: PrFacetOptions; error?: string }> {
   const repo = await repoIdFor(rootIn);
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
-  const hit = facetCache.get(repo.key);
+  /* The Jira projects of the cards listed: their workflows are offered too, saved as a board or not. */
+  const projects = [...new Set(projectsIn.map((k) => String(k).toUpperCase()).filter((k) => /^[A-Z][A-Z0-9_]{1,19}$/.test(k)))].sort().slice(0, 12);
+  const cacheKey = `${repo.key}|${projects.join(",")}`;
+  const hit = facetCache.get(cacheKey);
   if (hit && Date.now() - hit.at < FACET_TTL_MS) return { ok: true, data: hit.data };
-  return singleFlight(`facets\u0000${repo.key}`, async () => {
+  return singleFlight(`facets\u0000${cacheKey}`, async () => {
   const r = repo.nameWithOwner;
-  const [contribs, assignees, labels, milestones, branches] = await Promise.all([
+  let facetBase: PrFacetOptions | undefined;
+  /* A late Jira answer can land before the other reads finish: keep it until facetBase exists. A failed or partial one is
+     cached briefly, like a failed read, so the next open asks again. */
+  let lateRows: { rows: JiraFacetRows; failed: boolean } | undefined;
+  const applyLate = () => {
+    if (!facetBase || !lateRows) return;
+    facetCache.set(cacheKey, lateFacetEntry(facetBase, cardStatusesOf(lateRows.rows), lateRows.failed, Date.now()));
+    lateRows = undefined;
+  };
+  const [contribs, assignees, labels, milestones, branches, jira] = await Promise.all([
     ghJson<any[]>(["api", `repos/${r}/contributors?per_page=100`]),
     ghJson<any[]>(["api", `repos/${r}/assignees?per_page=100`]),
     /* Every label, however many there are: this is a picker of the whole set,
@@ -3089,18 +3397,22 @@ export async function facetOptions(rootIn: unknown): Promise<{ ok: boolean; data
     ghJsonAll<any>(`repos/${r}/labels?per_page=100`, 4),
     ghJsonAll<any>(`repos/${r}/milestones?state=all&per_page=100`, 2),
     ghJson<any[]>(["api", `repos/${r}/branches?per_page=100`]),
+    jiraFacetRead(undefined, undefined, projects, (late) => { lateRows = late; applyLate(); }),
   ]);
+  const cardStatusesOf = (rows: JiraFacetRows) => mergeCardStatuses(rows.map((x) => ({ ...x, tracker: "jira" })), knownStatuses().map((x) => ({ status: x.status, color: x.color, type: x.type, tracker: "clickup" })));
   const data: PrFacetOptions = {
     authors: (contribs ?? []).map((c: any) => String(c?.login ?? "")).filter(Boolean),
     assignees: (assignees ?? []).map((a: any) => String(a?.login ?? "")).filter(Boolean),
     labels: (labels ?? []).map((l: any) => ({ name: String(l?.name ?? ""), color: String(l?.color ?? "") })).filter((l) => l.name),
     milestones: (milestones ?? []).map((m: any) => String(m?.title ?? "")).filter(Boolean),
     bases: (branches ?? []).map((b: any) => String(b?.name ?? "")).filter(Boolean),
-    /* Free: the boards were cached with their own statuses beside their tasks,
-       so this is a read of a file this app keeps anyway. Nobody is asked. */
-    cardStatuses: knownStatuses().map((x) => ({ status: x.status, color: x.color, type: x.type })),
+    /* The Jira workflow statuses (the list the board's columns come from) and the ClickUp boards' own, merged. */
+    cardStatuses: cardStatusesOf(jira.rows),
   };
-  facetCache.set(repo.key, { at: Date.now(), data });
+  facetBase = data;
+  applyLate();
+  // A failed Jira read is not remembered for the TTL: the next open asks again.
+  if (!jira.failed) facetCache.set(cacheKey, { at: Date.now(), data });
   return { ok: true, data };
   });
 }
@@ -3177,7 +3489,7 @@ export async function listPrs(rootIn: unknown, filterIn: unknown, stateIn: unkno
   // is the branch/PR link, and it falls out of the dedupe rather than costing
   // a call of its own.
   const abs = safeAbs(rootIn);
-  const root = abs ? repoRootOf(abs) : null;
+  const root = abs ? await repoRootOfAsync(abs) : null;
   const head = root ? await headBranch(root) : "";
   const prs = (cur?.prs ?? []).map((p) => (p.headRefName && p.headRefName === head ? { ...p, isCurrentBranch: true } : p));
 
@@ -3210,10 +3522,25 @@ export async function listPrs(rootIn: unknown, filterIn: unknown, stateIn: unkno
     needsAuth: cap ? !cap.available || !cap.authed : false,
     // What the panel needs to offer a second page: how many there are in total,
     // whether another page exists, and the cursor that fetches it.
-    total: cur?.total,
-    hasNext: !!cur?.hasNext,
-    cursor: cur?.cursor ?? null,
+    ...laterPageFacts(cur, after ? listCache.get(cacheKey(repo, filter, state, undefined, query)) : undefined),
     pageSize: LIST_PAGE,
+  };
+}
+
+/**
+ * Paging facts for a read. A later page nobody has fetched yet is a loading
+ * placeholder with no facts of its own; it must not say "no more pages" (the
+ * list would end there). It says what page one knows: more may exist, and the total.
+ */
+export function laterPageFacts(
+  cur: { loading: boolean; total?: number; hasNext?: boolean; cursor?: string | null } | undefined,
+  first: { total?: number } | undefined,
+): { total: number | undefined; hasNext: boolean; cursor: string | null } {
+  const unknown = !!first && !!cur?.loading && cur.hasNext === undefined;
+  return {
+    total: cur?.total ?? (unknown ? first.total : undefined),
+    hasNext: unknown ? true : !!cur?.hasNext,
+    cursor: cur?.cursor ?? null,
   };
 }
 
@@ -3296,7 +3623,7 @@ export async function refBranchRows(rootIn: unknown, keyIn: unknown, deps: RefBr
   const repo = await repoIdFor(rootIn);
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
   const abs = safeAbs(rootIn);
-  const cwd = abs ? repoRootOf(abs) : null;
+  const cwd = abs ? await repoRootOfAsync(abs) : null;
   if (!cwd) return { ok: false, error: "not a git checkout" };
   const lsRemote = deps.lsRemote ?? (async (dir: string) => {
     const r = await gitAsync(dir, ["ls-remote", "--heads", "origin"]);
@@ -3332,18 +3659,9 @@ export async function refBranchRows(rootIn: unknown, keyIn: unknown, deps: RefBr
 // bot noise
 // ---------------------------------------------------------------------------
 
-/*
- * `github-advanced-security` is here because it was MEASURED, not guessed.
- *
- * GitHub's own code scanning reviews a pull request as a plain login with no
- * `[bot]` suffix — checked against this repository, where three of the five most
- * recently discussed pull requests have exactly one "review" on them and it is
- * that. Every one of them would have counted as a person: an unread badge on the
- * board, a notification, and a name in the Humans filter, for an alert that is
- * already a check.
- */
-const BOT_RE = /\[bot\]$|^(github-actions|dependabot|codecov|sonarcloud|claude|github-advanced-security)$/i;
-export const isBotLogin = (login: string): boolean => BOT_RE.test(login || "");
+/* The test itself lives in shared/botLogin.ts, so the board's review fields
+   read the very same one. Re-exported: other server files import it from here. */
+export { isBotLogin };
 
 /**
  * Reduce a machine comment to the few numbers a person reads.
@@ -3540,7 +3858,7 @@ async function fillPages(p: any, repo: PrRepoId, number: number): Promise<void> 
  * quietly wrong.
  */
 const SEL_REVIEWS = `nodes{
-      id author{login} state body submittedAt url lastEditedAt authorAssociation viewerDidAuthor
+      id author{login __typename} state body submittedAt url lastEditedAt authorAssociation viewerDidAuthor
       commit{oid}
       reactionGroups{content viewerHasReacted users{totalCount}}
     }`;
@@ -3632,7 +3950,7 @@ export const DETAIL_QUERY = `query($owner:String!,$name:String!,$number:Int!){
     headRepositoryOwner{login}
     mergeable mergeStateStatus reviewDecision viewerDidAuthor viewerCanUpdate
     author{login ... on User{name email}}
-    mergedBy{login}
+    mergedBy{login} mergeCommit{oid}
     reactionGroups{content viewerHasReacted users{totalCount}}
     labels(first:50){nodes{name color}}
     milestone{title}
@@ -3760,6 +4078,14 @@ const DETAIL_FILE = join(CACHE_DIR, "pr-detail.json");
 /** Enough for a day's reading, not a mirror of the repository. Each entry is a
  *  few tens of KB — comments, reviews, threads, files, checks. */
 const DETAIL_MAX_ENTRIES = 24;
+/** The most details held in memory: a loop over pull request numbers must not grow it without end. Oldest read goes first. */
+const DETAIL_CACHE_CAP = 200;
+export function capDetailCache(max = DETAIL_CACHE_CAP): void {
+  if (detailCache.size <= max) return;
+  const oldest = [...detailCache.entries()].sort((a, b) => a[1].at - b[1].at).slice(0, detailCache.size - max);
+  for (const [k] of oldest) { detailCache.delete(k); detailFlights.delete(k); }
+}
+export function __detailSize(): number { return detailCache.size; }
 let detailWriteTimer: ReturnType<typeof setTimeout> | null = null;
 /** Refreshes already running, so ten glances at a stale card make one call. */
 const detailFollows = new Map<string, Promise<any>>();
@@ -3780,7 +4106,7 @@ function loadDetailCache(): void {
 
 function saveDetailCache(): void {
   if (detailWriteTimer) clearTimeout(detailWriteTimer);
-  detailWriteTimer = setTimeout(() => {
+  detailWriteTimer = setTimeoutAs("pr detail write", () => {
     try {
       const entries = [...detailCache.entries()].sort((a, b) => b[1].at - a[1].at).slice(0, DETAIL_MAX_ENTRIES);
       mkdirSync(dirname(DETAIL_FILE), { recursive: true });
@@ -4297,9 +4623,10 @@ async function readDetail(rootIn: unknown, number: number, repo: PrRepoId, key: 
       headAt: p.statusCheckRollup?.nodes?.[0]?.commit?.committedDate,
       viewer: viewerLogin,
     }),
+    botReview: botReview(p.reviews?.nodes),
     /* And the tracker card, from the same cache the list reads, so opening a
        pull request cannot lose the line the board was showing. */
-    card: cardFor(p.headRefName, p.title),
+    card: cardFor(p.headRefName, p.title, repo.nameWithOwner),
     additions: p.additions ?? 0,
     deletions: p.deletions ?? 0,
     changedFiles: p.changedFiles ?? 0,
@@ -4338,6 +4665,7 @@ async function readDetail(rootIn: unknown, number: number, repo: PrRepoId, key: 
       ? { enabledBy: p.autoMergeRequest.enabledBy?.login || "", method: p.autoMergeRequest.mergeMethod || "" }
       : null,
     mergedBy: p.mergedBy?.login || null,
+    mergeSha: p.mergeCommit?.oid ? String(p.mergeCommit.oid).slice(0, 7) : null,
     mergedAt: p.mergedAt || null,
     closedAt: p.closedAt || null,
     createdAt: p.createdAt || "",
@@ -4373,6 +4701,7 @@ async function readDetail(rootIn: unknown, number: number, repo: PrRepoId, key: 
 
   detail.readAt = Date.now();
   detailCache.set(key, { at: detail.readAt, detail });
+  capDetailCache();
   saveDetailCache();
   projectDetail(repo, detail);
   watchRows(repo, [detail]);
@@ -4435,7 +4764,7 @@ function loadDiffCache(): void {
 
 function saveDiffCache(): void {
   if (diffWriteTimer) clearTimeout(diffWriteTimer);
-  diffWriteTimer = setTimeout(() => {
+  diffWriteTimer = setTimeoutAs("pr diff write", () => {
     try {
       const out: Record<string, DiffEntry> = {};
       let held = 0;
@@ -4630,13 +4959,40 @@ export function assetAllowed(raw: string): URL | null {
  * same exact-host list, so a redirect to anywhere else is refused, not followed.
  * No credential is sent to these hosts.
  */
+/**
+ * Where an avatar redirect may be followed to, or null.
+ *
+ * Gravatar does not send a person with no picture to the image named in
+ * `d=`; it sends them to its own image proxy with that image's address as
+ * the path. Asked on 2026-11-11 with an invented hash:
+ *   location: https://i2.wp.com/avatar-management--avatars.us-west-2.prod.public.atl-paas.net/initials/AB-2.png?ssl=1
+ * The proxy's host is not an avatar host, so the hop was refused and every
+ * initials avatar answered 400 "blocked" (three in a row in the window's
+ * console for one board). The proxy is still never fetched: the address it
+ * wraps is read out of the path and followed directly, and only when that
+ * address passes the same exact-host rule as any other hop. The list of
+ * hosts this proxy route will fetch from is unchanged.
+ */
+export function avatarRedirect(from: URL, location: string): URL | null {
+  let next: URL;
+  try { next = new URL(location, from); } catch { return null; }
+  if (next.protocol !== "https:" || hasUrlCredentials(next)) return null;
+  if (isJiraAvatarHost(next.hostname)) return next;
+  if (/^i\d\.wp\.com$/.test(next.hostname.toLowerCase()) && next.port === "") {
+    let inner: URL;
+    try { inner = new URL(`https://${next.pathname.replace(/^\/+/, "")}`); } catch { return null; }
+    if (!hasUrlCredentials(inner) && inner.port === "" && isJiraAvatarHost(inner.hostname)) return inner;
+  }
+  return null;
+}
+
 async function fetchJiraAvatar(first: URL): Promise<Response | null> {
   let u = first;
   for (let hop = 0; hop < 3; hop++) {
     const res = await fetch(u.toString(), { headers: { accept: "image/*" }, redirect: "manual", signal: AbortSignal.timeout(20_000) });
     if (res.status < 300 || res.status >= 400) return res;
-    const next = (() => { try { return new URL(res.headers.get("location") || "", u); } catch { return null; } })();
-    if (!next || next.protocol !== "https:" || hasUrlCredentials(next) || !isJiraAvatarHost(next.hostname)) return null;
+    const next = avatarRedirect(u, res.headers.get("location") || "");
+    if (!next) return null;
     u = next;
   }
   return null;
@@ -4820,12 +5176,12 @@ export function assetReply(res: Response): Response {
 /** `apiOnly`: the write is a call to GitHub (`gh ... -R owner/name`, `gh api`) and
  *  never touches a working tree, so a checkout-less `gh:` root may make it. The
  *  rest (apply suggestion, unstick) keep the refusal. */
-function writeGuard(rootIn: unknown, apiOnly = false): PrActionResult | null {
+async function writeGuard(rootIn: unknown, apiOnly = false): Promise<PrActionResult | null> {
   if (!apiOnly) { const foreign = prWriteRefusal(rootIn); if (foreign) return foreign; }
   if (!WRITE_ENABLED) return { ok: false, error: "writes are disabled (AGENTGLASS_GIT_WRITE_DISABLED=1)" };
   if (foreignOf(rootIn)) return null;
   const abs = safeAbs(rootIn);
-  const root = abs ? repoRootOf(abs) : null;
+  const root = abs ? await repoRootOfAsync(abs) : null;
   if (!root) return { ok: false, error: "not a git repository" };
   if (!inScopeReal(root)) return { ok: false, error: "outside the open project — open the parent folder to work across repos" };
   return null;
@@ -4857,7 +5213,7 @@ function invalidate(repo: PrRepoId, number?: number): void {
 }
 
 async function runPr(rootIn: unknown, number: number, args: string[], stdin?: string, onlyThisPr = false): Promise<PrActionResult> {
-  const g = writeGuard(rootIn, true); if (g) return g;
+  const g = await writeGuard(rootIn, true); if (g) return g;
   if (!Number.isInteger(number) || number <= 0) return { ok: false, error: "invalid pull request number" };
   const repo = await repoIdFor(rootIn);
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
@@ -4903,7 +5259,7 @@ export async function addComment(rootIn: unknown, number: unknown, body: unknown
  * review conversation lives.
  */
 export async function replyToThread(rootIn: unknown, number: unknown, commentId: unknown, body: unknown): Promise<PrActionResult> {
-  const g = writeGuard(rootIn, true); if (g) return g;
+  const g = await writeGuard(rootIn, true); if (g) return g;
   const n = Number(number), cid = Number(commentId);
   const text = String(body ?? "").trim();
   if (!Number.isInteger(n) || !Number.isInteger(cid)) return { ok: false, error: "invalid thread" };
@@ -4955,7 +5311,7 @@ export function nodeIdOk(id: unknown): id is string {
  * empty and the feature looks impossible.
  */
 export async function setThreadResolved(rootIn: unknown, threadId: unknown, resolved: unknown): Promise<PrActionResult> {
-  const g = writeGuard(rootIn, true); if (g) return g;
+  const g = await writeGuard(rootIn, true); if (g) return g;
   const id = String(threadId || "");
   if (!nodeIdOk(id)) return { ok: false, error: "invalid thread id" };
   const want = resolved !== false && resolved !== "false";
@@ -4984,7 +5340,7 @@ const REACTIONS = ["THUMBS_UP", "THUMBS_DOWN", "LAUGH", "HOORAY", "CONFUSED", "H
  * which REST could not express here either.
  */
 export async function react(rootIn: unknown, nodeId: unknown, content: unknown, on: unknown = true): Promise<PrActionResult> {
-  const g = writeGuard(rootIn, true); if (g) return g;
+  const g = await writeGuard(rootIn, true); if (g) return g;
   const id = String(nodeId || "");
   const c = String(content || "THUMBS_UP").toUpperCase();
   if (!nodeIdOk(id)) return { ok: false, error: "invalid comment" };
@@ -5004,7 +5360,7 @@ export async function react(rootIn: unknown, nodeId: unknown, content: unknown, 
 
 /** Edit your own comment. The PR body goes through `editPr`, not here. */
 export async function editComment(rootIn: unknown, nodeId: unknown, body: unknown, kind: unknown = "issue"): Promise<PrActionResult> {
-  const g = writeGuard(rootIn, true); if (g) return g;
+  const g = await writeGuard(rootIn, true); if (g) return g;
   const id = String(nodeId || "");
   const text = String(body ?? "");
   if (!nodeIdOk(id)) return { ok: false, error: "invalid comment" };
@@ -5025,7 +5381,7 @@ export async function editComment(rootIn: unknown, nodeId: unknown, body: unknow
 
 /** Delete your own comment. */
 export async function deleteComment(rootIn: unknown, nodeId: unknown, kind: unknown = "issue"): Promise<PrActionResult> {
-  const g = writeGuard(rootIn, true); if (g) return g;
+  const g = await writeGuard(rootIn, true); if (g) return g;
   const id = String(nodeId || "");
   if (!nodeIdOk(id)) return { ok: false, error: "invalid comment" };
   const review = kind === "review";
@@ -5058,7 +5414,7 @@ export type HideReason = "OUTDATED" | "OFF_TOPIC" | "RESOLVED" | "DUPLICATE" | "
 const HIDE_REASONS: HideReason[] = ["OUTDATED", "OFF_TOPIC", "RESOLVED", "DUPLICATE", "SPAM", "ABUSE"];
 
 export async function hideComment(rootIn: unknown, nodeId: unknown, reason: unknown = "OUTDATED"): Promise<PrActionResult> {
-  const g = writeGuard(rootIn, true); if (g) return g;
+  const g = await writeGuard(rootIn, true); if (g) return g;
   const id = String(nodeId || "");
   if (!nodeIdOk(id)) return { ok: false, error: "invalid comment" };
   const why = String(reason || "OUTDATED").toUpperCase() as HideReason;
@@ -5077,7 +5433,7 @@ export async function hideComment(rootIn: unknown, nodeId: unknown, reason: unkn
 /** And put it back. The same subject id, and no reason to give: unhiding is not a
  *  judgement about the content. */
 export async function unhideComment(rootIn: unknown, nodeId: unknown): Promise<PrActionResult> {
-  const g = writeGuard(rootIn, true); if (g) return g;
+  const g = await writeGuard(rootIn, true); if (g) return g;
   const id = String(nodeId || "");
   if (!nodeIdOk(id)) return { ok: false, error: "invalid comment" };
   const mutation = `mutation($id:ID!){unminimizeComment(input:{subjectId:$id}){unminimizedComment{isMinimized}}}`;
@@ -5256,7 +5612,7 @@ export function spliceLines(lines: string[], start: number, end: number, replace
 export async function applySuggestion(rootIn: unknown, numberIn: unknown, args: {
   path?: unknown; startLine?: unknown; line?: unknown; suggestion?: unknown; author?: unknown;
 }): Promise<PrActionResult> {
-  const g = writeGuard(rootIn); if (g) return g;
+  const g = await writeGuard(rootIn); if (g) return g;
   const n = Number(numberIn);
   const path = typeof args.path === "string" ? args.path : "";
   const end = Number(args.line);
@@ -5315,7 +5671,7 @@ export async function applySuggestion(rootIn: unknown, numberIn: unknown, args: 
 }
 
 export async function setFileViewed(rootIn: unknown, prNodeId: unknown, path: unknown, viewed: unknown): Promise<PrActionResult> {
-  const g = writeGuard(rootIn, true); if (g) return g;
+  const g = await writeGuard(rootIn, true); if (g) return g;
   const id = String(prNodeId || "");
   const p = String(path || "");
   if (!nodeIdOk(id) || !p) return { ok: false, error: "invalid file" };
@@ -5925,7 +6281,7 @@ export async function checkJobs(rootIn: unknown, number: unknown): Promise<{ ok:
 
 /** Re-run everything, only what failed, or one job. */
 export async function rerunJobs(rootIn: unknown, what: unknown, id: unknown): Promise<PrActionResult> {
-  const g = writeGuard(rootIn, true); if (g) return g;
+  const g = await writeGuard(rootIn, true); if (g) return g;
   const repo = await repoIdFor(rootIn);
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
   const target = String(id ?? "");
@@ -5942,7 +6298,7 @@ export async function rerunJobs(rootIn: unknown, what: unknown, id: unknown): Pr
 }
 
 export async function rerunFailedChecks(rootIn: unknown, number: unknown): Promise<PrActionResult> {
-  const g = writeGuard(rootIn, true); if (g) return g;
+  const g = await writeGuard(rootIn, true); if (g) return g;
   const n = Number(number);
   const repo = await repoIdFor(rootIn);
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
@@ -5962,6 +6318,25 @@ export async function rerunFailedChecks(rootIn: unknown, number: unknown): Promi
   invalidate(repo, n);
   if (failures.length) return { ok: false, error: `re-run failed: ${failures[0]}` };
   return { ok: true, detail: `re-ran ${runIds.size} workflow run${runIds.size === 1 ? "" : "s"}` };
+}
+
+/** The workflow runs GitHub holds for a maintainer on this pull request's head (shared/heldRuns.ts). */
+export async function heldRunsFor(rootIn: unknown, number: unknown): Promise<{ ok: boolean; runs: HeldRun[]; error?: string }> {
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, runs: [], error: "no GitHub remote on this repository" };
+  const r = await readHeldRuns((a) => gh(a), repo.nameWithOwner, Number(number));
+  return { ok: r.ok, runs: r.runs, ...(r.error ? { error: r.error } : null) };
+}
+
+/** "Approve workflows to run": every run held on the head, re-read here. The route lets only a person's click reach it. */
+export async function approveRuns(rootIn: unknown, number: unknown, headSha: unknown): Promise<PrActionResult> {
+  const g = await writeGuard(rootIn, true); if (g) return g;
+  const n = Number(number);
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
+  const r = await approveHeldRuns((a) => gh(a), repo.nameWithOwner, n, headSha);
+  if (r.approved > 0) invalidate(repo, n);
+  return r.ok ? { ok: true, detail: r.detail } : { ok: false, error: r.error };
 }
 
 // --- irreversible ----------------------------------------------------------
@@ -5997,6 +6372,12 @@ export async function mergePr(rootIn: unknown, number: unknown, method: unknown,
   if (opts.disableAuto === true || opts.disableAuto === "true") {
     return runPr(rootIn, Number(number), ["pr", "merge", String(Number(number)), "--disable-auto"]);
   }
+  /* The person's merge lock (shared/mergeLock.ts): every merge path in the app
+     comes through here — card, drawer, bulk, phone, an agent's call — so this is
+     the one place that refuses. Auto-merge is refused too: it merges later,
+     without anyone pressing anything. Cancelling it (above) stays allowed. */
+  const held = await mergeLockOf(rootIn, Number(number), true);
+  if (held?.state.locked) return { ok: false, error: held.state.reason };
   const flag = method === "merge" ? "--merge" : method === "rebase" ? "--rebase" : method === "squash" ? "--squash" : null;
   if (!flag) return { ok: false, error: "choose squash, merge or rebase" };
   const args = ["pr", "merge", String(Number(number)), flag];
@@ -6020,6 +6401,47 @@ export async function mergePr(rootIn: unknown, number: unknown, method: unknown,
   // landed is the one answer that says something about the pull request itself.
   if (res.ok && !auto) return { ...res, mergedBy: ghCapabilityCached()?.login || undefined };
   return res;
+}
+
+/* "After #n is merged": a merged pull request stays merged, so a yes is kept for
+   good; a no is asked again after a minute, and always when a merge is about to
+   be sent. Unknown (gh failed) stays unknown, which keeps the lock shut. */
+const mergedYes = new Set<string>();
+const mergedNo = new Map<string, number>();
+const MERGED_NO_MS = 60_000;
+async function prMerged(repo: PrRepoId, n: number, fresh: boolean): Promise<boolean | undefined> {
+  const k = `${repo.key}#${n}`;
+  if (mergedYes.has(k)) return true;
+  const at = mergedNo.get(k);
+  if (!fresh && at != null && Date.now() - at < MERGED_NO_MS) return false;
+  const r = await gh(["pr", "view", String(n), "--json", "state", "-R", repo.nameWithOwner]);
+  if (r.code !== 0) return undefined;
+  let state = "";
+  try { state = String(JSON.parse(r.stdout).state ?? ""); } catch { return undefined; }
+  if (state === "MERGED") { mergedYes.add(k); mergedNo.delete(k); return true; }
+  mergedNo.set(k, Date.now());
+  return false;
+}
+
+/** The merge lock on one pull request and whether it holds now, or null when there is none. */
+export async function mergeLockOf(rootIn: unknown, number: number, fresh = false): Promise<{ repo: PrRepoId; lock: MergeLock; state: MergeLockState } | null> {
+  if (!Number.isInteger(number) || number <= 0) return null;
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return null;
+  const lock = getLock(repo.key, number);
+  if (!lock) return null;
+  const merged = lock.afterPr != null ? await prMerged(repo, lock.afterPr, fresh) : undefined;
+  return { repo, lock, state: mergeLockState(lock, Date.now(), merged) };
+}
+
+/** Every merge lock of a repository with whether it holds now: the board's badges read this, one request per repository. */
+export async function mergeLocksOf(rootIn: unknown): Promise<{ lock: MergeLock; state: MergeLockState }[]> {
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return [];
+  const now = Date.now();
+  return Promise.all(locksOf(repo.key).map(async (lock) => ({
+    lock, state: mergeLockState(lock, now, lock.afterPr != null ? await prMerged(repo, lock.afterPr, false) : undefined),
+  })));
 }
 
 export async function closePr(rootIn: unknown, number: unknown, reopen = false): Promise<PrActionResult> {
@@ -6076,7 +6498,7 @@ const unstickDefaults: UnstickServerDeps = {
 export async function unstickClose(rootIn: unknown, numberIn: unknown, deps: UnstickServerDeps = unstickDefaults): Promise<PrActionResult> {
   const number = Number(numberIn);
   if (!Number.isInteger(number) || number <= 0) return { ok: false, error: "invalid pull request number" };
-  const g = writeGuard(rootIn); if (g) return g;
+  const g = await writeGuard(rootIn); if (g) return g;
   const look = await deps.look(rootIn, number, true);
   if (!look.ok) return { ok: false, error: `could not read the pull request, so nothing was closed: ${look.error}` };
   if (!look.facts) return { ok: false, error: "GitHub did not give the details needed to check it, so nothing was closed" };
@@ -6093,7 +6515,7 @@ export async function unstickClose(rootIn: unknown, numberIn: unknown, deps: Uns
 export async function unstickReopen(rootIn: unknown, numberIn: unknown, deps: UnstickServerDeps = unstickDefaults): Promise<PrActionResult> {
   const number = Number(numberIn);
   if (!Number.isInteger(number) || number <= 0) return { ok: false, error: "invalid pull request number" };
-  const g = writeGuard(rootIn); if (g) return g;
+  const g = await writeGuard(rootIn); if (g) return g;
   const look = await deps.look(rootIn, number, false);
   if (!look.ok) return { ok: false, error: `could not read the pull request, so nothing was reopened: ${look.error}` };
   if (look.state === "MERGED") return { ok: false, error: "the pull request is merged; it cannot be reopened" };
@@ -6527,7 +6949,7 @@ export async function commitDiff(rootIn: unknown, shaIn: unknown): Promise<{ ok:
 export async function addLineComment(rootIn: unknown, numberIn: unknown, c: {
   path?: unknown; line?: unknown; startLine?: unknown; side?: unknown; body?: unknown;
 }): Promise<PrActionResult> {
-  const g = writeGuard(rootIn, true); if (g) return g;
+  const g = await writeGuard(rootIn, true); if (g) return g;
   const n = Number(numberIn);
   if (!Number.isInteger(n) || n <= 0) return { ok: false, error: "invalid pull request number" };
   const path = typeof c.path === "string" ? c.path : "";
@@ -6649,7 +7071,7 @@ const PENDING_TTL_MS = 20_000;
 export async function submitReviewWith(
   rootIn: unknown, numberIn: unknown, verb: unknown, body: unknown, commentsIn: unknown,
 ): Promise<PrActionResult> {
-  const g = writeGuard(rootIn, true); if (g) return g;
+  const g = await writeGuard(rootIn, true); if (g) return g;
   const n = Number(numberIn);
   if (!Number.isInteger(n) || n <= 0) return { ok: false, error: "invalid pull request number" };
   const event = verb === "approve" ? "APPROVE" : verb === "request_changes" ? "REQUEST_CHANGES" : verb === "comment" ? "COMMENT" : null;

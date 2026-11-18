@@ -32,6 +32,7 @@ import { headNeedsRead, reviewStale, type HeadRead } from "../../shared/headComp
 import { forgetAnnotations } from "./inbox-annotations.ts";
 import { forgetAccounts } from "./accounts.ts";
 import { dropCanvases } from "./plugin-canvas.ts";
+import { setTimeoutAs } from "./loopwatch.ts";
 
 export type PluginUiFrame =
   /** `plugin`/`panel` name what was redrawn, so a window fetches that one
@@ -234,7 +235,7 @@ function save(): void {
   // summary read is thrown away.
   summaryCache = null;
   if (saveTimer) return;
-  saveTimer = setTimeout(() => { saveTimer = null; saveNow(); }, 250);
+  saveTimer = setTimeoutAs("plugin ui save", () => { saveTimer = null; saveNow(); }, 250);
 }
 function saveNow(): void {
   const p = notesPath();

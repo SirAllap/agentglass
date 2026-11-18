@@ -37,7 +37,7 @@ describe("where the app opens its windows", () => {
        "in a tab", once as the fallback when there is no window to split. */
     expect(terminal.match(/engineWindow(?:Running|Outcome)\(/g)?.length).toBe(6);
     // Beside what is on screen, when the picker asks for that.
-    expect(terminal).toContain("engineSplitRunning(cwd, cwd, argv)");
+    expect(terminal).toContain("engineSplitRunning(cwd, cwd, argv, ");
     expect(terminal).toContain("`pr-${number}`");
   });
 

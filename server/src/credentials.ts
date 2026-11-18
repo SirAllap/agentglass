@@ -83,21 +83,106 @@ export interface Credential {
   verifiedAt?: number;
 }
 
-type Store = Partial<Record<ProviderId, Credential>>;
+/** Every provider this store may hold, the same list as `ProviderId`. A top-level
+ *  key of an old flat file is a provider only if it is one of these. */
+export const CREDENTIAL_PROVIDERS = ["github", "gitlab", "taskwarrior", "clickup", "jira"] as const satisfies readonly ProviderId[];
+const isProvider = (k: string): k is ProviderId => (CREDENTIAL_PROVIDERS as readonly string[]).includes(k);
+
+/** The name of one stored account: `work`, `personal`. Not the identity the
+ *  service reports (`Credential.account`), which is a different thing. */
+export const ACCOUNT_KEY = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+/** The reserved key: migration and the first connect on a clean provider create it. */
+export const PRIMARY = "primary";
+
+/*
+ * v2 on disk: { version: 2, accounts: { <provider>: { <accountKey>: Credential } },
+ * defaults: { <provider>: <accountKey> } }. A file is v2 when `accounts` is an
+ * object; `version` is not consulted, because an older build's keyring switch
+ * rewrites it to `{}` and the file must still be read. Anything else is the flat
+ * file this module used to write, one Credential per provider, and is read as
+ * account `primary` of each provider. Loading never writes: the v2 file appears
+ * on the next save.
+ */
+interface Store {
+  accounts: Partial<Record<ProviderId, Record<string, Credential>>>;
+  /** The default pointer: what an omitted account means. Nothing else is called "default". */
+  defaults: Partial<Record<ProviderId, string>>;
+  /** Top-level keys that are not ours, written back as they were. */
+  extra: Record<string, unknown>;
+  /** v2 account entries this build cannot read (a name it does not allow, a token
+   *  that is not a string), kept so a save never deletes what a person typed. */
+  rejected: Record<string, Record<string, unknown>>;
+}
 
 let cache: Store | undefined;
+
+const isCred = (v: unknown): v is Credential => !!v && typeof v === "object" && typeof (v as Credential).token === "string";
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+function parse(raw: unknown): Store {
+  const st: Store = { accounts: {}, defaults: {}, extra: {}, rejected: {} };
+  if (!isObj(raw)) return st;
+  const v2 = isObj(raw.accounts);
+  if (v2) {
+    for (const [p, byKey] of Object.entries(raw.accounts as Record<string, unknown>)) {
+      if (!isProvider(p) || !isObj(byKey)) continue;
+      const kept: Record<string, Credential> = {};
+      for (const [k, c] of Object.entries(byKey)) {
+        if (ACCOUNT_KEY.test(k) && isCred(c)) kept[k] = c;
+        else {
+          (st.rejected[p] ??= {})[k] = c;
+          // The name only, never the value.
+          console.warn(`credentials: keeping an unreadable "${p}" account "${k}" as it is; fix its name or token by hand`);
+        }
+      }
+      if (Object.keys(kept).length) st.accounts[p] = kept;
+    }
+    if (isObj(raw.defaults)) {
+      for (const [p, k] of Object.entries(raw.defaults)) {
+        if (isProvider(p) && typeof k === "string" && st.accounts[p]?.[k]) st.defaults[p] = k;
+      }
+    }
+  }
+  for (const [k, c] of Object.entries(raw)) {
+    if (k === "version" || k === "accounts" || k === "defaults") continue;
+    if (!isProvider(k)) { st.extra[k] = c; continue; }
+    if (!isCred(c)) { st.extra[k] = c; continue; }
+    if (!st.accounts[k]) { st.accounts[k] = { [PRIMARY]: c }; st.defaults[k] = PRIMARY; }
+    else console.warn(`credentials: ignoring a flat "${k}" token left beside its accounts; it is removed on the next save`);
+  }
+  return st;
+}
 
 function load(): Store {
   if (cache) return cache;
   try {
     const p = path();
-    cache = existsSync(p) ? (JSON.parse(readFileSync(p, "utf8")) as Store) : {};
+    cache = parse(existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : {});
   } catch {
     // A corrupt file is treated as empty rather than fatal: the app must still
     // start, and the fix is to connect again — which overwrites it.
-    cache = {};
+    cache = parse({});
   }
   return cache!;
+}
+
+/*
+ * Writers read `load()` and call `save()` with no `await` between them, and that
+ * is the whole of their safety: `save` is not inside `exclusive()`, which wraps
+ * only the two writers that wait on the keyring. A writer that awaits between
+ * its read and its save (storeCredential does) reads AFTER the await.
+ * Wrapping the synchronous writers in `exclusive` would change nearly every caller.
+ *
+ * Never writes a flat provider key: a migrated or ignored one must not stay on
+ * disk, or a cleared account would come back from it.
+ */
+/** The accounts to write: the readable ones, over the ones kept as they were. */
+function withRejected(st: Store): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const p of new Set([...Object.keys(st.rejected), ...Object.keys(st.accounts)])) {
+    out[p] = { ...st.rejected[p as ProviderId], ...st.accounts[p as ProviderId] };
+  }
+  return out;
 }
 
 function save(store: Store): void {
@@ -111,7 +196,7 @@ function save(store: Store): void {
     // Enforced separately: `mode` on open does nothing to a file that already
     // exists (a stale temp file can), and the final file must be 0600 whatever it was.
     fchmodSync(fd, 0o600);
-    writeSync(fd, JSON.stringify(store, null, 2) + "\n");
+    writeSync(fd, JSON.stringify({ ...store.extra, version: 2, accounts: withRejected(store), defaults: store.defaults }, null, 2) + "\n");
     // On disk before the rename: otherwise a power cut can leave the new name
     // over bytes that never landed, and the token is gone with the old file.
     fsyncSync(fd);
@@ -121,54 +206,139 @@ function save(store: Store): void {
   cache = store;
 }
 
+/** The account an omitted key means: the default pointer if it names a stored
+ *  account, else the only stored account, else none. Never guesses between several. */
+function resolve(st: Store, id: ProviderId, key?: string): string | null {
+  const by = st.accounts[id];
+  if (key !== undefined) return by?.[key] ? key : null;
+  if (!by) return null;
+  const d = st.defaults[id];
+  if (d && by[d]) return d;
+  const keys = Object.keys(by);
+  return keys.length === 1 ? keys[0]! : null;
+}
+
+/** The key a write goes to. Throws one sentence when it cannot be decided. */
+function writeKey(st: Store, id: ProviderId, key?: string): string {
+  if (key !== undefined) {
+    if (!ACCOUNT_KEY.test(key)) throw new Error("an account name is lowercase letters, digits, - and _, up to 32");
+    // `primary` is the migration's name for the old single token. Naming a new
+    // account that would put its token where that old item lives is refused.
+    const names = Object.keys(st.accounts[id] ?? {});
+    if (key === PRIMARY && names.length && !names.includes(PRIMARY)) throw new Error(`"${PRIMARY}" is reserved: choose another account name`);
+    return key;
+  }
+  const r = resolve(st, id);
+  if (r) return r;
+  const names = Object.keys(st.accounts[id] ?? {});
+  if (!names.length) return PRIMARY;
+  throw new Error(`${id} has several accounts (${names.join(", ")}) and no default: name the account`);
+}
+
+const noAccount = (st: Store, id: ProviderId): Error =>
+  new Error(`${id} has several accounts (${Object.keys(st.accounts[id] ?? {}).join(", ")}) and no default: name the account`);
+
+/** `st` with `c` stored as `key`. The pointer is taken here, at save time, so a
+ *  write that waited on the keyring does not claim it over one that saved first. */
+function withAccount(st: Store, id: ProviderId, key: string, c: Credential): Store {
+  const accounts = { ...st.accounts, [id]: { ...st.accounts[id], [key]: c } };
+  const d = st.defaults[id];
+  const defaults = d && st.accounts[id]?.[d] ? st.defaults : { ...st.defaults, [id]: key };
+  return { ...st, accounts, defaults };
+}
+
 /** The secret, for the server's own outbound call. Never hand the result to
  *  anything that serialises. */
-export function secretFor(id: ProviderId): string | null {
-  const t = load()[id]?.token;
-  return t === undefined ? null : unsealed(credentialId(id), t);
+export function secretFor(id: ProviderId, accountKey?: string): string | null {
+  const st = load();
+  const k = resolve(st, id, accountKey);
+  const t = k === null ? undefined : st.accounts[id]?.[k]?.token;
+  return t === undefined ? null : unsealed(credentialId(id, k!), t);
 }
 
 /** Everything about a credential EXCEPT the secret — the shape a route may
  *  return and a log may print. */
-export function redacted(id: ProviderId): Omit<Credential, "token"> & { present: boolean } | null {
-  const c = load()[id];
+export const redacted = (id: ProviderId): Omit<Credential, "token"> & { present: boolean } | null => redacted2(id, resolve(load(), id));
+
+/** `redacted` plus the key of the account it is about. */
+export function redactedAccount(id: ProviderId, accountKey?: string): (Omit<Credential, "token"> & { present: boolean; accountKey: string }) | null {
+  const k = resolve(load(), id, accountKey);
+  const r = redacted2(id, k);
+  return r && k !== null ? { ...r, accountKey: k } : null;
+}
+function redacted2(id: ProviderId, k: string | null): (Omit<Credential, "token"> & { present: boolean }) | null {
+  const c = k === null ? undefined : load().accounts[id]?.[k];
   if (!c) return null;
   const { token: _token, ...rest } = c;
   return { ...rest, present: true };
 }
 
-/** What a feature says when it has no token: `text`, and the keyring's reason
- *  when the token is there but the keyring cannot hand it over. */
-export function notConnected(id: ProviderId, text: string): string {
-  const why = load()[id]?.token === KEYRING_MARK ? missingSecretWhy() : null;
-  return why && secretFor(id) === null ? `${text} (${why})` : text;
+/** The accounts stored for `id`, and which one the default pointer names (or
+ *  would resolve to). */
+export function accountsOf(id: ProviderId): { accountKey: string; isDefault: boolean }[] {
+  const st = load();
+  const d = resolve(st, id);
+  return Object.keys(st.accounts[id] ?? {}).map((accountKey) => ({ accountKey, isDefault: accountKey === d }));
 }
 
-export const hasCredential = (id: ProviderId): boolean => !!secretFor(id);
+/** Point the default at a stored account. The only writer of the pointer besides a first save. */
+export function setDefaultAccount(id: ProviderId, accountKey: string): void {
+  const st = load();
+  if (!st.accounts[id]?.[accountKey]) throw new Error(`${id} has no account called ${accountKey}`);
+  save({ ...st, defaults: { ...st.defaults, [id]: accountKey } });
+}
+
+/** What a feature says when it has no token: `text`, and the keyring's reason
+ *  when the token is there but the keyring cannot hand it over. */
+export function notConnected(id: ProviderId, text: string, accountKey?: string): string {
+  const st = load();
+  const k = resolve(st, id, accountKey);
+  const why = k !== null && st.accounts[id]?.[k]?.token === KEYRING_MARK ? missingSecretWhy() : null;
+  return why && secretFor(id, accountKey) === null ? `${text} (${why})` : text;
+}
+
+export const hasCredential = (id: ProviderId, accountKey?: string): boolean => !!secretFor(id, accountKey);
+
+/** Whether any stored account of `id` gives up a token. Resolves secrets like
+ *  `hasCredential`: a locked keyring reads false, not true. */
+export const hasAnyCredential = (id: ProviderId): boolean =>
+  Object.keys(load().accounts[id] ?? {}).some((k) => !!secretFor(id, k));
 
 /** Whether the file holds a token for `id`, a keyring mark included: true while
  *  the keyring is locked, when `hasCredential` cannot know. */
-export const hasStoredCredential = (id: ProviderId): boolean => !!load()[id]?.token;
+export function hasStoredCredential(id: ProviderId, accountKey?: string): boolean {
+  const st = load();
+  const k = resolve(st, id, accountKey);
+  return k !== null && !!st.accounts[id]?.[k]?.token;
+}
 
 /** The plain write. With the keyring on it would put the token in the file, so
  *  it refuses: `storeCredential` is the one that knows where the token goes. */
-export function setCredential(id: ProviderId, c: Credential): void {
+export function setCredential(id: ProviderId, c: Credential, accountKey?: string): void {
   if (keyringEnabled()) throw new Error("the keyring is on: a token is stored with storeCredential");
-  save({ ...load(), [id]: c });
+  const st = load();
+  save(withAccount(st, id, writeKey(st, id, accountKey), c));
 }
 
 /** Store a token where the person chose: the keyring first (read back, then the
  *  file carries a mark), or the file as before. Throws, and changes nothing,
  *  when the keyring cannot keep it. */
-export function storeCredential(id: ProviderId, c: Credential): Promise<void> {
+export function storeCredential(id: ProviderId, c: Credential, accountKey?: string): Promise<void> {
+  // Resolved once, before the first await: this is the account the whole call
+  // is about, whatever the pointer does while the keyring answers.
+  const start = load();
+  const key = writeKey(start, id, accountKey);
+  const existed = !!start.accounts[id]?.[key];
   return exclusive(async () => {
     // The keyring first; the file is read only after, so a change made while
     // waiting for it is not written over.
-    const item = credentialId(id);
+    const item = credentialId(id, key);
     const prior = keyringEnabled() ? await priorValue(item) : null;
     const token = await sealValue(item, c.token);
     try {
-      save({ ...load(), [id]: { ...c, token } });
+      const st = load();
+      if (existed && !st.accounts[id]?.[key]) throw new Error("account removed while saving");
+      save(withAccount(st, id, key, { ...c, token }));
     } catch (e) {
       // The file refused: the keyring goes back to what the file still points
       // at, or the new token sits there with nothing referring to it.
@@ -179,50 +349,99 @@ export function storeCredential(id: ProviderId, c: Credential): Promise<void> {
 }
 
 /** Take the token out of the keyring before the file forgets it, so a failure
- *  leaves both. A no-op while the keyring is off. */
-export const dropCredentialSecret = (id: ProviderId): Promise<void> =>
+ *  leaves both. A no-op while the keyring is off. Returns the account it resolved. */
+export const dropCredentialSecret = (id: ProviderId, accountKey?: string): Promise<string | null> =>
   exclusive(async () => {
-    const token = load()[id]?.token;
-    if (token) await dropValue(credentialId(id), token);
+    const st = load();
+    const k = resolve(st, id, accountKey);
+    if (k === null) {
+      // Nothing stored is nothing to drop; several accounts and no default is a question.
+      if (accountKey === undefined && Object.keys(st.accounts[id] ?? {}).length) throw noAccount(st, id);
+      return null;
+    }
+    const token = st.accounts[id]?.[k]?.token;
+    if (token) await dropValue(credentialId(id, k), token);
+    // The account this call dropped: hand it to `clearCredential`, so the pair
+    // is about one account even if the pointer moves in between.
+    return k;
   });
 
 /** What the migration needs: each token as the file holds it (a mark or the token). */
 export function secretSlots(): { id: string; value: string }[] {
-  return Object.entries(load()).flatMap(([p, c]) => (c?.token ? [{ id: credentialId(p), value: c.token }] : []));
+  return Object.entries(load().accounts).flatMap(([p, by]) =>
+    Object.entries(by ?? {}).flatMap(([k, c]) => (c.token ? [{ id: credentialId(p, k), value: c.token }] : [])));
+}
+
+/** Put the file back to `raw` byte for byte (or remove it if there was none), by the same
+ *  temp file, fsync and rename a save uses. */
+function restoreBytes(raw: Buffer | null): void {
+  const p = path();
+  if (raw === null) { unlinkSync(p); return; }
+  const tmp = `${p}.${process.pid}.tmp`;
+  const fd = openSync(tmp, "w", 0o600);
+  try { fchmodSync(fd, 0o600); writeSync(fd, raw); fsyncSync(fd); } finally { closeSync(fd); }
+  renameSync(tmp, p);
+  fsyncDir(dirname(p));
 }
 
 /** Replace tokens in the file by id and read the file back to see they landed.
  *  False leaves the file as it was. */
 export function rewriteSecrets(by: ReadonlyMap<string, string>): boolean {
   const before = load();
-  const next: Store = {};
-  for (const [p, c] of Object.entries(before) as [ProviderId, Credential][]) next[p] = { ...c, token: by.get(credentialId(p)) ?? c.token };
+  // The bytes as they are now: a failed rewrite puts these back, not a re-render
+  // of the parsed store (which would turn an old flat file into v2).
+  let raw: Buffer | null = null;
+  try { raw = existsSync(path()) ? readFileSync(path()) : null; } catch { return false; }
+  const accounts: Store["accounts"] = {};
+  for (const [p, byKey] of Object.entries(before.accounts) as [ProviderId, Record<string, Credential>][]) {
+    accounts[p] = Object.fromEntries(Object.entries(byKey).map(([k, c]) => [k, { ...c, token: by.get(credentialId(p, k)) ?? c.token }]));
+  }
+  const next: Store = { ...before, accounts };
   try {
     save(next);
     cache = undefined;
     const back = load();
-    if (Object.entries(next).every(([p, c]) => back[p as ProviderId]?.token === c!.token)) return true;
+    if ((Object.entries(next.accounts) as [ProviderId, Record<string, Credential>][]).every(([p, byKey]) =>
+      Object.entries(byKey).every(([k, c]) => back.accounts[p]?.[k]?.token === c.token))) return true;
   } catch { /* fall through to put it back */ }
-  try { save(before); } catch { /* the caller reads the file again */ }
+  try { restoreBytes(raw); } catch { /* the caller reads the file again */ }
   cache = undefined;
   return false;
 }
 
 /** Update the notes on a credential without touching the secret — used after a
  *  re-check confirms who the token belongs to. */
-export function annotate(id: ProviderId, patch: Omit<Partial<Credential>, "token">): void {
-  const cur = load()[id];
-  if (!cur) return;
-  save({ ...load(), [id]: { ...cur, ...patch } });
+export function annotate(id: ProviderId, patch: Omit<Partial<Credential>, "token">, accountKey?: string): void {
+  const st = load();
+  const k = resolve(st, id, accountKey);
+  const cur = k === null ? undefined : st.accounts[id]?.[k];
+  if (!cur || k === null) return;
+  save({ ...st, accounts: { ...st.accounts, [id]: { ...st.accounts[id], [k]: { ...cur, ...patch } } } });
 }
 
-export function clearCredential(id: ProviderId): void {
-  const store = { ...load() };
-  delete store[id];
+export function clearCredential(id: ProviderId, accountKey?: string): void {
+  const st = load();
+  const k = resolve(st, id, accountKey);
+  if (k === null) {
+    if (accountKey === undefined && Object.keys(st.accounts[id] ?? {}).length) throw noAccount(st, id);
+    // Nothing to remove, but the file is still rewritten, as it always was: it
+    // drops any flat key a v2 file carried and keeps the permissions ours.
+    save(st);
+    return;
+  }
+  const rest = { ...st.accounts[id] };
+  delete rest[k];
+  const accounts = { ...st.accounts };
+  const defaults = { ...st.defaults };
+  const left = Object.keys(rest);
+  if (left.length) {
+    accounts[id] = rest;
+    if (defaults[id] === k || !defaults[id]) { if (left.length === 1) defaults[id] = left[0]!; else delete defaults[id]; }
+  } else { delete accounts[id]; delete defaults[id]; }
   // The file is rewritten rather than deleted even when it empties, so the
   // permissions stay ours. A file we delete is a file the next writer creates
   // with whatever umask happens to be in force.
-  save(store);
+  save({ ...st, accounts, defaults });
 }
 
 /** Everything on disk, wiped. For a test's own teardown. */

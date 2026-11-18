@@ -15,6 +15,7 @@
 import { forgetConflictPreviews } from "./gitwork.ts";
 import { invalidateRepoReads, notePushed } from "./prs.ts";
 import { outwardShell } from "./outward.ts";
+import { spawnSyncAs } from "./loopwatch.ts";
 
 export function notePush(cwd: string, command: string): void {
   if (outwardShell(command)?.kind !== "push") return;
@@ -22,7 +23,7 @@ export function notePush(cwd: string, command: string): void {
   /* What was pushed and when: a reading older than this, or still on another
      commit shortly after, is not allowed to say "ready" (shared/prFreshness.ts). */
   const at = Date.now();
-  const git = (...a: string[]) => Bun.spawnSync(["git", ...a], { cwd, stdout: "pipe", stderr: "ignore" }).stdout.toString().trim();
+  const git = (...a: string[]) => spawnSyncAs("git push seen", ["git", ...a], { cwd, stdout: "pipe", stderr: "ignore" }).stdout.toString().trim();
   const branch = git("branch", "--show-current"), sha = git("rev-parse", "HEAD");
   if (branch && sha) void notePushed(cwd, branch, sha, at).catch(() => {});
   void invalidateRepoReads(cwd).catch(() => { /* no GitHub remote: nothing was cached */ });

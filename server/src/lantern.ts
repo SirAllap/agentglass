@@ -11,20 +11,22 @@
  * on the engine with this same board as its first message. Two copies of the
  * assembly would be two boards that could disagree.
  */
-import { existsSync } from "node:fs";
-import { projectRootOf } from "./git.ts";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { resolve } from "node:path";
+import { gitAsync, projectRootOf } from "./git.ts";
+import { fileStamp, localRefsStamp } from "./refstamp.ts";
 import { tmux } from "./tmuxpane.ts";
 import * as AgentBoard from "./agentboard.ts";
 import { recentPaneAgents } from "./panewt.ts";
-import { db, sessionNames, latestWaits, openToolCalls, sessionRoles, setSessionRole, sessionsWhosePromptStarts } from "./db.ts";
+import { db, sessionEventStamp, sessionNames, latestWaits, openToolCalls, sessionRoles, setSessionRole, scheduleLegacyPromptScan } from "./db.ts";
 import { pendingGates } from "./gate.ts";
 import { lanternWatchMinutes } from "./config.ts";
 
+/* Through gitAsync, so the spawn broker forks git, not this server (broker/wire.ts).
+   This used to fork the server itself: measured 55 `rev-list --count` in two minutes. */
 async function runGitIn(args: string[], cwd: string): Promise<{ ok: boolean; out: string }> {
-  const p = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
-  const out = await new Response(p.stdout).text();
-  const errText = await new Response(p.stderr).text();
-  return { ok: (await p.exited) === 0, out: (out + errText).slice(0, 4000) };
+  const r = await gitAsync(cwd, args);
+  return { ok: r.code === 0, out: r.stdout };
 }
 
 import { LANTERN_PROMPT_MARK } from "./lanternmark.ts";
@@ -41,14 +43,13 @@ const SETTLED_WORKER_MS = 30 * 60_000;
 
 /** Sessions that are the Lantern's own chat. Persisted (session_role) and
  *  cached here; found by the role their pane carried, by the prompt they were
- *  opened with, or — once, at boot — by the prompt already on record. */
+ *  opened with, or, once and in the background after a start, by the prompt already on record. */
 const lanternSessions = new Set<string>();
 let loaded = false;
 function load(): void {
   if (loaded) return;
   loaded = true;
   for (const [id, role] of sessionRoles()) if (role === "lantern") lanternSessions.add(id);
-  for (const id of sessionsWhosePromptStarts(LANTERN_PROMPT_MARK)) noteLanternSession(id);
 }
 export function noteLanternSession(id: string): void {
   if (!id || lanternSessions.has(id)) return;
@@ -56,6 +57,8 @@ export function noteLanternSession(id: string): void {
   setSessionRole(id, "lantern");
 }
 export const isLanternSession = (id: string | undefined): boolean => { load(); return !!id && lanternSessions.has(id); };
+/* Chats that predate the role: found once, in the background (see scheduleLegacyPromptScan), never inside a request. */
+scheduleLegacyPromptScan("legacy-lantern-chats", LANTERN_PROMPT_MARK, noteLanternSession);
 /** What `/ingest` asks of every hook event: is this the Lantern's chat? */
 export function hookSaysLantern(body: { role?: unknown; hook_event_type?: unknown; payload?: unknown }): boolean {
   if (body.role === "lantern") return true;
@@ -145,6 +148,71 @@ const factsQ = () => ({
 });
 let queries: ReturnType<typeof factsQ> | null = null;
 
+/*
+ * WHAT THE EVENTS SAY, KEPT PER SESSION until that session writes another one.
+ *
+ * The board asks for these on every poll (5-20 s, forever), for every session
+ * it draws — sixty on a busy machine, most of them idle. Turns and the last
+ * call walk each session's whole index range, and an idle session's pages are
+ * the ones that have gone cold: measured on a copy of the real database, the
+ * three queries read 33,784 blocks and took 530 ms cold for sixty sessions.
+ * An idle session's answer cannot change until it writes an event
+ * (sessionEventStamp), so only the ones that moved are asked again.
+ */
+interface EventFacts {
+  turns?: number;
+  lastTool?: { name: string; what: string; at: number };
+  permissionMode?: string;
+  lastAsk?: { text: string; at: number };
+}
+const eventFactsMemo = new Map<string, { stamp: string; v: EventFacts }>();
+export const MEMO_MAX = 2000;
+/** Sessions whose events were asked of the table, for the test that counts them. */
+export let eventFactReads = 0;
+export function __resetBoardMemo(): void { eventFactsMemo.clear(); lifeMemo.clear(); eventFactReads = 0; }
+const remember = <T>(m: Map<string, T>, id: string, v: T) => {
+  m.delete(id);
+  if (m.size >= MEMO_MAX) m.delete(m.keys().next().value!);
+  m.set(id, v);
+};
+
+export const __remember = remember;
+
+function eventFacts(want: string[]): Map<string, EventFacts> {
+  const out = new Map<string, EventFacts>();
+  const miss: string[] = [];
+  for (const id of want) {
+    const m = eventFactsMemo.get(id);
+    if (m && m.stamp === sessionEventStamp(id)) out.set(id, m.v);
+    else miss.push(id);
+  }
+  if (!miss.length) return out;
+  eventFactReads += miss.length;
+  const stamps = new Map(miss.map((id) => [id, sessionEventStamp(id)]));
+  const got = new Map<string, EventFacts>(miss.map((id) => [id, {}]));
+  const q = (queries ??= factsQ());
+  const arg = JSON.stringify(miss);
+  for (const r of q.turns.all(arg)) got.get(r.session_id)!.turns = r.n;
+  for (const r of q.lastTool.all(arg)) {
+    let input: unknown = null, mode = "";
+    try { const p = JSON.parse(r.payload ?? "{}"); input = p.tool_input; mode = typeof p.permission_mode === "string" ? p.permission_mode : ""; } catch { /* a payload is not a fact worth failing over */ }
+    const e = got.get(r.session_id)!;
+    e.lastTool = { name: r.tool_name, what: toolWhat(r.tool_name, input), at: r.timestamp };
+    if (mode) e.permissionMode = mode;
+  }
+  for (const r of q.lastAsk.all(arg)) {
+    let text = "";
+    try { const p = JSON.parse(r.payload ?? "{}"); text = typeof p.prompt === "string" ? p.prompt : ""; } catch { /* same */ }
+    text = text.replace(/\s+/g, " ").trim();
+    if (text) got.get(r.session_id)!.lastAsk = { text: text.slice(0, 160), at: r.timestamp };
+  }
+  for (const [id, v] of got) {
+    remember(eventFactsMemo, id, { stamp: stamps.get(id)!, v });
+    out.set(id, v);
+  }
+  return out;
+}
+
 export function sessionFacts(ids: string[]): Map<string, SessionFacts> {
   const out = new Map<string, SessionFacts>();
   const want = [...new Set(ids.filter(Boolean))];
@@ -158,20 +226,15 @@ export function sessionFacts(ids: string[]): Map<string, SessionFacts> {
     });
   }
   const at = (id: string) => out.get(id) ?? (out.set(id, { tools: 0, errors: 0, turns: 0, cost: 0 }), out.get(id)!);
-  for (const r of q.turns.all(arg)) at(r.session_id).turns = r.n;
-  for (const r of q.lastTool.all(arg)) {
-    let input: unknown = null, mode = "";
-    try { const p = JSON.parse(r.payload ?? "{}"); input = p.tool_input; mode = typeof p.permission_mode === "string" ? p.permission_mode : ""; } catch { /* a payload is not a fact worth failing over */ }
-    const f = at(r.session_id);
-    f.lastTool = { name: r.tool_name, what: toolWhat(r.tool_name, input), at: r.timestamp };
-    if (mode) f.permissionMode = mode;
+  const ev = eventFacts(want);
+  for (const [id, e] of ev) if (e.turns !== undefined) at(id).turns = e.turns;
+  for (const [id, e] of ev) {
+    if (!e.lastTool) continue;
+    const f = at(id);
+    f.lastTool = { ...e.lastTool };
+    if (e.permissionMode) f.permissionMode = e.permissionMode;
   }
-  for (const r of q.lastAsk.all(arg)) {
-    let text = "";
-    try { const p = JSON.parse(r.payload ?? "{}"); text = typeof p.prompt === "string" ? p.prompt : ""; } catch { /* same */ }
-    text = text.replace(/\s+/g, " ").trim();
-    if (text) at(r.session_id).lastAsk = { text: text.slice(0, 160), at: r.timestamp };
-  }
+  for (const [id, e] of ev) if (e.lastAsk) at(id).lastAsk = { ...e.lastAsk };
   return out;
 }
 
@@ -190,6 +253,11 @@ export function sessionFacts(ids: string[]): Map<string, SessionFacts> {
 export const SUBAGENT_LIVE_MS = 10 * 60_000;
 export const SHELL_CAP_MS = 30 * 60_000;
 export interface LifeSigns { subagent?: number; shell?: number; lastStop?: number }
+export const LIFE_STOP_SQL =
+  `SELECT s.value AS session_id,
+            (SELECT e.timestamp FROM events e WHERE e.hook_event_type = 'Stop' AND e.session_id = s.value
+                AND (e.agent_id IS NULL OR e.agent_id = '') ORDER BY e.timestamp DESC LIMIT 1) AS t
+       FROM json_each(?1) s WHERE t IS NOT NULL`;
 const lifeQ = () => ({
   sub: db.query<{ session_id: string; t: number }, [string, number]>(
     `SELECT e.session_id, MAX(e.timestamp) AS t FROM events e
@@ -207,22 +275,54 @@ const lifeQ = () => ({
                           AND json_extract(s.payload, '$.tool_input.task_id') = json_extract(e.payload, '$.tool_response.backgroundTaskId'))
       GROUP BY e.session_id`),
   stop: db.query<{ session_id: string; t: number }, [string]>(
-    `SELECT session_id, MAX(timestamp) AS t FROM events
-      WHERE hook_event_type = 'Stop' AND (agent_id IS NULL OR agent_id = '') AND session_id IN (SELECT value FROM json_each(?1))
-      GROUP BY session_id`),
+    /* The newest row per session by walking idx_events_first_prompt backwards and stopping at the first
+       main-thread Stop, not MAX() over every Stop. MAX() read every Stop row of every session to test
+       agent_id: 11 ms warm and 435 ms cold on a 556 MB copy of the real database. Cold is the Lantern
+       watch's 15-minute look after a quiet night, and that stall hit the loop on the dot every 15 min
+       (server-stall.log, 'no JS was running', diskblk in the thousands). Same rows, 0.2 ms. */
+    LIFE_STOP_SQL),
 });
 let lifeQueries: ReturnType<typeof lifeQ> | null = null;
+
+/*
+ * Kept per session like eventFacts above, with one more condition: the two
+ * windowed answers were asked with a cutoff, and an answer for cutoff c holds
+ * for any later cutoff c' — the newest open call is either still after c'
+ * (the same answer) or not (none) — until the session writes an event.
+ */
+interface LifeMemo { stamp: string; subCut: number; shellCut: number; sub?: number; shell?: number; lastStop?: number }
+const lifeMemo = new Map<string, LifeMemo>();
 
 export function lifeSigns(ids: string[], now: number): Map<string, LifeSigns> {
   const out = new Map<string, LifeSigns>();
   const want = [...new Set(ids.filter(Boolean))];
   if (!want.length) return out;
-  const q = (lifeQueries ??= lifeQ());
-  const arg = JSON.stringify(want);
-  const at = (id: string) => out.get(id) ?? (out.set(id, {}), out.get(id)!);
-  for (const r of q.sub.all(arg, now - SUBAGENT_LIVE_MS)) at(r.session_id).subagent = r.t;
-  for (const r of q.shell.all(arg, now - SHELL_CAP_MS)) at(r.session_id).shell = r.t;
-  for (const r of q.stop.all(arg)) at(r.session_id).lastStop = r.t;
+  const subCut = now - SUBAGENT_LIVE_MS, shellCut = now - SHELL_CAP_MS;
+  const miss: string[] = [];
+  const kept = new Map<string, LifeMemo>();
+  for (const id of want) {
+    const m = lifeMemo.get(id);
+    if (m && m.stamp === sessionEventStamp(id) && subCut >= m.subCut && shellCut >= m.shellCut) kept.set(id, m);
+    else miss.push(id);
+  }
+  if (miss.length) {
+    eventFactReads += miss.length;
+    for (const id of miss) kept.set(id, { stamp: sessionEventStamp(id), subCut, shellCut });
+    const q = (lifeQueries ??= lifeQ());
+    const arg = JSON.stringify(miss);
+    for (const r of q.sub.all(arg, subCut)) kept.get(r.session_id)!.sub = r.t;
+    for (const r of q.shell.all(arg, shellCut)) kept.get(r.session_id)!.shell = r.t;
+    for (const r of q.stop.all(arg)) kept.get(r.session_id)!.lastStop = r.t;
+    for (const id of miss) remember(lifeMemo, id, kept.get(id)!);
+  }
+  for (const id of want) {
+    const m = kept.get(id)!;
+    const l: LifeSigns = {};
+    if (m.sub !== undefined && m.sub > subCut) l.subagent = m.sub;
+    if (m.shell !== undefined && m.shell > shellCut) l.shell = m.shell;
+    if (m.lastStop !== undefined) l.lastStop = m.lastStop;
+    if (l.subagent !== undefined || l.shell !== undefined || l.lastStop !== undefined) out.set(id, l);
+  }
   return out;
 }
 
@@ -230,8 +330,56 @@ export function lifeSigns(ids: string[], now: number): Map<string, LifeSigns> {
    seconds while it is open, and a `git status` on a large checkout is not
    free — eight worktrees at five seconds would be the board's whole budget. */
 const GIT_FACTS_TTL_MS = 30_000;
+/* The five maps below are keyed by checkout path or repo root, and worktrees
+   come and go all day (one per card), so unbounded they only ever grew: a
+   long-lived server kept an entry for every path it ever drew. Each goes
+   through `remember` (oldest out past MEMO_MAX), like the session memos above.
+   landedCache is the big one: its `merged` Set holds every branch name of a
+   repo, about 40 B each, so a repo with 5k branches is ~200 KB per entry. */
 const gitCache = new Map<string, GitFacts>();
-export function __resetGitFacts(): void { gitCache.clear(); }
+/* The "is this branch merged" half of `boardNow`'s per-repo loop, same TTL,
+   keyed by repo root rather than by worktree path. */
+const landedCache = new Map<string, { stamp: string; trees: { path: string; branch: string }[]; ref: string; merged: Set<string> }>();
+/* A checkout's own git dir and its repository's shared one. They do not change
+   while the checkout at the path stays the same one, so git is asked once per
+   checkout, not once per poll (dirsStillHold checks it is the same one). */
+const dirsCache = new Map<string, { gitDir: string; common: string }>();
+/* `ahead` and the last commit depend only on refs: asked again only when the
+   refs on disk moved (refstamp.ts), not every half-minute. */
+const refFactsCache = new Map<string, { stamp: string; ahead: number; lastCommit?: GitFacts["lastCommit"] }>();
+/** For the fork-count test: the per-worktree facts, with the clock it is given. */
+export const __gitFactsFor = (path: string, base: string, now: number) => gitFactsFor(path, base, now);
+export function __resetGitFacts(): void { gitCache.clear(); landedCache.clear(); dirsCache.clear(); refFactsCache.clear(); }
+
+/* A remembered answer still holds only while its git dir is there and the
+   path's own .git still leads to it: a checkout removed and another made at
+   the same path (a worktree re-added, a fresh clone) gets git asked again. */
+export function dirsStillHold(at: string, gitDir: string): boolean {
+  try {
+    if (!statSync(gitDir).isDirectory()) return false;
+    const dotGit = `${at}/.git`;
+    if (!existsSync(dotGit)) return true; // a path inside a checkout: nothing of its own to compare
+    if (statSync(dotGit).isDirectory()) return resolve(dotGit) === resolve(gitDir);
+    const m = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, "utf8"));
+    return !!m && resolve(at, m[1]!.trim()) === resolve(gitDir);
+  } catch {
+    return false;
+  }
+}
+
+async function dirsOf(at: string): Promise<{ gitDir: string; common: string } | null> {
+  const had = dirsCache.get(at);
+  if (had && dirsStillHold(at, had.gitDir)) return had;
+  dirsCache.delete(at);
+  const r = await runGitIn(["rev-parse", "--git-dir", "--git-common-dir"], at).catch(() => ({ ok: false, out: "" }));
+  if (!r.ok) return null;
+  const [g = "", c = ""] = r.out.trim().split("\n").map((l) => l.trim());
+  if (!g || !c) return null;
+  const abs = (d: string) => (d.startsWith("/") ? d : `${at}/${d}`);
+  const dirs = { gitDir: abs(g), common: abs(c) };
+  remember(dirsCache, at, dirs);
+  return dirs;
+}
 
 async function gitFactsFor(path: string, base: string, now: number): Promise<GitFacts | null> {
   const had = gitCache.get(path);
@@ -239,20 +387,28 @@ async function gitFactsFor(path: string, base: string, now: number): Promise<Git
   const status = await runGitIn(["status", "--porcelain"], path).catch(() => ({ ok: false, out: "" }));
   if (!status.ok) return null;
   const dirty = status.out.split("\n").filter((l) => l.trim()).length;
-  const ahead = base
-    ? await runGitIn(["rev-list", "--count", `${base}..HEAD`], path).then((r) => (r.ok ? Number(r.out.trim()) || 0 : 0)).catch(() => 0)
-    : 0;
-  const last = await runGitIn(["log", "-1", "--format=%s%x00%ct"], path).catch(() => ({ ok: false, out: "" }));
-  const [subject = "", ct = ""] = last.ok ? last.out.trim().split("\0") : [];
-  const facts: GitFacts = { dirty, ahead, at: now, ...(subject ? { lastCommit: { subject: subject.slice(0, 120), at: Number(ct) * 1000 } } : {}) };
-  gitCache.set(path, facts);
+  const dirs = await dirsOf(path);
+  // Stamp first, read second: a ref that moves in between makes the next stamp differ, never a stale hit.
+  const stamp = dirs ? `${base}\n${await fileStamp(`${dirs.gitDir}/HEAD`)}\n${await localRefsStamp(dirs.common)}` : "";
+  let refFacts = stamp ? refFactsCache.get(path) : undefined;
+  if (!refFacts || refFacts.stamp !== stamp) {
+    const ahead = base
+      ? await runGitIn(["rev-list", "--count", `${base}..HEAD`], path).then((r) => (r.ok ? Number(r.out.trim()) || 0 : 0)).catch(() => 0)
+      : 0;
+    const last = await runGitIn(["log", "-1", "--format=%s%x00%ct"], path).catch(() => ({ ok: false, out: "" }));
+    const [subject = "", ct = ""] = last.ok ? last.out.trim().split("\0") : [];
+    refFacts = { stamp, ahead, ...(subject ? { lastCommit: { subject: subject.slice(0, 120), at: Number(ct) * 1000 } } : {}) };
+    if (stamp) remember(refFactsCache, path, refFacts);
+  }
+  const facts: GitFacts = { dirty, ahead: refFacts.ahead, at: now, ...(refFacts.lastCommit ? { lastCommit: refFacts.lastCommit } : {}) };
+  remember(gitCache, path, facts);
   return facts;
 }
 
 /* One git call per worktree path for the life of the process: a checkout does not change project. */
 const projectOfWorktree = new Map<string, string | null>();
 const projectFor = (wt: string): string | null => {
-  if (!projectOfWorktree.has(wt)) projectOfWorktree.set(wt, projectRootOf(wt));
+  if (!projectOfWorktree.has(wt)) remember(projectOfWorktree, wt, projectRootOf(wt));
   return projectOfWorktree.get(wt) ?? null;
 };
 
@@ -297,27 +453,48 @@ export async function boardNow(): Promise<LanternCard[]> {
     /* The repository, not the checkout: every worktree of one repository
        shares a `.git`, and its parent is the primary checkout — the one
        whose HEAD is the branch everything here is cut from. */
-    const common = await runGitIn(["rev-parse", "--git-common-dir"], at).catch(() => ({ ok: false, out: "" }));
-    if (!common.ok) continue;
-    const dir = common.out.trim();
-    const root = (dir.startsWith("/") ? dir : `${at}/${dir}`).replace(/\/\.git\/?$/, "");
+    const dirs = await dirsOf(at);
+    if (!dirs) continue;
+    const root = dirs.common.replace(/\/\.git\/?$/, "");
     if (seenRepo.has(root)) continue;
     seenRepo.add(root);
 
-    const list = await runGitIn(["worktree", "list", "--porcelain"], root).catch(() => ({ ok: false, out: "" }));
-    let path = "";
-    for (const line of (list.ok ? list.out : "").split("\n")) {
-      if (line.startsWith("worktree ")) path = line.slice(9).trim();
-      else if (line.startsWith("branch ")) trees.push({ path, branch: line.slice(7).replace("refs/heads/", "").trim() });
-    }
+    /* The heavy half of this loop (worktree list, HEAD, every merged ref),
+       remembered per repo for the same half-minute as gitFactsFor just above:
+       the rail polls /agents/board every 5-20s forever (lanternStore.ts), and
+       this used to redo it from scratch on every single poll, for every repo
+       on the machine — measured at >=40 git subprocesses/17.6s idle, several
+       repos deep, nothing the person was even looking at. */
+    /* Keyed on the refs on disk, not a clock: worktree list, HEAD and the merged
+       set change only when a branch, HEAD or worktree moves (refstamp.ts). */
+    const stamp = await localRefsStamp(dirs.common);
+    const cached = landedCache.get(root);
+    let landedTrees: { path: string; branch: string }[];
+    let ref: string;
+    let inIt: Set<string>;
+    if (cached && cached.stamp === stamp) {
+      landedTrees = cached.trees;
+      ref = cached.ref;
+      inIt = cached.merged;
+    } else {
+      const list = await runGitIn(["worktree", "list", "--porcelain"], root).catch(() => ({ ok: false, out: "" }));
+      landedTrees = [];
+      let path = "";
+      for (const line of (list.ok ? list.out : "").split("\n")) {
+        if (line.startsWith("worktree ")) path = line.slice(9).trim();
+        else if (line.startsWith("branch ")) landedTrees.push({ path, branch: line.slice(7).replace("refs/heads/", "").trim() });
+      }
 
-    const into = await runGitIn(["rev-parse", "--abbrev-ref", "HEAD"], root).catch(() => ({ ok: false, out: "" }));
-    const merged = await runGitIn(["for-each-ref", "--format=%(refname:short)", "--merged", "HEAD", "refs/heads/"], root)
-      .catch(() => ({ ok: false, out: "" }));
-    if (!into.ok || !merged.ok) continue;
-    const ref = into.out.trim();
-    const inIt = new Set(merged.out.split("\n").map((l) => l.trim()).filter(Boolean));
-    for (const t of trees) {
+      const into = await runGitIn(["rev-parse", "--abbrev-ref", "HEAD"], root).catch(() => ({ ok: false, out: "" }));
+      const merged = await runGitIn(["for-each-ref", "--format=%(refname:short)", "--merged", "HEAD", "refs/heads/"], root)
+        .catch(() => ({ ok: false, out: "" }));
+      if (!into.ok || !merged.ok) continue;
+      ref = into.out.trim();
+      inIt = new Set(merged.out.split("\n").map((l) => l.trim()).filter(Boolean));
+      remember(landedCache, root, { stamp, trees: landedTrees, ref, merged: inIt });
+    }
+    trees.push(...landedTrees);
+    for (const t of landedTrees) {
       if (t.branch && landedBy[t.branch] === undefined) landedBy[t.branch] = { landed: inIt.has(t.branch), into: ref };
     }
   }
@@ -377,26 +554,26 @@ export async function boardNow(): Promise<LanternCard[]> {
      rather than written closed, because a failed tmux read must not end a
      worker. `merged` drops the ones whose turn has settled. */
   const seenPanes = new Set(panes.map((p) => p.paneId));
+  /* The role a worker runs as: the column every role start writes, else the
+     policy stamp a headless one carries. Nothing is read off the name. */
+  const roleOf = (a: NamedAgent): string | undefined => {
+    if (a.role) return a.role;
+    const by = a.startedBy as { role?: unknown } | undefined;
+    return typeof by?.role === "string" && by.role ? by.role : undefined;
+  };
   const named = openNamed()
     .filter((a) => !panesRead || seenPanes.has(a.paneId))
-    .map((a: NamedAgent) => {
-      const by = a.startedBy as { role?: unknown } | undefined;
-      return {
-        name: a.name, kind: a.kind, cwd: a.cwd, paneId: a.paneId, startedAt: a.startedAt,
-        endedAt: a.endedAt, exitCode: a.exitCode,
-        role: typeof by?.role === "string" && by.role ? by.role : undefined,
-      };
-    });
+    .map((a: NamedAgent) => ({
+      name: a.name, kind: a.kind, cwd: a.cwd, paneId: a.paneId, startedAt: a.startedAt,
+      endedAt: a.endedAt, exitCode: a.exitCode,
+      role: roleOf(a),
+    }));
   /* A headless worker's model, from the row that started it: its frames carry
      the cost and the tools but not always the id. And the workers whose turn is
      over — dropped by `merged` because they ask nobody for anything, and the
      one way a person reads what the turn did is its own Crew card — kept for
      half an hour with the numbers from its own output. */
   const workerModel = new Map<string, string>();
-  const roleOf = (a: NamedAgent): string | undefined => {
-    const by = a.startedBy as { role?: unknown } | undefined;
-    return typeof by?.role === "string" && by.role ? by.role : undefined;
-  };
   const settledWorkers: { a: NamedAgent; facts: RunFacts }[] = [];
   for (const a of [...openNamed(), ...everyAgent()]) {
     if (a.model) workerModel.set(a.name, a.model);

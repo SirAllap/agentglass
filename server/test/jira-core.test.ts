@@ -507,7 +507,9 @@ describe("requests", () => {
     fake.fail({ path: "/project/search", status: 500, times: 1 });
     expect((await J.projects(stored())).error).toBe("Could not reach Jira");
     fake.fail({ path: "/project/search", garbage: true, times: 1 });
-    expect((await J.projects(stored())).error).toBe("Jira answered with something unreadable");
+    const garbage = (await J.projects(stored())).error!;
+    expect(garbage).toMatch(/^Jira answered something that is not JSON \(GET \/\S+: \d{3}, [^)]+\)$/);
+    expect(garbage).not.toContain("issues");
     fake.fail({ path: "/project/search", drop: true, times: 1 });
     expect((await J.projects(stored())).ok).toBe(false);
     fake.fail({ path: "/project/search", delayMs: 400, times: 1 });

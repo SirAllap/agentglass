@@ -117,7 +117,9 @@ describe("finish, and the way back", () => {
     expect(finish).toContain('settingsDoorSet("setup.done", true)');
     // Finish and Skip share it, so a second press cannot write it twice by
     // another route.
-    expect(flow.slice(flow.indexOf("const skip ="))).toContain("finish(false)");
+    // Skip and Finish both go through `move`, which is where `finish` is reached.
+    expect(flow.slice(flow.indexOf("const move ="), flow.indexOf("const next ="))).toContain("finish(false)");
+    expect(flow.slice(flow.indexOf("const skip ="))).toContain('move("skip")');
   });
 
   test("the restart row writes false, and a project open does not hide the wizard", async () => {

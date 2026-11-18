@@ -126,8 +126,23 @@ const askPolicy = async (token: string, id: string) => {
   return (await r.json() as { pending: { id: string; root?: string; who: string } }).pending;
 };
 const adopt = async (root: string, session: string): Promise<string> => {
-  const r = await fetch(base + "/seat/adopt", { method: "POST", headers: { Authorization: `Bearer ${TOKEN}`, ...json, Origin: base }, body: JSON.stringify({ root, session, pane: await handTab(root), powers: "assign" }) });
-  const b = (await r.json()) as Record<string, any>;
+  const body = { root, session, pane: await handTab(root), powers: "assign" };
+  /* The app's own desk: an adoption card is the person's click, and an Origin
+     is a header the agent that asked can write. */
+  const head = { Authorization: `Bearer ${TOKEN}`, ...json, Origin: base, "x-agentglass-desk": KEY };
+  const answer = async () => (await (await fetch(base + "/seat/adopt", { method: "POST", headers: head, body: JSON.stringify(body) })).json()) as Record<string, any>;
+  const release = await holdDesk();
+  try {
+    const asked = await answer();
+    /* A desk key adopts without a card; a card still waits for the person. */
+    if (asked.pending?.id) {
+      const yes = (await (await fetch(base + "/settings/requests/decide", {
+        method: "POST", headers: head, body: JSON.stringify({ id: asked.pending.id, approve: true }),
+      })).json()) as Record<string, any>;
+      if (!yes.ok) throw new Error(`the person could not approve the seat: ${JSON.stringify(yes)}`);
+    }
+  } finally { release(); }
+  const b = await answer();
   if (!b.ok) throw new Error(`the seat was not adopted: ${JSON.stringify(b)}`);
   return String(b.token);
 };
@@ -138,6 +153,24 @@ async function handTab(cwd: string): Promise<string> {
   const pane = (await new Response(p.stdout).text()).trim();
   if (await p.exited !== 0 || !pane) throw new Error("the tab did not open");
   return pane;
+}
+
+/** The desk key, and a claim holding it open while it is used. */
+const KEY = "desk-key-the-settings-scope-claimed-0123456789abcdef";
+async function holdDesk(): Promise<() => void> {
+  for (let i = 0; i < 40; i++) {
+    const ac = new AbortController();
+    const r = await fetch(base + "/desk/claim", { method: "POST", headers: { Authorization: `Bearer ${TOKEN}`, "x-agentglass-desk": KEY }, signal: ac.signal });
+    if (r.status === 200) {
+      const body = r.body!.getReader();
+      await body.read();
+      return () => { void body.cancel().catch(() => {}); ac.abort(); };
+    }
+    await r.text();
+    ac.abort();
+    await Bun.sleep(50);
+  }
+  throw new Error("the desk could not be claimed");
 }
 
 /** The UI CLI as an agent runs it: the machine token from the environment, and

@@ -11,7 +11,7 @@
 // panes, names via validPaneName) before they reach a command — these ids come
 // from browser requests, and tmux treats `:` and `.` as separators it would
 // happily resolve onto a target we did not mean.
-import { tmux, validSessionName, type TmuxResult } from "./tmuxpane.ts";
+import { tmux, validSessionName, GIVEN_OPTION, CARD_OPTION, type TmuxResult } from "./tmuxpane.ts";
 import { PLACE_FORMAT, parsePlaceWindows, placeArgs } from "./tmuxplace.ts";
 import type { TmuxWindow } from "../../shared/types.ts";
 
@@ -82,15 +82,15 @@ export async function listWindows(name: string): Promise<TmuxWindow[]> {
   if (!validSessionName(name)) return [];
   const r = await tmux([
     "list-windows", "-t", `=${name}`,
-    "-F", `#{window_id}\t#{window_index}\t${WINDOW_NAME}\t#{window_active}\t#{window_flags}\t#{window_layout}`,
+    "-F", `#{window_id}\t#{window_index}\t${WINDOW_NAME}\t#{window_active}\t#{window_flags}\t#{window_layout}\t${free(GIVEN_OPTION)}\t${free(CARD_OPTION)}`,
   ]);
   if (!r.ok) return [];
   return r.stdout.split("\n").filter(Boolean).map((line) => {
-    const [id, index, name_, active, flags, layout] = line.split("\t");
+    const [id, index, name_, active, flags, layout, given, card] = line.split("\t");
     /* How the window is split, in tmux's own words — the one string that
        brings a window back split the way it was, not merely into as many
        panes. See tmuxrestore.ts (restoreLayout). */
-    return { id, index: Number(index), name: unfree(name_), active: active === "1", flags: flags ?? "", ask: undefined, phone: undefined, agent: undefined, ...(layout && LAYOUT_RE.test(layout) ? { layout } : {}) };
+    return { id, index: Number(index), name: unfree(name_), active: active === "1", flags: flags ?? "", ask: undefined, phone: undefined, agent: undefined, ...(layout && LAYOUT_RE.test(layout) ? { layout } : {}), ...(unfree(given) ? { given: unfree(given) } : {}), ...(unfree(card) ? { card: unfree(card) } : {}) };
   }).filter((w) => WINDOW_RE.test(w.id));
 }
 
@@ -138,17 +138,17 @@ export async function windowTree(name: string): Promise<TmuxWindowDetail[]> {
  */
 export async function allWindowTrees(): Promise<{ trees: Map<string, TmuxWindowDetail[]>; starts: Map<string, string> } | null> {
   const [wr, pr] = await Promise.all([
-    tmux(["list-windows", "-a", "-F", `${free("session_name")}\t#{window_id}\t#{window_index}\t${WINDOW_NAME}\t#{window_active}\t#{window_flags}\t#{window_layout}`]),
+    tmux(["list-windows", "-a", "-F", `${free("session_name")}\t#{window_id}\t#{window_index}\t${WINDOW_NAME}\t#{window_active}\t#{window_flags}\t#{window_layout}\t${free(GIVEN_OPTION)}\t${free(CARD_OPTION)}`]),
     tmux(["list-panes", "-a", "-F", `${free("session_name")}\t#{window_id}\t#{pane_id}\t#{pane_index}\t#{pane_active}\t${free("pane_current_command")}\t${free("pane_current_path")}\t#{pane_dead}\t#{pane_pid}\t${free("pane_start_command")}`]),
   ]);
   if (!wr.ok || !pr.ok) return null;
   const trees = new Map<string, TmuxWindowDetail[]>();
   const byWindow = new Map<string, TmuxWindowDetail>();
   for (const line of wr.stdout.split("\n").filter(Boolean)) {
-    const [rawSess, id = "", index, name_, active, flags, layout] = line.split("\t");
+    const [rawSess, id = "", index, name_, active, flags, layout, given, card] = line.split("\t");
     const sess = unfree(rawSess);
     if (!WINDOW_RE.test(id)) continue;
-    const w: TmuxWindowDetail = { id, index: Number(index), name: unfree(name_), active: active === "1", flags: flags ?? "", ...(layout && LAYOUT_RE.test(layout) ? { layout } : {}), panes: [] };
+    const w: TmuxWindowDetail = { id, index: Number(index), name: unfree(name_), active: active === "1", flags: flags ?? "", ...(layout && LAYOUT_RE.test(layout) ? { layout } : {}), ...(unfree(given) ? { given: unfree(given) } : {}), ...(unfree(card) ? { card: unfree(card) } : {}), panes: [] };
     if (!trees.has(sess)) trees.set(sess, []);
     trees.get(sess)!.push(w);
     byWindow.set(`${sess}\t${id}`, w);
@@ -185,25 +185,94 @@ export function paneCommand(argv: string[]): string {
   return `${quoted}; printf '\\n[agentglass] the CLI exited (%s). This pane is kept for inspection.\\n' "$?"; exec sleep 86400`;
 }
 
+/** What a window or pane runs with, from the browser door: the variables the
+ *  window was handed, and the ones it must not inherit. */
+export interface PaneEnv {
+  set: readonly [string, string][];
+  unsets: readonly string[];
+}
+
+/** The command as the pane must run it. tmux has no way to unset a variable on
+ *  a pane, so the ones it must not inherit are removed by `env -u` in front of
+ *  the command — the same shape `tmuxrestore.ts` replays. */
+function guarded(argv: string[], env: PaneEnv | undefined): string[] {
+  return env?.unsets.length ? ["env", ...env.unsets.flatMap((v) => ["-u", v]), ...argv] : argv;
+}
+
+/** A shell with the variables removed, for a start that names no command.
+ *  Without it the removals had nothing to attach to and the pane got tmux's
+ *  own shell with the SERVER's environment — the token included. */
+function guardedShell(env: PaneEnv | undefined): string[] {
+  return env?.unsets.length ? ["env", ...env.unsets.flatMap((v) => ["-u", v]), process.env.SHELL || "/bin/sh"] : [];
+}
+
 /** A new window (tab) in the session, running `argv` in `cwd` when given. */
-export async function newWindow(name: string, cwd: string, argv: string[] = [], title?: string): Promise<TmuxResult> {
+export async function newWindow(name: string, cwd: string, argv: string[] = [], title?: string, env?: PaneEnv): Promise<TmuxResult> {
   if (!validSessionName(name)) return { ok: false, stdout: "", stderr: "invalid pane name" };
   const named = title && /^[\w ._/-]{1,40}$/.test(title) ? title : "";
   const listed = await tmux(["list-windows", "-t", `=${name}:`, "-F", PLACE_FORMAT]);
   const args = ["new-window", "-d", ...placeArgs(parsePlaceWindows(listed.stdout), named, `=${name}`), "-c", cwd];
   if (named) args.push("-n", named);
-  if (argv.length) args.push(...["sh", "-c", paneCommand(argv)]);
+  /* `-e` puts a handed credential on the pane without putting it in the line
+     the pane was born with (`pane_start_command`), which a restore photographs
+     into a file. */
+  if (env) args.push(...env.set.flatMap(([k, v]) => ["-e", `${k}=${v}`]));
+  const run = guarded(argv, env);
+  if (run.length) args.push(...["sh", "-c", paneCommand(run)]);
+  else for (const a of guardedShell(env)) args.push(a);
+  return tmux(args);
+}
+
+/** How long the placeholder of `newWindowAwaitingCommand` may wait for its
+ *  command before it ends itself. The respawn follows within milliseconds; this
+ *  is the ceiling that keeps a crash between the two calls from leaving a tab
+ *  running `sleep` for ever with nothing that sweeps it. */
+const AWAITING_COMMAND_S = 30;
+
+/** A window whose command is filled in by `respawnWindowPane` once tmux has
+ *  given it an id.
+ *
+ *  The layout route needs the window's OWN id to name the credential it mints,
+ *  and tmux assigns that id only when the window exists. So the window is made
+ *  empty first — a placeholder the respawn replaces — and no credential is in
+ *  the placeholder's environment. The placeholder ends by itself: tmux closes a
+ *  pane whose command exits 0, so a start that died between the two calls
+ *  leaves no tab behind. */
+export async function newWindowAwaitingCommand(name: string, cwd: string, title?: string, select = false): Promise<TmuxResult & { windowId?: string; paneId?: string }> {
+  if (!validSessionName(name)) return { ok: false, stdout: "", stderr: "invalid pane name" };
+  const named = title && /^[\w ._/-]{1,40}$/.test(title) ? title : "";
+  const listed = await tmux(["list-windows", "-t", `=${name}:`, "-F", PLACE_FORMAT]);
+  const args = ["new-window", ...(select ? [] : ["-d"]), "-P", "-F", "#{window_id}\t#{pane_id}", ...placeArgs(parsePlaceWindows(listed.stdout), named, `=${name}`), "-c", cwd];
+  if (named) args.push("-n", named);
+  args.push("sleep", String(AWAITING_COMMAND_S));
+  const r = await tmux(args);
+  const [windowId = "", paneId = ""] = r.stdout.trim().split("\n")[0].split("\t");
+  return { ...r, ...(WINDOW_RE.test(windowId) ? { windowId } : {}), ...(PANE_RE.test(paneId) ? { paneId } : {}) };
+}
+
+/** Replace the placeholder process of a window made by
+ *  `newWindowAwaitingCommand`, with the door's variables and removals applied. */
+export async function respawnWindowPane(paneId: string, cwd: string, argv: string[], env?: PaneEnv): Promise<TmuxResult> {
+  if (!PANE_RE.test(paneId)) return { ok: false, stdout: "", stderr: "invalid target" };
+  const args = ["respawn-pane", "-k", "-t", paneId, "-c", cwd];
+  if (env) args.push(...env.set.flatMap(([k, v]) => ["-e", `${k}=${v}`]));
+  const run = guarded(argv, env);
+  if (run.length) args.push(...["sh", "-c", paneCommand(run)]);
+  else for (const a of guardedShell(env)) args.push(a);
   return tmux(args);
 }
 
 /** Split a pane, `-h` = left/right, `-v` = top/bottom. New pane runs `argv`
  *  in `cwd` when given, else a shell in `cwd`. */
 export async function splitPane(
-  name: string, windowId: string, direction: "horizontal" | "vertical", cwd: string, argv: string[] = [],
+  name: string, windowId: string, direction: "horizontal" | "vertical", cwd: string, argv: string[] = [], env?: PaneEnv,
 ): Promise<TmuxResult> {
   if (!validSessionName(name) || !WINDOW_RE.test(windowId)) return { ok: false, stdout: "", stderr: "invalid target" };
   const args = ["split-window", "-d", direction === "horizontal" ? "-h" : "-v", "-t", `=${name}:${windowId}`, "-c", cwd];
-  if (argv.length) args.push(...["sh", "-c", paneCommand(argv)]);
+  if (env) args.push(...env.set.flatMap(([k, v]) => ["-e", `${k}=${v}`]));
+  const run = guarded(argv, env);
+  if (run.length) args.push(...["sh", "-c", paneCommand(run)]);
+  else for (const a of guardedShell(env)) args.push(a);
   return tmux(args);
 }
 

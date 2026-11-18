@@ -32,6 +32,7 @@
  */
 import { cpSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
+import { spawnSyncAs } from "./loopwatch.ts";
 
 export const WORKTREE_INCLUDE = ".worktreeinclude";
 
@@ -100,7 +101,7 @@ function under(path: string, root: string): boolean {
  *  repository at all — and only the first of those is a yes. */
 export function gitIgnored(root: string, rel: string): boolean {
   try {
-    const r = Bun.spawnSync(["git", "-C", root, "check-ignore", "-q", "--", rel], {
+    const r = spawnSyncAs("git check-ignore", ["git", "-C", root, "check-ignore", "-q", "--", rel], {
       stdout: "ignore", stderr: "ignore", stdin: "ignore",
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
     });

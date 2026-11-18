@@ -92,7 +92,7 @@ export function makeWorld(o: { branch?: string; mainOnBranch?: boolean } = {}): 
     if (v === "ps") return ok(w.containers.map((c) => [c.name, c.state, c.image, c.labels ?? ""].join("\t")).join("\n"));
     if (v === "images") return ok(w.images.map((i) => [i.repo, i.tag, i.id, i.size].join("\t")).join("\n"));
     if (v === "volume" && rest[0] === "ls") return ok(w.volumes.join("\n"));
-    if (v === "volume" && rest[0] === "rm") { w.volumes = w.volumes.filter((x) => x !== rest[1]); return ok(); }
+    if (v === "volume" && rest[0] === "rm") { if (!w.volumes.includes(rest[1]!)) return no(`Error response from daemon: get ${rest[1]}: no such volume`); w.volumes = w.volumes.filter((x) => x !== rest[1]); return ok(); }
     if (v === "stop") { const c = w.containers.find((x) => x.name === rest[0]); if (!c) return no("No such container"); c.state = "exited"; return ok(); }
     if (v === "rm") {
       const c = w.containers.find((x) => x.name === rest[0]);

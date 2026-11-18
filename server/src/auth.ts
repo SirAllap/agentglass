@@ -19,8 +19,9 @@ import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import { deviceFor, scopeAllows, type Device, type Scope } from "./devices.ts";
+import { deviceFor, hashToken, scopeAllows, type Device, type Scope } from "./devices.ts";
 import { DESK_HEADER, deskKey } from "./desk.ts";
+import { db, durably } from "./db.ts";
 
 const TOKEN_PATH = join(
   process.env.XDG_CONFIG_HOME || join(homedir(), ".config"),
@@ -228,6 +229,96 @@ export function healthProof(token: string, port: number, nonce: string): string 
   return createHmac("sha256", token).update(`agentglass-health:${port}:${nonce}`).digest("hex");
 }
 
+/**
+ * A link to ONE file from disk, for a tab of the agentglass browser.
+ *
+ * A page opened from the Finder may run its own scripts (a mockup switches
+ * states, when the person asks for that), and a script can read its own
+ * address. With `?token=` in that address, the page could send the machine's
+ * whole key anywhere by navigating to it. The ticket is a signature instead,
+ * and it signs the file, not the words of its path: the file's identity on
+ * disk (device and inode), its REAL path (links resolved), its size and its
+ * modified time, whether its scripts run, and an expiry ten minutes out.
+ * Leaked, it opens that one file as it was when the link was made, for ten
+ * minutes, and nothing else. Another file put in its place, even with the same
+ * size and a copied mtime (a hardlink renamed over it), has another inode and
+ * no longer fits. The route checks the file it has OPEN, not the path again:
+ * see browse.ts pageByTicket.
+ *
+ * Ticket text: `<expiry ms>.<path hmac>.<file hmac>`. The path half signs the
+ * words of the path the link names, so a made-up ticket is refused before the
+ * server opens anything: a caller cannot learn whether a file exists, or make
+ * the server open a device, by guessing. The file half signs the facts of the
+ * open file. The facts come from browse.ts pageFacts, so this file stays free
+ * of the disk.
+ */
+export interface PageFacts { real: string; size: number; mtimeMs: number; dev: number; ino: number }
+export const PAGE_TICKET_MS = 10 * 60_000;
+
+/** One sentence for "no such file", "not a regular file" and "another file":
+ *  a different sentence for each would tell a caller which one it is. */
+export const PAGE_TICKET_STALE = "this link no longer fits the file: the file changed or moved, or the link was made for another one. Open it from the Finder again";
+const PAGE_TICKET_INVALID = "this link to the file is not valid: open the file from the Finder again";
+
+function pathSig(token: string, path: string, scripts: boolean, exp: number): string {
+  return createHmac("sha256", token)
+    .update(`agentglass-page-path:v1\0${path}\0${scripts ? 1 : 0}\0${exp}`)
+    .digest("hex");
+}
+
+function pageSig(token: string, f: PageFacts, scripts: boolean, exp: number): string {
+  return createHmac("sha256", token)
+    .update(`agentglass-page:v3\0${f.dev}\0${f.ino}\0${f.real}\0${f.size}\0${Math.floor(f.mtimeMs)}\0${scripts ? 1 : 0}\0${exp}`)
+    .digest("hex");
+}
+
+/** The link names `f.real`, so the path half signs that. */
+export function pageTicket(token: string, f: PageFacts, scripts: boolean, now = Date.now()): string {
+  const exp = now + PAGE_TICKET_MS;
+  return `${exp}.${pathSig(token, f.real, scripts, exp)}.${pageSig(token, f, scripts, exp)}`;
+}
+
+const TICKET = /^(\d{1,15})\.([0-9a-f]{64})\.([0-9a-f]{64})$/;
+
+/** Before anything is opened: null when `ticket` was signed by this token for
+ *  this path, unexpired; else the sentence to answer with. */
+export function pageTicketPathRefusal(token: string, path: string, ticket: string, scripts: boolean, now = Date.now()): string | null {
+  const m = TICKET.exec(ticket);
+  if (!token || !m) return PAGE_TICKET_INVALID;
+  const exp = Number(m[1]);
+  if (exp <= now) return "this link to the file has expired: open the file from the Finder again";
+  if (!eq(m[2]!, pathSig(token, path, scripts, exp))) return PAGE_TICKET_INVALID;
+  return null;
+}
+
+/** After the open: null when `ticket` was signed for this file as it is now; else the sentence to answer with. */
+export function pageTicketRefusal(token: string, f: PageFacts | null, ticket: string, scripts: boolean, now = Date.now()): string | null {
+  const m = TICKET.exec(ticket);
+  if (!token || !m) return PAGE_TICKET_INVALID;
+  const exp = Number(m[1]);
+  if (exp <= now) return "this link to the file has expired: open the file from the Finder again";
+  if (!f || !eq(m[3]!, pageSig(token, f, scripts, exp))) return PAGE_TICKET_STALE;
+  return null;
+}
+
+/**
+ * Whether the auth gate takes a page ticket in place of the token: only a GET
+ * of /preview/page from this machine as this user, with a ticket in the
+ * address, on a server that has a token to sign with. "skip" means the usual
+ * gate decides (and answers 401 without the token).
+ */
+export function pageTicketDoor(token: string | null | undefined, method: string, pathname: string, from: Origin, ticket: string | null): "skip" | "check" {
+  return !!token && method === "GET" && pathname === "/preview/page" && from === "loopback" && !!ticket ? "check" : "skip";
+}
+
+/**
+ * Who a page ticket speaks as: a narrow read caller, never the desk. So
+ * heldBackFrom judges the path (dot-folders under home, through links too),
+ * and the route reads with local=false, so the agentglass config, state and
+ * token stay shut whatever the path points at.
+ */
+export const PAGE_TICKET_CALLER: Caller = { kind: "device", scope: "read" };
+
 function eq(a: string, b: string): boolean {
   const ba = Buffer.from(a);
   const bb = Buffer.from(b);
@@ -266,6 +357,8 @@ export function presented(req: Request, url: URL): string {
  * the common case never walks the device list at all.
  */
 export interface Caller {
+  /** A seat credential that reaches the Flight plan verbs only (`mintSeatFlightToken`). */
+  flightOnly?: true;
   /**
    * Three kinds, and the third is not a flavour of the second.
    *
@@ -306,7 +399,7 @@ export interface Caller {
    * is the fence going up before the thing that needs fencing arrives, which is
    * the only order in which a fence is ever built correctly.
    */
-  principal?: "understudy" | "seat" | "worker";
+  principal?: "understudy" | "seat" | "worker" | "seat-browser";
   /** When `principal` is `seat`: which project's chair, and what that chair
    *  was granted. Carried on the caller rather than looked up per request so
    *  the grant is the one made at seating — changing the setting afterwards
@@ -315,6 +408,10 @@ export interface Caller {
   /** When `principal` is `worker`: the agent this credential was minted for,
    *  so a relay can say which worker asked and a revocation can name it. */
   worker?: string;
+  /** When `principal` is `worker`: the project it was started for (the root
+   *  the server itself recorded at mint time), undefined when that start path
+   *  minted with none. See `confinedOwnRoot`. */
+  workerRoot?: string;
   /** The plugin's name when `kind` is `plugin`. `allowed` grades it by scope
    *  like any other caller — the manifest declared a scope and a human approved
    *  it — but it is never a person's hand on a gate; see `kind`. */
@@ -361,6 +458,39 @@ const understudyTokens = new Set<string>();
 const seatTokens = new Map<string, { root: string; powers: "speak" | "nudge" | "assign" }>();
 
 /*
+ * The hash a seat token answers to across a restart. The raw token never
+ * reaches the db — only what it hashes to, with the root and powers it was
+ * minted for — so this table proves nothing without the token that made it.
+ * Loaded once at boot (this module's load), kept in step with `seatTokens` by
+ * every mint and every revoke, and checked in constant time like a paired
+ * device's credential (devices.ts).
+ */
+interface PersistedSeat { hash: Buffer; root: string; powers: "speak" | "nudge" | "assign" }
+const seatCredInsert = db.query<never, [string, string, string]>(
+  `INSERT INTO seat_credential (hash, root, powers) VALUES (?, ?, ?) ON CONFLICT(hash) DO UPDATE SET root = excluded.root, powers = excluded.powers`
+);
+const seatCredDeleteByRoot = db.query<never, [string]>(`DELETE FROM seat_credential WHERE root = ?`);
+const seatCredAll = db.query<{ hash: string; root: string; powers: string }, []>(
+  `SELECT hash, root, powers FROM seat_credential`
+);
+let persistedSeats: PersistedSeat[] = seatCredAll.all().map((r) => ({
+  hash: Buffer.from(r.hash, "hex"),
+  root: r.root,
+  powers: r.powers === "nudge" || r.powers === "assign" ? r.powers : "speak",
+}));
+
+/** The persisted seat a presented token hashes to, if any — constant-time
+ *  over the hashes, the same reasoning as `deviceFor`. */
+function persistedSeatFor(provided: string): { root: string; powers: "speak" | "nudge" | "assign" } | null {
+  const want = Buffer.from(hashToken(provided), "hex");
+  for (const p of persistedSeats) {
+    if (p.hash.length !== want.length) continue;
+    if (timingSafeEqual(p.hash, want)) return { root: p.root, powers: p.powers };
+  }
+  return null;
+}
+
+/*
  * Credentials minted per WORKER at launch, and why they are the boundary.
  *
  * A worker inherits the process environment, which carries the MACHINE token —
@@ -376,34 +506,151 @@ const seatTokens = new Map<string, { root: string; powers: "speak" | "nudge" | "
  * follow-up turn replaces the
  * token of the turn it continues.
  *
- * In memory, per turn, expired at the worker's own turn limit when the caller
+ * In memory and, as a hash only, in `worker_credential` (so a restart keeps a live worker), expired at the worker's own turn limit when the caller
  * passes one (twelve hours otherwise) and revoked when the turn ends: a
  * credential that outlives the work it was minted for is a credential somebody
  * finds later.
  */
-const workerTokens = new Map<string, { name: string; expiresAt: number }>();
+const workerTokens = new Map<string, { name: string; expiresAt: number; root?: string }>();
+
+/* Persisted as hash only (table worker_credential), so a restart does not cut
+   a live worker off mid-turn. `workerTokens` stays the fast path; this is the
+   fallback for a token minted before the restart. Same revoke and expiry
+   semantics, same constant-time compare as the seat table above. */
+interface PersistedWorker { hash: Buffer; name: string; expiresAt: number; root?: string }
+const workerCredInsert = db.query<never, [string, string, string | null, number]>(
+  `INSERT INTO worker_credential (hash, name, root, expires_at) VALUES (?, ?, ?, ?) ON CONFLICT(hash) DO UPDATE SET name = excluded.name, root = excluded.root, expires_at = excluded.expires_at`
+);
+const workerCredDeleteByHash = db.query<never, [string]>(`DELETE FROM worker_credential WHERE hash = ?`);
+const workerCredDeleteByName = db.query<never, [string]>(`DELETE FROM worker_credential WHERE name = ?`);
+const workerCredDeleteExpired = db.query<never, [number]>(`DELETE FROM worker_credential WHERE expires_at <= ?`);
+const workerCredDeleteOthers = db.query<never, [string, string]>(`DELETE FROM worker_credential WHERE name = ? AND hash != ?`);
+const workerCredAll = db.query<{ hash: string; name: string; root: string | null; expires_at: number }, []>(
+  `SELECT hash, name, root, expires_at FROM worker_credential`
+);
+workerCredDeleteExpired.run(Date.now());
+// Rows an earlier build wrote for names that can never be restored (see restorableWorkerName).
+db.run(`DELETE FROM worker_credential WHERE name LIKE 'layout:%'`);
+let persistedWorkers: PersistedWorker[] = workerCredAll.all().map((r) => ({
+  hash: Buffer.from(r.hash, "hex"), name: r.name, expiresAt: r.expires_at, root: r.root ?? undefined,
+}));
+/**
+ * Whether a credential of this name is worth keeping across a restart.
+ *
+ * A restored token is honoured only while `workerAlive(name)` says yes, and
+ * that asks the named-agent registry. Two kinds of name are never in it:
+ *   seat-cred:  a seat-browser credential, 60 s and one call;
+ *   layout:     a tab the layout route started (`layoutCredentialName`), which
+ *               is a tmux window, not a named agent.
+ * A `layout:` hash written to disk could therefore never be restored: its
+ * first use after a restart was refused and the row deleted, and until then
+ * it was a credential's hash kept for nothing, paid for with an fsync per
+ * mint. Ceiling, chosen: an agent tab opened from a layout still loses its
+ * browser credential when the app restarts, exactly as before; restoring it
+ * needs a liveness answer for a window (session, window id and engine are in
+ * the name) and is the next thing after this, not here.
+ */
+export const UNRESTORABLE_WORKER_PREFIXES = ["seat-cred:", "layout:"] as const;
+export function restorableWorkerName(name: string): boolean {
+  return !UNRESTORABLE_WORKER_PREFIXES.some((p) => name.startsWith(p));
+}
+/** Whether a named worker is still alive; installed at boot by the server (agentops
+ *  owns the answer and imports this module, so it is handed in, not imported).
+ *  A token restored from disk is honoured only while this says yes. Lazy, at
+ *  first use, because tmux may not be ready at boot; fail closed when unset. */
+let workerAlive: ((name: string) => boolean) | null = null;
+export function setWorkerAliveCheck(fn: ((name: string) => boolean) | null): void { workerAlive = fn; }
+/** A restored token for `name` that is still good, for health and start. The raw token is unrecoverable, so there is no workerTokenOf for it. */
+export function workerHeldAcrossRestart(name: string): boolean {
+  const now = Date.now();
+  return persistedWorkers.some((p) => p.name === name && p.expiresAt > now) && !!workerAlive?.(name);
+}
+function persistedWorkerFor(provided: string): { name: string; expiresAt: number; root?: string } | null {
+  const want = Buffer.from(hashToken(provided), "hex");
+  for (const p of persistedWorkers) {
+    if (p.hash.length === want.length && timingSafeEqual(p.hash, want)) return p;
+  }
+  return null;
+}
+/** A restored token, checked against the worker's liveness on first use: a worker that died while the server was down keeps no token. */
+function restoredWorkerFor(provided: string): { name: string; expiresAt: number; root?: string } | null {
+  const w = persistedWorkerFor(provided);
+  if (!w) return null;
+  if (!workerAlive || !workerAlive(w.name)) { revokeWorkerToken(provided); return null; }
+  return w;
+}
+function forgetPersistedWorkers(pred: (p: PersistedWorker) => boolean): void {
+  persistedWorkers = persistedWorkers.filter((p) => !pred(p));
+}
 
 /** How long a credential lives when the caller has no turn to cap it by. */
 export const WORKER_TOKEN_DEFAULT_MS = 12 * 60 * 60_000;
 
 /** `replace: false` leaves a same-name credential alive. The start route needs
  *  that: minting there before the start is known not to be `exists` used to cut
- *  the live worker's credential on a retry of the same name. */
-export function mintWorkerToken(name: string, ttlMs = WORKER_TOKEN_DEFAULT_MS, replace = true): string {
-  if (replace) for (const [t, w] of workerTokens) if (w.name === name) workerTokens.delete(t);
+ *  the live worker's credential on a retry of the same name.
+ *
+ *  `root` is the project this worker was started for — the same value a seat's
+ *  `seat.root` carries — read from the server's own start-time record, never
+ *  from anything the worker's body could later say. Minted with none, a
+ *  worker speaks for no project (see `confinedOwnRoot`), never for every one:
+ *  that was the hole, not a feature to fall back to. */
+/** Told the project of every credential minted, so the server can fix what it
+ *  reads about that project (the GitHub door's repo) before the holder runs. */
+let onMintRoot: ((root: string) => void) | null = null;
+export function setMintRootHook(fn: ((root: string) => void) | null): void { onMintRoot = fn; }
+export function mintWorkerToken(name: string, ttlMs = WORKER_TOKEN_DEFAULT_MS, replace = true, root?: string): string {
+  if (root && onMintRoot) { try { onMintRoot(root); } catch { /* a hook never fails a mint */ } }
+  const now = Date.now();
+  // Minted tokens that nobody ever looks up again would otherwise sit in the
+  // map forever: sweep expired ones here, the one place that already owns it.
+  for (const [t, w] of workerTokens) if (w.expiresAt <= now) workerTokens.delete(t);
+  forgetPersistedWorkers((p) => p.expiresAt <= now);
+  if (replace) {
+    for (const [t, w] of workerTokens) if (w.name === name) workerTokens.delete(t);
+    forgetPersistedWorkers((p) => p.name === name);
+  }
   const t = `wk_${randomBytes(24).toString("base64url")}`;
   // A token whose turn never ends must still stop being a token: the caller
   // caps it at the worker's own turn limit.
-  workerTokens.set(t, { name, expiresAt: Date.now() + Math.max(0, ttlMs) });
+  const expiresAt = now + Math.max(0, ttlMs);
+  workerTokens.set(t, { name, expiresAt, root });
+  const hash = hashToken(t);
+  const persist = restorableWorkerName(name);
+  /* One transaction, so one commit and at most one fsync. These were three
+     durably() calls, each its own autocommit under synchronous=FULL, on the
+     server's only thread, at every worker start and every follow-up turn; the
+     database runs at NORMAL precisely because an fsync on btrfs was measured
+     holding that thread for seconds. A delete that removes nothing and a mint
+     that persists nothing write nothing, so they still cost no fsync at all. */
+  durably(() => db.transaction(() => {
+    workerCredDeleteExpired.run(now);
+    if (replace) workerCredDeleteByName.run(name);
+    if (persist) workerCredInsert.run(hash, name, root ?? null, expiresAt);
+  })());
+  if (persist) persistedWorkers.push({ hash: Buffer.from(hash, "hex"), name, expiresAt, root });
   return t;
 }
 
-export function revokeWorkerToken(token: string): void { workerTokens.delete(token); }
+/** How many worker tokens are live, so a test can prove they do not accumulate. */
+export function workerTokenCount(): number { return workerTokens.size; }
+
+export function revokeWorkerToken(token: string): void {
+  workerTokens.delete(token);
+  const hash = hashToken(token);
+  durably(() => workerCredDeleteByHash.run(hash));
+  const h = Buffer.from(hash, "hex");
+  forgetPersistedWorkers((p) => p.hash.equals(h));
+}
 
 /** Every credential of `name` but this one: a start that won its name keeps
  *  exactly one, whatever it found on the way. */
 export function revokeWorkerTokensExcept(name: string, keep: string): void {
   for (const [t, w] of workerTokens) if (w.name === name && t !== keep) workerTokens.delete(t);
+  const keepHash = hashToken(keep);
+  const h = Buffer.from(keepHash, "hex");
+  durably(() => workerCredDeleteOthers.run(name, keepHash));
+  forgetPersistedWorkers((p) => p.name === name && !p.hash.equals(h));
 }
 
 /** The token a worker's environment was given, so a test can prove revocation. */
@@ -412,22 +659,58 @@ export function workerTokenOf(name: string): string | undefined {
   return undefined;
 }
 
+/** Whether this exact credential is still one this server accepts. A start
+ *  that holds one for a tab's next start asks here before handing it over: a
+ *  turn that ended revoked it, and a tab started on it would be refused. */
+export function workerTokenLive(token: string): boolean {
+  const w = workerTokens.get(token) ?? restoredWorkerFor(token);
+  return !!w && w.expiresAt > Date.now();
+}
+
 export function revokeWorkerTokens(name: string): void {
   for (const [t, w] of workerTokens) if (w.name === name) workerTokens.delete(t);
+  durably(() => workerCredDeleteByName.run(name));
+  forgetPersistedWorkers((p) => p.name === name);
+}
+
+/* A seat's short-lived credential for Flight plan verbs only. A seat pane that holds the machine token (adopted, started before the app minted its own) is
+   recognised by the kernel, over the seat-cred socket, and handed this: it reaches the plan routes as the seat, so Autopilot's No-go works without a name
+   anybody typed. In memory only, a minute long, good for one request, and `allowed` below keeps it to those routes. */
+const seatFlightTokens = new Map<string, { root: string; powers: "speak" | "nudge" | "assign"; expiresAt: number }>();
+export function mintSeatFlightToken(root: string, powers: "speak" | "nudge" | "assign", ttlMs = 60_000): string {
+  const now = Date.now();
+  for (const [k, v] of seatFlightTokens) if (v.expiresAt <= now) seatFlightTokens.delete(k);
+  const t = `sf_${randomBytes(24).toString("base64url")}`;
+  seatFlightTokens.set(t, { root, powers, expiresAt: now + ttlMs });
+  return t;
 }
 
 export function mintSeatToken(root: string, powers: "speak" | "nudge" | "assign"): string {
+  if (onMintRoot) { try { onMintRoot(root); } catch { /* a hook never fails a mint */ } }
   const t = `st_${randomBytes(24).toString("base64url")}`;
   seatTokens.set(t, { root, powers });
+  const hashHex = hashToken(t);
+  durably(() => seatCredInsert.run(hashHex, root, powers));
+  persistedSeats.push({ hash: Buffer.from(hashHex, "hex"), root, powers });
   return t;
 }
 
 export function revokeSeatTokens(root: string): void {
   for (const [t, v] of seatTokens) if (v.root === root) seatTokens.delete(t);
+  durably(() => seatCredDeleteByRoot.run(root));
+  persistedSeats = persistedSeats.filter((p) => p.root !== root);
 }
 
 /** How many are live, so a test can prove they do not accumulate. */
 export function seatTokenCount(): number { return seatTokens.size; }
+
+/** Whether the server still holds a credential for this project's chair. A
+ *  window opened before a restart holds a string this map no longer has, and
+ *  that seat answers `unauthorized` — the self-check asks here. */
+export function seatTokenLive(root: string): boolean {
+  for (const v of seatTokens.values()) if (v.root === root) return true;
+  return persistedSeats.some((p) => p.root === root);
+}
 
 /**
  * What a seat may ask for, by the powers its chair was given.
@@ -450,7 +733,7 @@ const SEAT_POST_NUDGE = new Set([
    the reach it grants: enlisting decides WHICH panes on this machine the seat's
    other verbs can touch, including ones in projects that are none of its
    business. Deciding who exists is the assigning half of the job. */
-const SEAT_POST_ASSIGN = new Set(["/agents/named/start", "/agents/named/stop", "/agents/named/keys", "/agents/named/enlist", "/agents/named/own"]);
+const SEAT_POST_ASSIGN = new Set(["/agents/named/start", "/agents/named/stop", "/agents/named/keys", "/agents/named/enlist", "/agents/named/own", "/agents/named/recwd"]);
 
 /*
  * The coordinator's part in a flight plan: write the plan, answer its findings,
@@ -463,19 +746,28 @@ const SEAT_POST_ASSIGN = new Set(["/agents/named/start", "/agents/named/stop", "
  * so they also need the power to assign.
  */
 const FP_PLAN = /^\/flight-plan\/plans\/fp_[0-9a-f]{16}$/;
-const FP_PLAN_VERB = /^\/flight-plan\/plans\/fp_[0-9a-f]{16}\/(preflight|no-go|ask|report|integrate-check)$/;
+const FP_PLAN_VERB = /^\/flight-plan\/plans\/fp_[0-9a-f]{16}\/(preflight|no-go|ask|report|integrate-check|land)$/;
 /* A seat acting on a pull request through Polaris: the same acts the person's click makes. A sync or a send leaves the app, so the route turns it into a request the person answers; the route also holds the root to the seat's own project. */
 const POLARIS_ACT = /^\/polaris\/items\/\d{1,9}\/(action|beacon\/(send|edit|discard))$/;
 /* `worker` links a plan to a worker the seat started, which the seat may only do with the power to assign one. */
+/* The local merge: the person, or the project's seat with the power to assign. A worker's credential never reaches it. */
+const FP_PLAN_MERGE = /^\/flight-plan\/plans\/fp_[0-9a-f]{16}\/merge-local$/;
 const FP_PLAN_STARTS = /^\/flight-plan\/plans\/fp_[0-9a-f]{16}\/(go|launch|worker)$/;
 const FP_FINDING = /^\/flight-plan\/runs\/pf_[0-9a-f]{16}\/findings\/F\d{1,3}$/;
 
 export function seatAllows(powers: "speak" | "nudge" | "assign", method: string, pathname: string, seatRoot?: string, trustedAt?: (root: string) => boolean): boolean {
   if (method === "GET" || method === "HEAD") return !FULL_GET.has(pathname);
   if (method === "PATCH") return FP_PLAN.test(pathname);
+  /* The flow's own gate (flowaccess.ts) decides whether the seat may write: it
+     needs the project's `flow.agentEdit` and the control level. This wall only
+     lets the request reach that gate; the route refuses with its sentence. */
+  if ((method === "PUT" || method === "DELETE") && pathname === "/flow") return true;
   if (method !== "POST") return false;
-  if (pathname === "/flight-plan/plans" || pathname === "/flight-plan/hold" || FP_PLAN_VERB.test(pathname) || FP_FINDING.test(pathname)) return true;
-  if (FP_PLAN_STARTS.test(pathname) || POLARIS_ACT.test(pathname)) return powers === "assign";
+  if (pathname === "/flight-plan/plans" || pathname === "/flight-plan/hold" || FP_PLAN_VERB.test(pathname)) return true;
+  // Answering a finding can lift the one thing standing between a blocker and
+  // an unattended Go in Autopilot, so it needs the power to assign, same as
+  // the Go and Launch it unblocks.
+  if (FP_PLAN_STARTS.test(pathname) || FP_PLAN_MERGE.test(pathname) || POLARIS_ACT.test(pathname) || FP_FINDING.test(pathname)) return powers === "assign";
   /* The person's switch for THIS project (agents.changeWithoutAsking, held per
      root in agentTrust.ts) hands the chair its own project's policy: the route
      then takes the door's trusted path and writes only that root (index.ts).
@@ -489,7 +781,7 @@ export function seatAllows(powers: "speak" | "nudge" | "assign", method: string,
      read, which is a change — but it is a change to the seat's own post, and a
      chair that may not read its mail is not a chair. */
   if (pathname === "/seat/say" || pathname === "/seat/recall"
-    || pathname === "/seat/report" || pathname === "/seat/inbox"
+    || pathname === "/seat/report" || pathname === "/seat/inbox" || pathname === "/seat/can"
     /* Asking the person for a decision is the opposite of acting without one:
        a seat with no powers at all must still be able to say "this needs you",
        or the only way it has to escalate is to do the thing itself. */
@@ -502,6 +794,49 @@ export function seatAllows(powers: "speak" | "nudge" | "assign", method: string,
   if (powers === "speak") return false;
   if (SEAT_POST_NUDGE.has(pathname)) return true;
   return powers === "assign" && SEAT_POST_ASSIGN.has(pathname);
+}
+
+/**
+ * The project a confined caller speaks for — a seat's chair or a worker's own
+ * start — never the body's `root`. Undefined for an unconfined caller (the
+ * machine token, a plugin, the understudy) and for a seat or worker whose
+ * project this server could not resolve at mint time: both read the same as
+ * "no project", not as "every project".
+ */
+export function confinedOwnRoot(caller: Caller | null | undefined): string | undefined {
+  if (caller?.principal === "seat") return caller.seat?.root;
+  if (caller?.principal === "worker") return caller.workerRoot;
+  return undefined;
+}
+
+/** Whether this caller is confined to one project at all — a seat or a
+ *  worker — whether or not that project could be resolved. */
+export function isConfinedCaller(caller: Caller | null | undefined): boolean {
+  return caller?.principal === "seat" || caller?.principal === "worker";
+}
+
+/*
+ * A worker's own `full` scope, narrowed by the acts only a person or a seat
+ * may decide: starting, stopping or prompting another agent, and Go, No-go,
+ * Launch or resolving a flight-plan finding. Everything a worker's role
+ * legitimately calls today — its own status, its report and inbox, the
+ * browser relay, a read of its own project's settings or rules — carries no
+ * special case here because none of it is in this deny list; `allowed`
+ * falls through to the worker's `full` scope for all of it, as it always
+ * did. Deny-by-exception, not deny-by-default: the two concrete exploits this
+ * closes are both acts that decide what ANOTHER agent or ANOTHER project's
+ * plan does next, never a worker's own turn.
+ */
+const WORKER_DENIED_POST = new Set([
+  "/agents/named/start", "/agents/named/stop", "/agents/named/prompt",
+  "/agents/named/broadcast", "/agents/named/enlist", "/agents/named/own", "/agents/named/keys", "/agents/named/recwd",
+]);
+const FP_WORKER_NO_GO = /^\/flight-plan\/plans\/fp_[0-9a-f]{16}\/no-go$/;
+function workerAllows(method: string, pathname: string): boolean {
+  if (method === "POST" && (
+    WORKER_DENIED_POST.has(pathname) || FP_PLAN_STARTS.test(pathname) || FP_FINDING.test(pathname) || FP_WORKER_NO_GO.test(pathname)
+  )) return false;
+  return scopeAllows("full", scopeNeeded(method, pathname));
 }
 
 export function mintUnderstudyToken(): string {
@@ -568,15 +903,31 @@ export function callerFor(req: Request, url: URL, token: string): Caller | null 
   }
   const seat = seatTokens.get(provided);
   if (seat) return { kind: "machine", scope: "full", principal: "seat", seat };
-  const worker = workerTokens.get(provided);
+  const flying = seatFlightTokens.get(provided);
+  if (flying) {
+    // One use: the credential is spent by the first request that presents it, so a copy read from a process list or a log cannot be replayed.
+    seatFlightTokens.delete(provided);
+    if (flying.expiresAt <= Date.now()) return null;
+    return { kind: "machine", scope: "full", principal: "seat", seat: { root: flying.root, powers: flying.powers }, flightOnly: true };
+  }
+  // Minted before a restart: gone from `seatTokens`, still a row in the db.
+  const persisted = persistedSeatFor(provided);
+  if (persisted) return { kind: "machine", scope: "full", principal: "seat", seat: persisted };
+  const worker = workerTokens.get(provided) ?? restoredWorkerFor(provided);
   if (worker) {
     // An expired credential is not a credential: drop it and answer null so a
     // token that outlived its turn cannot become the person again.
     if (worker.expiresAt <= Date.now()) {
-      workerTokens.delete(provided);
+      revokeWorkerToken(provided);
       return null;
     }
-    return { kind: "machine", scope: "full", principal: "worker", worker: worker.name };
+    // `seatcred.ts` mints under this prefix for a browser CLI call, never a
+    // shell: narrower than every other worker token, not equal to one, so
+    // `allowed` must be able to tell the two apart by more than the name.
+    if (worker.name.startsWith("seat-cred:")) {
+      return { kind: "machine", scope: "full", principal: "seat-browser", worker: worker.name };
+    }
+    return { kind: "machine", scope: "full", principal: "worker", worker: worker.name, workerRoot: worker.root };
   }
   const plugin = pluginTokens.get(provided);
   if (plugin) return { kind: "plugin", scope: plugin.scope, plugin: plugin.name };
@@ -797,7 +1148,18 @@ export function allowed(caller: Caller, method: string, pathname: string, truste
   /* Same rule, same reason: a separate function, never an `||` with the scope
      check — the seat's token says `full` so its reads work, and an `||` here
      would hand back every write this exists to withhold. */
+  if (caller.principal === "seat" && caller.flightOnly && !(caller.seat && method === "POST" && (FP_PLAN_VERB.test(pathname) || FP_PLAN_STARTS.test(pathname)))) return false;
   if (caller.principal === "seat") return seatAllows(caller.seat?.powers ?? "speak", method, pathname, caller.seat?.root, trustedAt);
+  // A worker's credential is `full` for its reads, and the local merge is not for it: the person or the project's seat only.
+  if (caller.principal === "worker" && FP_PLAN_MERGE.test(pathname)) return false;
+  /* Same rule, same reason: a worker's `full` scope is narrowed by name, not
+     widened — see `workerAllows`. */
+  if (caller.principal === "worker") return workerAllows(method, pathname);
+  /* Same rule, same reason: this credential was minted for a browser CLI
+     call over the seat-cred socket, never a shell or a settings write — the
+     only routes it may ever reach are the `/browser/*` relay POSTs those
+     CLIs call, whatever `full` would otherwise open. */
+  if (caller.principal === "seat-browser") return method === "POST" && pathname.startsWith("/browser/");
   // A plugin's own channel: its panels, its settings, its event queue, its
   // notes. Open at any scope because drawing is not a power over anything
   // else — what it may draw was declared in its manifest and approved, and

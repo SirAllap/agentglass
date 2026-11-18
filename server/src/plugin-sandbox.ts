@@ -21,6 +21,7 @@ import {
   NEVER_MOUNTABLE, NEVER_MOUNTABLE_ROOTS, PERSISTENCE_WRITE_DIRS, PERSISTENCE_WRITE_FILES, type PluginSandbox,
 } from "../../shared/pluginSandbox.ts";
 import { seccompProgram } from "./seccomp.ts";
+import { spawnSyncAs } from "./loopwatch.ts";
 
 export type SandboxProbe =
   | { ok: true; bwrap: string }
@@ -78,7 +79,7 @@ function runProbe(): SandboxProbe {
   const bwrap = found.path;
   let result;
   try {
-    result = Bun.spawnSync([bwrap, "--unshare-all", "--die-with-parent", "--ro-bind", "/", "/", "true"], {
+    result = spawnSyncAs("bwrap probe", [bwrap, "--unshare-all", "--die-with-parent", "--ro-bind", "/", "/", "true"], {
       stdout: "ignore",
       stderr: "pipe",
       timeout: 3000,
@@ -145,7 +146,7 @@ function runLandlockProbe(): LandlockProbe {
   }
   const run = (rules: string[]) => {
     try {
-      return Bun.spawnSync([setpriv, "--landlock-access", "fs", ...rules, "--", "/usr/bin/true"], { stdout: "ignore", stderr: "pipe", timeout: 3000 });
+      return spawnSyncAs("landlock probe", [setpriv, "--landlock-access", "fs", ...rules, "--", "/usr/bin/true"], { stdout: "ignore", stderr: "pipe", timeout: 3000 });
     } catch {
       return null;
     }
@@ -237,7 +238,7 @@ function runScopeProbe(): ScopeProbe {
     if (!python.startsWith("/usr/")) return { ok: false, detail: "python3 is not installed under /usr" };
   }
   let r: ReturnType<typeof Bun.spawnSync> | null = null;
-  try { r = Bun.spawnSync([...scopeArgv(python), "/usr/bin/true"], { stdout: "ignore", stderr: "ignore", timeout: 3000 }); } catch { /* reported below */ }
+  try { r = spawnSyncAs("scope probe", [...scopeArgv(python), "/usr/bin/true"], { stdout: "ignore", stderr: "ignore", timeout: 3000 }); } catch { /* reported below */ }
   if (r?.exitedDueToTimeout) return { ok: false, detail: "python3 did not finish within 3s", timedOut: true };
   if (r?.success) return { ok: true, python };
   if (r?.exitCode === 3) return { ok: false, detail: "this kernel has no Landlock abstract-socket scoping (Linux 6.12+)" };
@@ -297,7 +298,7 @@ function runSeccompProbe(): SeccompProbe {
   if (fd === null) return { ok: false, detail: "could not read the filter back" };
   let r;
   try {
-    r = Bun.spawnSync([box.bwrap, "--unshare-all", "--die-with-parent", "--ro-bind", "/", "/", "--proc", "/proc", "--seccomp", "3", "cat", "/proc/self/status"], {
+    r = spawnSyncAs("sandbox spawn", [box.bwrap, "--unshare-all", "--die-with-parent", "--ro-bind", "/", "/", "--proc", "/proc", "--seccomp", "3", "cat", "/proc/self/status"], {
       stdio: ["ignore", "pipe", "pipe", fd], timeout: 3000,
     });
   } catch { /* reported below */ } finally {

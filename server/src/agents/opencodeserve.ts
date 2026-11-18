@@ -20,13 +20,30 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { lockLoosened, openCodeVersion } from "../agentops.ts";
+import { OWNER_VAR } from "../reaper.ts";
+import { scopeArgv, systemdRun, trackScope, type ScopeSettings } from "../scopes.ts";
 import type { Turn } from "./headless.ts";
 
-export interface Serve { url: string; password: string; pids: number[] }
+export interface Serve { url: string; password: string; pids: number[]; unit: string | null }
 type Rule = { permission: string; pattern: string; action: string };
 type Opened = { ok: true; serve: Serve } | { ok: false; error: string };
 
 const auth = (pw: string) => ({ authorization: `Basic ${Buffer.from(`opencode:${pw}`).toString("base64")}` });
+
+/** The argv of the private server, in its own transient scope when this machine
+ *  has one. Exported so the wrapping is a test rather than a line to keep in step. */
+export function serveLaunch(
+  bin: string,
+  env: Record<string, string | undefined> = process.env,
+  o: { run?: string | null; unit?: string; settings?: ScopeSettings; slice?: string | null } = {},
+): { argv: string[]; unit: string | null } {
+  return scopeArgv([bin, "serve", "--hostname", "127.0.0.1", "--port", "0"], {
+    run: o.run === undefined ? systemdRun(env) : o.run,
+    ...(o.unit !== undefined ? { unit: o.unit } : null),
+    ...(o.settings !== undefined ? { settings: o.settings } : null),
+    ...(o.slice !== undefined ? { slice: o.slice } : null),
+  });
+}
 
 /** SIGTERM to a pid this module recorded, and only while it is still an OpenCode `serve`
  *  (a pid can be reused). Never a pattern, never a group. */
@@ -62,8 +79,11 @@ export function serveRules(body: unknown, agent: string): Rule[] | null {
   return rules.some((r) => r.permission === "bash") ? rules : null;
 }
 
-/** Start the serve with the lock, ask it, and keep it only if the lock holds. */
-export async function startLockedServe(bin: string, cwd: string, env: Record<string, string>, timeoutMs = 20_000): Promise<Opened> {
+/** Start the serve with the lock, ask it, and keep it only if the lock holds.
+ *  `owner` is the worker whose turn this serve runs: it is handed to the process
+ *  as `AGX_OWNER`, which is what lets a scope left by a dead server say whether
+ *  the worker in it is still working (scopes.ts). */
+export async function startLockedServe(bin: string, cwd: string, env: Record<string, string>, timeoutMs = 20_000, owner = ""): Promise<Opened> {
   const lock = env.OPENCODE_CONFIG_CONTENT;
   if (!lock) return { ok: false, error: "the role carries no OpenCode lock" };
   let agent: string;
@@ -72,12 +92,20 @@ export async function startLockedServe(bin: string, cwd: string, env: Record<str
   const dir = mkdtempSync(join(tmpdir(), "agx-oc-serve-"));
   const file = join(dir, "serve.out");
   const pids: number[] = [];
-  const fail = (why: string): Opened => { stopServe({ url: "", password, pids }); return { ok: false, error: `the private OpenCode server could not vouch for the lock: ${why}` }; };
+  let unit: string | null = null;
+  const fail = (why: string): Opened => { stopServe({ url: "", password, pids, unit }); return { ok: false, error: `the private OpenCode server could not vouch for the lock: ${why}` }; };
   try {
     // This app's own credentials stay out of the server, as the wrapper keeps them out of the window.
     const { AGENTGLASS_TOKEN: _t, AGENTGLASS_SEAT: _s, ...base } = process.env;
-    const proc = Bun.spawn([bin, "serve", "--hostname", "127.0.0.1", "--port", "0"], {
-      cwd, env: { ...base, ...env, OPENCODE_SERVER_PASSWORD: password } as Record<string, string>,
+    const childEnv = { ...base, ...env, OPENCODE_SERVER_PASSWORD: password, ...(owner ? { [OWNER_VAR]: owner } : null) } as Record<string, string>;
+    // A worker's long-lived private server gets its own scope: it outlives the
+    // turn by design, and it is the child that would otherwise grow inside the
+    // app's cgroup (scopes.ts).
+    const launch = serveLaunch(bin, childEnv);
+    unit = launch.unit;
+    trackScope(launch.unit);
+    const proc = Bun.spawn(launch.argv, {
+      cwd, env: childEnv,
       stdin: "ignore", stdout: Bun.file(file), stderr: "ignore",
     });
     proc.unref();
@@ -117,7 +145,7 @@ export async function startLockedServe(bin: string, cwd: string, env: Record<str
     if (!rules) return fail(`it lists no resolved shell rules for its ${agent} agent`);
     const hit = lockLoosened(rules, lock);
     if (hit) return fail(hit.rule ? `\`${hit.subject}\` is allowed by the ${hit.rule.permission} rule \`${hit.rule.pattern}\`: ${hit.rule.action}` : `\`${hit.subject}\` is not denied by any rule`);
-    return { ok: true, serve: { url, password, pids } };
+    return { ok: true, serve: { url, password, pids, unit: launch.unit } };
   } catch (e) {
     return fail(e instanceof Error ? e.message : "unknown error");
   } finally {
@@ -138,10 +166,10 @@ export async function needsServe(bin: string, cwd: string): Promise<boolean> {
  * in the server's. The wrapper stops the server by the recorded pids when the turn ends.
  * Any other engine, or an OpenCode that still has `debug agent`, passes through.
  */
-export async function guardTurn(engine: string, bin: string, cwd: string, turn: Extract<Turn, { ok: true }>):
+export async function guardTurn(engine: string, bin: string, cwd: string, turn: Extract<Turn, { ok: true }>, owner = ""):
   Promise<{ ok: true; turn: Extract<Turn, { ok: true }>; serve: Serve | null } | { ok: false; error: string }> {
   if (engine !== "opencode" || !(await needsServe(bin, cwd))) return { ok: true, turn, serve: null };
-  const opened = await startLockedServe(bin, cwd, turn.env);
+  const opened = await startLockedServe(bin, cwd, turn.env, 20_000, owner);
   if (!opened.ok) return opened;
   const { serve } = opened;
   const at = turn.argv.indexOf("run");

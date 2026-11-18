@@ -21,6 +21,7 @@ import { readUsageLimits } from "./opencodeapi.ts";
 import { singleFlight } from "./singleflight.ts";
 import { hasUsageKey, usageKey } from "./usagekey.ts";
 import { usageRead } from "./usageevents.ts";
+import { runChild } from "./broker/brokerRun.ts";
 
 /** The workspace console: the signed-in page that carries the Go tab. */
 export const PAGE_URL = "https://opencode.ai/workspace";
@@ -160,18 +161,15 @@ type CliRun = { code: number; out: string; err: string } | { error: string };
 
 async function runCli(cli: string, args: string[]): Promise<CliRun> {
   try {
-    const proc = Bun.spawn([cli, ...args], {
-      stdout: "pipe",
-      stderr: "pipe",
-      timeout: CLI_TIMEOUT_MS,
+    // Through the spawn broker: a fork of the server stalls every request.
+    const r = await runChild([cli, ...args], {
+      timeoutMs: CLI_TIMEOUT_MS,
       // The CLI's own token file is the machine token; an inherited scoped one
       // could lack the browser scope and make a working setup look broken.
       env: { ...process.env, AGENTGLASS_TOKEN: "" },
     });
-    const out = new Response(proc.stdout).text();
-    const err = new Response(proc.stderr).text();
-    const code = await proc.exited;
-    return { code, out: await out, err: await err };
+    if (r.code === null && !r.timedOut && !r.signal && r.error) return { error: r.error };
+    return { code: r.code ?? 1, out: r.stdout, err: r.stderr };
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };
   }
@@ -454,6 +452,14 @@ function storedReading(now: number, cal: Calibration | null): ProviderUsage | nu
   };
 }
 
+/** `opencodeUsage` for a caller that can wait: the engine's stats are read first, beside the loop, in the one
+ *  case the row falls back on them (no recorded turn and no console reading). */
+export async function opencodeUsageFresh(now = Date.now()): Promise<ProviderUsage> {
+  backfillOnce(now);
+  if (!loadStore().steps.length && !calibrationRow()) await openCodeDetailFresh(30);
+  return opencodeUsage(now);
+}
+
 /** The local row: rolling windows from what this machine's turns spent. */
 export function opencodeUsage(now = Date.now()): ProviderUsage {
   backfillOnce(now);
@@ -512,7 +518,7 @@ export async function refreshOpenCodeUsage(force = false): Promise<ProviderUsage
 /** Test seam: forget the cached reading, as a restart does; the file is re-read. */
 export function __resetOpenCodeUsageCache(): void { cache = null; saved = undefined; }
 /** Test seam: forget the recorded steps too. */
-export function __resetOpenCodeSpend(): void { store = null; cache = null; saved = undefined; stats = null; }
+export function __resetOpenCodeSpend(): void { store = null; cache = null; saved = undefined; stats = null; statsTriedAt = 0; }
 
 // ── per-model detail, from the engine's own stats ──────────────────────
 //
@@ -547,20 +553,68 @@ function parseStats(raw: string): OpenCodeDetail | null {
   return models.length || daily.length ? out : null;
 }
 
+/** The `opencode stats` run in flight, so two askers share one child. */
+let statsRefresh: Promise<OpenCodeDetail | null> | null = null;
+let statsTriedAt = 0;
+/** After a run that gave nothing, how long before the cached path starts another. */
+export const STATS_RETRY_MS = 60_000;
+export const STATS_LIMIT_MS = 8_000;
+
+/**
+ * Run `opencode stats` beside the server's loop and keep what it says.
+ *
+ * It was `Bun.spawnSync` with an 8 s limit, reached from `GET
+ * /usage/opencode/detail` and, through `storedReading`, from the usage row
+ * the dashboard polls: on the server's only thread, so a slow engine start
+ * (cold disk, a large session store) froze every panel and the event stream
+ * for up to 8 s. Same class as the 20 s `GET /disk/grep` stalls measured on
+ * 2026-11-11, which were a blocking spawn too.
+ */
+export function refreshOpenCodeDetail(days = 30): Promise<OpenCodeDetail | null> {
+  if (statsRefresh) return statsRefresh;
+  statsTriedAt = Date.now();
+  statsRefresh = (async (): Promise<OpenCodeDetail | null> => {
+    if (process.env.AGENTGLASS_OPENCODE_STATS) return openCodeDetail(days, true);
+    const bin = Bun.which("opencode");
+    if (!bin) return null;
+    let raw = "";
+    let code = 1;
+    // Through the spawn broker: a fork of the server stalls every request.
+    const r = await runChild([bin, "stats", "--days", String(days), "--models", "--cost", "--json", "--standalone"], { timeoutMs: STATS_LIMIT_MS, read: true });
+    if (r.error && r.code === null) return null;
+    raw = r.stdout; code = r.code ?? 1;
+    const detail = code === 0 && raw ? parseStats(raw) : null;
+    if (detail) stats = { at: Date.now(), detail };
+    return detail;
+  })().finally(() => { statsRefresh = null; });
+  return statsRefresh;
+}
+
+/** What the old blocking call answered, awaited: the kept reading while it is fresh, else a new run, else null. */
+export async function openCodeDetailFresh(days = 30, force = false): Promise<OpenCodeDetail | null> {
+  if (!force && stats && Date.now() - stats.at < STATS_TTL_MS) return stats.detail;
+  return refreshOpenCodeDetail(days);
+}
+
+/**
+ * The kept reading, without waiting: for the callers that cannot await.
+ *
+ * Never starts the engine on the caller's thread. With nothing fresh it
+ * answers null and starts a run in the background (at most one per
+ * STATS_RETRY_MS after a run that gave nothing), so the next ask has it. The
+ * routes go through `openCodeDetailFresh` / `opencodeUsageFresh` first, which
+ * is why they still answer what they did. Ceiling: a synchronous caller that
+ * is the very first to ask sees null once. A fixture file is still read here.
+ */
 export function openCodeDetail(days = 30, force = false): OpenCodeDetail | null {
   if (!force && stats && Date.now() - stats.at < STATS_TTL_MS) return stats.detail;
   const fixture = process.env.AGENTGLASS_OPENCODE_STATS;
+  if (!fixture) {
+    if (Date.now() - statsTriedAt >= STATS_RETRY_MS) void refreshOpenCodeDetail(days);
+    return null;
+  }
   let raw: string | null = null;
-  try {
-    if (fixture) raw = readFileSync(fixture, "utf8");
-    else {
-      const bin = Bun.which("opencode");
-      if (bin) {
-        const r = Bun.spawnSync([bin, "stats", "--days", String(days), "--models", "--cost", "--json", "--standalone"], { timeout: 8_000 });
-        if (r.exitCode === 0) raw = r.stdout.toString();
-      }
-    }
-  } catch { raw = null; }
+  try { raw = readFileSync(fixture, "utf8"); } catch { raw = null; }
   const detail = raw ? parseStats(raw) : null;
   if (!detail) return null;
   stats = { at: Date.now(), detail };

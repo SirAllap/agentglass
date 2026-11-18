@@ -238,7 +238,7 @@ for (const flavor of ["cloud", "datacenter"] as const) {
         fake.state.projectComponents.ACME = [];
         expect(await S.spacesEdit({ add: "ORBIT" })).toMatchObject({ ok: true });
         expect(await S.spacesEdit({ add: "ACME" })).toMatchObject({ ok: true });
-        fake.fail({ path: "/project/ACME/components", status: 500 });
+        fake.fail({ path: searchPath, status: 500, times: 1 });
         const bad = await S.jiraSpaceTreeStored("ACME", false, false);
         const good = await S.jiraSpaceTreeStored("ORBIT", false, false);
         expect(bad).toEqual({ ok: false, error: "Could not reach Jira" });
@@ -261,7 +261,7 @@ for (const flavor of ["cloud", "datacenter"] as const) {
 
       test("a failure with nothing held has no staleAt", async () => {
         orbit(fake);
-        fake.fail({ path: "/project/ORBIT/components", status: 500 });
+        fake.fail({ path: searchPath, status: 500 });
         expect(await S.jiraSpaceTreeStored("ORBIT", false, false)).toEqual({ ok: false, error: "Could not reach Jira" });
       });
 
@@ -359,13 +359,13 @@ for (const flavor of ["cloud", "datacenter"] as const) {
 
       test("space, component, no component, epic, epic in a component and no epic each read their own cards", async () => {
         orbit(fake);
-        // One epic spanning three components: the whole epic is every card, a component's share is only its own.
+        // One epic spanning three components: the epic is every card, opened from any component, because a card with no component or another one is still the epic's.
         fake.state.issues["ORBIT-18"] = issue("ORBIT-18", "Task", { parentKey: "ORBIT-1", components: ["Docs"] });
-        expect(await keys("scope:ORBIT")).toEqual(["ORBIT-10", "ORBIT-11", "ORBIT-12", "ORBIT-13", "ORBIT-14", "ORBIT-15", "ORBIT-16", "ORBIT-17", "ORBIT-18"].sort());
+        expect(await keys("scope:ORBIT")).toEqual(["ORBIT-10", "ORBIT-11", "ORBIT-12", "ORBIT-13", "ORBIT-14", "ORBIT-15", "ORBIT-17", "ORBIT-18"].sort());
         expect(await keys("scope:ORBIT|c:Web")).toEqual(["ORBIT-10", "ORBIT-13"]);
         expect(await keys("scope:ORBIT|c:")).toEqual(["ORBIT-12", "ORBIT-14"]);
         expect(await keys("scope:ORBIT|e:ORBIT-1")).toEqual(["ORBIT-10", "ORBIT-11", "ORBIT-17", "ORBIT-18"]);
-        expect(await keys("scope:ORBIT|c:Api|e:ORBIT-1")).toEqual(["ORBIT-10", "ORBIT-11", "ORBIT-17"]);
+        expect(await keys("scope:ORBIT|c:Api|e:ORBIT-1")).toEqual(["ORBIT-10", "ORBIT-11", "ORBIT-17", "ORBIT-18"]);
         expect(await keys("scope:ORBIT|c:Web|n")).toEqual(["ORBIT-13"]);
       });
 

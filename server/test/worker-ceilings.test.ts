@@ -168,7 +168,7 @@ describe("the timer itself", () => {
 
   test("the source asks for one timeout and no interval", async () => {
     const src = readFileSync(new URL("../src/agents/ceilings.ts", import.meta.url), "utf8").split("\n").filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join("\n");
-    expect(src.match(/setTimeout\(/g)?.length).toBe(1);
+    expect(src.match(/setTimeoutAs\(/g)?.length).toBe(1);
     expect(src).not.toMatch(/setInterval/);
   });
 
@@ -236,6 +236,33 @@ describe("a name that changes hands", () => {
   });
 });
 
+describe("a stop that tmux never answered", () => {
+  test("is not a kill: no 124, no report, the row stays live, and the ceiling tries again", async () => {
+    const a = row("w-tmux-silent", "%900004", Date.now());
+    prepareRun("w-tmux-silent", "do the thing", "none");
+    const woken: string[] = [];
+    let tries = 0;
+    // The first stop finds tmux silent; the second one answers and stops it.
+    const kill = async (r: typeof a) => { tries++; if (tries === 1) return null; await AO.stopAgent(r, Date.now(), false); return []; };
+    arm(a, { deadline: Date.now() + 100, retryMs: 400, kill, limitMinutes: 1, files: runFiles("w-tmux-silent"), ended: () => {}, wake: async (_, n) => { woken.push(n); return true; } });
+    await until(() => tries === 1);
+    await Bun.sleep(50);
+    const live = AO.agentNamed("w-tmux-silent")!;
+    expect(live.exitCode).toBeUndefined();
+    expect(live.endedAt).toBeNull();
+    expect(woken).toEqual([]);
+    expect(unreadReports(ROOT).filter((r) => r.agent === "w-tmux-silent")).toEqual([]);
+    expect(armedDeadline("w-tmux-silent")).not.toBeNull();
+    // The next look stops it: only now is it a timeout, said once.
+    const done = await until(() => { const r = AO.agentNamed("w-tmux-silent"); return r?.exitCode !== undefined ? r : undefined; });
+    expect(tries).toBe(2);
+    expect(done.exitCode).toBe(124);
+    expect(done.endedAt).not.toBeNull();
+    await until(() => woken.length > 0);
+    expect(woken).toEqual(["w-tmux-silent"]);
+  });
+});
+
 describe("a server restart", () => {
   test("never stops a worker by the ids it had before: the row says its ceiling was lost", async () => {
     if (!have) return;
@@ -274,5 +301,13 @@ describe("a server restart", () => {
     expect(AO.agentNamed("w-old")).toMatchObject({ exitCode: 1 });
     expect((AO.agentNamed("w-old")!.startedBy as { engine: string }).engine).toBe("claude");
     expect(unreadReports(ROOT).filter((r) => r.agent === "w-old")).toEqual([]);
+  });
+});
+
+describe("the kill list", () => {
+  test("never holds this process or anything above it", async () => {
+    const { spareSelf } = await import("../src/agents/ceilings.ts");
+    const pairs: [number, number][] = [[10, 1], [20, 10], [process.pid, 20], [process.pid + 1, process.pid]];
+    expect(spareSelf([10, 20, process.pid, process.pid + 1], pairs)).toEqual([process.pid + 1]);
   });
 });

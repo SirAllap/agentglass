@@ -79,6 +79,7 @@ describe("one card", () => {
       assignees: ["Ada Example"],
       people: [{ key: "acc-0001", name: "Ada Example", initials: "AE", avatar: "https://avatar.acme.example/acc-0001/48.png", me: true }],
       mine: true,
+      parent: { key: "ORBIT-1000", title: "Report improvements", type: "Epic" },
       created: Date.parse("2026-01-07T09:00:00.000Z"),
     });
   });
@@ -368,6 +369,46 @@ describe("a person's list", () => {
     expect(code).not.toMatch(/\btotal\b/);
     expect(code).not.toMatch(/\/rest\/api\/3\/priority(?!\/search)/);
     expect(code).not.toMatch(/\/rest\/api\/3\/search(?!\/jql)/);
+  });
+});
+
+describe("a parent's sub-tasks, the rows the list opens", () => {
+  const seed = (): void => {
+    const base = fake.state.issues["ORBIT-1043"]!;
+    fake.state.issues["ORBIT-1060"] = {
+      ...base, id: "20060", key: "ORBIT-1060", summary: "Retry the export", issueType: "Sub-task", parentKey: "ORBIT-1042",
+      dueDate: "2026-11-10", assignee: "acc-0002",
+    };
+  };
+
+  test("one bounded search for the parent, asking the fields a board row shows", async () => {
+    seed();
+    const r = await J.withStored((c) => J.childCards(c, "orbit-1042"));
+    expect(r.ok).toBe(true);
+    expect(r.data!.tasks.map((t) => [t.customId, t.title, t.issueType, t.due, t.parent?.key])).toEqual([
+      ["ORBIT-1060", "Retry the export", "Sub-task", "2026-11-10", "ORBIT-1042"],
+    ]);
+    // A child is a card, not the stub a card read carries: no issue read per child, and no old search.
+    expect(issueReads()).toBe(0);
+    expect(count("/search")).toBe(0);
+    const searches = fake.requests.filter((q) => q.path === "/search/jql");
+    expect(searches.length).toBe(1);
+    const body = searches[0]!.body as { jql: string; fields: string[] };
+    expect(body.jql).toBe("parent = ORBIT-1042 ORDER BY rank ASC");
+    expect(body.fields).toEqual(expect.arrayContaining(["assignee", "duedate", "issuetype", "parent", "customfield_10016", "customfield_10021"]));
+    expect(r.data!.truncated).toBe(false);
+  });
+
+  test("a parent with none is an empty answer, never an error", async () => {
+    expect(await J.withStored((c) => J.childCards(c, "ORBIT-1044"))).toMatchObject({ ok: true, data: { tasks: [], truncated: false } });
+    expect(count("/search/jql")).toBe(1);
+  });
+
+  test("something that is not a card id is refused with no request at all", async () => {
+    for (const bad of ["", "nope", "ORBIT", "ORBIT-"]) {
+      expect(await J.withStored((c) => J.childCards(c, bad))).toMatchObject({ ok: false, error: "That is not a Jira card id" });
+    }
+    expect(fake.requests.length).toBe(0);
   });
 });
 

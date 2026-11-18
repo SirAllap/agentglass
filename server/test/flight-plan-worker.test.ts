@@ -6,7 +6,7 @@
  * source, and the state of a link is a pure function.
  */
 import { describe, expect, test } from "bun:test";
-import { workerPhase } from "../src/flightPlan.ts";
+import { alreadyBuilding, workerPhase } from "../src/flightPlan.ts";
 
 const index = await Bun.file(new URL("../src/index.ts", import.meta.url)).text();
 const launch = (() => {
@@ -48,5 +48,24 @@ describe("Launch starts the builder its project's chain names", () => {
     expect(launch.indexOf("builderEngineFor(plan.root)")).toBeGreaterThan(-1);
     expect(launch.indexOf("builderEngineFor(plan.root)")).toBeLessThan(launch.indexOf("flightBase(plan.root)"));
     expect(launch).not.toContain("Launch only starts a Claude builder");
+  });
+});
+
+describe("Go and Launch never start a second builder", () => {
+  test("a ready or Go plan whose linked worker runs is refused with the worker's name", () => {
+    expect(alreadyBuilding({ state: "ready", worker: "fp-orbit-search" }, "working")).toBe("a worker is already building this plan: fp-orbit-search");
+    expect(alreadyBuilding({ state: "go", worker: "fp-orbit-search" }, "working")).toBe("a worker is already building this plan: fp-orbit-search");
+  });
+  test("an ended worker, no link, or a draft does not refuse", () => {
+    expect(alreadyBuilding({ state: "ready", worker: "fp-orbit-export" }, "ended")).toBeNull();
+    expect(alreadyBuilding({ state: "ready", worker: null }, null)).toBeNull();
+    expect(alreadyBuilding({ state: "draft", worker: "fp-orbit-search" }, "working")).toBeNull();
+  });
+  test("Launch and Go both ask before anything is cut", () => {
+    expect(launch).toContain("await linkedBuilder(plan)");
+    expect(launch.indexOf("await linkedBuilder(plan)")).toBeLessThan(launch.indexOf("flightBase(plan.root)"));
+    const go = index.indexOf('if (m[2] === "go") {\n          const busy = await linkedBuilder(plan);');
+    expect(go).toBeGreaterThan(-1);
+    expect(go).toBeLessThan(index.indexOf("FlightPlanStore.decide(plan.id, m[2]"));
   });
 });

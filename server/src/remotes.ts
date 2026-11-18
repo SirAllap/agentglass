@@ -176,7 +176,7 @@ export class Sessions {
     const proc = this.spawn(["gio", "mount", v.uri]);
     trackChild(proc, "gio mount");
     const id = crypto.randomUUID();
-    const s: Live = { proc, uri: v.uri, buf: "", answers: {}, code: null, pumped: false, lastAt: Date.now(), wake: null, asked: null, used: [], timer: setTimeout(() => this.end(id), this.ttlMs) };
+    const s: Live = { proc, uri: v.uri, buf: "", answers: {}, code: null, pumped: false, lastAt: Date.now(), wake: null, asked: null, used: [], timer: setTimeout(() => this.end(id), this.ttlMs) }; // loop-ok: ends one idle session
     this.live.set(id, s);
     void proc.exited.then((c) => { s.code = c; s.wake?.(); });
     void (async () => {

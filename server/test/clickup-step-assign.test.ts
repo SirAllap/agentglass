@@ -29,7 +29,7 @@ const server = Bun.serve({
     if (u.pathname === "/team") {
       return json({ teams: [{ id: "9001", members: [
         { user: { id: 7, username: "Ada Test", email: "ada@orbit.example" } },
-        { user: { id: 8, username: "Sam Rivera", email: "sam@orbit.example" } },
+        { user: { id: 8, username: "Sam Orbit", email: "sam@orbit.example" } },
       ] }] });
     }
     return json({ id: "t1", name: "a card", date_updated: "100", status: { status: "ready for deployment" }, assignees: [] });
@@ -80,7 +80,7 @@ describe("the saved row", () => {
   });
 
   test("each choice saves, reads back, and is replaced whole by the next", () => {
-    const pick = { who: "person", person: { id: 8, name: "Sam Rivera" } } as const;
+    const pick = { who: "person", person: { id: 8, name: "Sam Orbit" } } as const;
     expect(P.setClickupPrefs({ handoff: { assign: { who: "me" } } }).ok).toBe(true);
     expect(P.clickupPrefs().handoff.assign).toEqual({ who: "me" });
     expect(P.setClickupPrefs({ review: { assign: { who: "author" } } }).ok).toBe(false); // not a ClickUp choice any more
@@ -154,7 +154,7 @@ describe("what a press costs", () => {
 describe("the people a setting can name", () => {
   test("the workspace answer is one request cold and none warm, with you first", async () => {
     const a = await CU.workspaceMembers();
-    expect(a.ok && a.data?.members.map((m) => [m.name, !!m.me])).toEqual([["Ada Test", true], ["Sam Rivera", false]]);
+    expect(a.ok && a.data?.members.map((m) => [m.name, !!m.me])).toEqual([["Ada Test", true], ["Sam Orbit", false]]);
     expect(requests()).toEqual(["GET /team"]);
     seen = [];
     const b = await CU.workspaceMembers();

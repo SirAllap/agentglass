@@ -241,10 +241,25 @@ describe("what a Preflight costs", () => {
     expect(db.query(`SELECT COUNT(*) AS c FROM preflight_run`).get()).toEqual({ c: 0 });
   });
 
-  test("sizes=L leaves an M plan to a press on Run; the review count stops at 1 + secondLooks", () => {
-    Store.putSetting(APP, "flightPlan.preflight.sizes", "L");
-    expect(Flight.afterPlanText(plan({ size: "M" }), "t")).toBeNull();
-    Store.putSetting(APP, "flightPlan.preflight.sizes", "ML");
+  test("sizes=L refuses an M plan even when it is pressed; an L plan runs, and sizes=ML runs an M plan", async () => {
+    const STUB = new URL("./preflightStub.ts", import.meta.url).pathname;
+    Flight.__setPreflightDeps({ bin: [process.execPath, STUB], env: { STUB_REPLY: "No findings." } });
+    try {
+      Store.putSetting(APP, "flightPlan.preflight.sizes", "L");
+      expect(Flight.afterPlanText(plan({ size: "M" }), "t")).toBeNull();
+      const refused = Flight.preflightPlan(plan({ size: "M" }), "t");
+      expect(refused).toEqual({ ok: false, error: expect.stringContaining("flightPlan.preflight.sizes") });
+      // The same door the create path names: an M plan goes to a builder, not to a person who changes a setting.
+      if (refused.ok) throw new Error("an M plan should be refused");
+      expect(refused.error).toContain("goes straight to a builder: `agentglass-agent start <name> --cwd <checkout> --role builder`");
+      const l = Flight.preflightPlan(plan({ size: "L" }), "t");
+      if (!l.ok) throw new Error(l.error);
+      await l.done;
+      Store.putSetting(APP, "flightPlan.preflight.sizes", "ML");
+      const m = Flight.preflightPlan(plan({ size: "M" }), "t");
+      if (!m.ok) throw new Error(m.error);
+      await m.done;
+    } finally { Flight.__setPreflightDeps(null); }
     expect(Flight.autoRunsMax()).toBe(2);
     Store.putSetting(APP, "flightPlan.preflight.secondLooks", 0);
     expect(Flight.autoRunsMax()).toBe(1);
@@ -302,7 +317,7 @@ describe("the builder never", () => {
     const start = src.indexOf("async function launchFlightPlan(");
     const body = src.slice(start, src.indexOf("\n}\n", start));
     expect(start).toBeGreaterThan(0);
-    expect(body).toContain("launchPerm(builder.mode, undefined, false, FlightPlan.builderDenyFor(plan.root))");
+    expect(body).toContain("launchPerm(builder.mode, undefined, false, FlightPlan.builderDenyFor(plan.root), tree.path)");
     const fp = await Bun.file(new URL("../src/flightPlan.ts", import.meta.url).pathname).text();
     expect(fp).toContain("[...new Set([...BUILDER_DENY,"); // the flow lock only appends to the fence
   });
@@ -381,7 +396,7 @@ describe("what an agent may change about the pilot", () => {
 describe("what the view reads off a plan", () => {
   const sh = (cwd: string, ...a: string[]) => Bun.spawnSync(["git", "-c", "user.email=a@b.c", "-c", "user.name=orbit", ...a], { cwd }).stdout.toString().trim();
 
-  test("a builder has landed once its branch moved off its start and main holds it, or the branch is gone", () => {
+  test("a builder has landed once its branch moved off its start and main holds it, or the branch is gone", async () => {
     const repo = mkdtempSync(join(tmpdir(), "agx-landed-"));
     try {
       sh(repo, "init", "-q", "-b", "main"); writeFileSync(join(repo, "a"), "1"); sh(repo, "add", "a"); sh(repo, "commit", "-q", "-m", "one");
@@ -389,14 +404,14 @@ describe("what the view reads off a plan", () => {
       sh(repo, "branch", "flight-plan/footer");
       const p = plan({ root: repo });
       const at = (over: object) => ({ ...Plans.getPlan(p.id)!, launched: { at: 1, title: "Footer", branch: "flight-plan/footer", from, ...over } });
-      expect(Flight.landed(at({}), "main")).toBe(false);                 // cut, nothing built: git calls it an ancestor of main, it has landed nothing
+      expect(await Flight.landed(at({}), "main")).toBe(false);                 // cut, nothing built: git calls it an ancestor of main, it has landed nothing
       sh(repo, "checkout", "-q", "flight-plan/footer"); writeFileSync(join(repo, "b"), "2"); sh(repo, "add", "b"); sh(repo, "commit", "-q", "-m", "two");
-      expect(Flight.landed(at({}), "main")).toBe(false);                 // built, not merged
+      expect(await Flight.landed(at({}), "main")).toBe(false);                 // built, not merged
       sh(repo, "checkout", "-q", "main"); sh(repo, "merge", "-q", "--ff-only", "flight-plan/footer");
-      expect(Flight.landed(at({}), "main")).toBe(true);                  // merged
+      expect(await Flight.landed(at({}), "main")).toBe(true);                  // merged
       sh(repo, "branch", "-q", "-D", "flight-plan/footer");
-      expect(Flight.landed(at({}), "main")).toBe(true);                  // branch gone
-      expect(Flight.landed(at({ branch: undefined }), "main")).toBe(true); // launched before the branch was kept
+      expect(await Flight.landed(at({}), "main")).toBe(true);                  // branch gone
+      expect(await Flight.landed(at({ branch: undefined }), "main")).toBe(true); // launched before the branch was kept
     } finally { rmSync(repo, { recursive: true, force: true }); }
   });
 
@@ -421,6 +436,15 @@ describe("what the view reads off a plan", () => {
     expect(r.ok && r.plan.lastReport!.line).not.toContain("\n");
     expect(Plans.reportProgress(p.id, { line: "x", step: 6, of: 5 }, "b")).toMatchObject({ ok: false, status: 400 });
     expect(Plans.reportProgress(p.id, { line: "   " }, "b")).toMatchObject({ ok: false, status: 400 });
+  });
+
+  test("a ready plan linked to a worker takes a report; the link says no Go and launches nothing", () => {
+    const p = plan();
+    expect(Plans.reportProgress(p.id, { line: "x" }, "builder")).toMatchObject({ ok: false, status: 409 });
+    Plans.setWorker(p.id, "fixer");
+    const r = Plans.reportProgress(p.id, { line: "tests next", step: 1, of: 3 }, "fixer");
+    expect(r.ok && r.plan.lastReport).toMatchObject({ line: "tests next", step: 1, of: 3, by: "fixer" });
+    expect(Plans.getPlan(p.id)).toMatchObject({ state: p.state, decision: null, launched: null });
   });
 
   test("a question carries an id, its detail and which choice the coordinator recommends", () => {
@@ -580,6 +604,10 @@ describe.skipIf(!have)("a coordinator on a booted server", () => {
     expect(rep.body.plan.lastReport).toMatchObject({ line: "Footer text done, tests next", step: 2, of: 4 });
     expect((await planOf("fp_00000000000000bb")).plan.lastReport.line).toBe("Footer text done, tests next");
     expect((await seat("POST", `/flight-plan/plans/${id}/report`, { line: "x" })).status).toBe(409);   // not launched: no builder
+    expect((await seat("POST", `/flight-plan/plans/${id}/worker`, { worker: "fixer" })).status).toBe(200);
+    const linked = await seat("POST", `/flight-plan/plans/${id}/report`, { line: "Linked worker reports", step: 1, of: 2 });
+    expect(linked.status).toBe(200);
+    expect(linked.body.plan).toMatchObject({ lastReport: { line: "Linked worker reports", step: 1, of: 2 }, launched: null });
   });
 });
 

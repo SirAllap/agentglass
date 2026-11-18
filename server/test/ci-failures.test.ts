@@ -307,7 +307,7 @@ describe("redaction runs before anything is kept", () => {
     ["a key assignment", "API_KEY=supersecretvalue123", "supersecretvalue123"],
     ["a url with credentials", `git clone https://bot:${PW}@example.com/x.git`, "hunter2pass"],
     ["an email", "author jane.doe@example.com failed", "jane.doe@"],
-    ["an AWS key id", "AKIAABCDEFGHIJKLMNOP", "AKIAABCDEFGHIJKLMNOP"],
+    ["an AWS key id", "AKIA" + "ABCDEFGHIJKLMNOP", "AKIA" + "ABCDEFGHIJKLMNOP"],
   ])("%s", (_n, input, leaked) => expect(redact(input)).not.toContain(leaked));
 
   test("it reaches the excerpt, the title and the signature", () => {

@@ -117,22 +117,23 @@ for (const flavor of ["cloud", "datacenter"] as const) {
         expect(count(/^\/issue\//)).toBe(0);
         // The configuration, the filter, the field list and the priorities once each, then only the pages.
         const rest = fake.requests.filter((q) => q.path !== searchPath);
-        expect(rest.length).toBeLessThanOrEqual(5);
+        // ...and the issue types list (hierarchy level per type), once.
+        expect(rest.length).toBeLessThanOrEqual(6);
       });
     });
 
     describe("the context reads", () => {
-      test("quick filters, the active sprint and the epics: three reads, once per board per ten minutes", async () => {
+      test("quick filters, the active sprint and the epics: four reads (the next sprint too), once per board per ten minutes", async () => {
         const c = await withCreds((creds) => X.boardContext(creds, "board:3"));
         expect(c.ok).toBe(true);
         expect(c.filters.map((q) => q.name)).toEqual(["Only bugs", "High priority"]);
         expect(c.sprint).toMatchObject({ name: "Sprint 4", state: "active", goal: "Ship the board" });
         expect(c.sprint!.start).toBeLessThan(c.sprint!.end);
         expect(c.epics.map((e) => e.key)).toEqual(["ORBIT-1000"]);
-        expect(fake.requests.length).toBe(3);
+        expect(fake.requests.length).toBe(4);
         await withCreds((creds) => X.boardContext(creds, "board:3"));
         await withCreds((creds) => X.boardContext(creds, "3"));
-        expect(fake.requests.length).toBe(3);
+        expect(fake.requests.length).toBe(4);
       });
 
       test("a query never leaves the server", async () => {
@@ -155,6 +156,52 @@ for (const flavor of ["cloud", "datacenter"] as const) {
         fake.state.sprints[3] = [{ id: 42, name: "Sprint 5", state: "future" }];
         const c = await withCreds((creds) => X.boardContext(creds, "board:3"));
         expect(c.sprint).toBeUndefined();
+      });
+
+      test("with no active sprint the chip gets the next planned one and the board's kind, as kept reads", async () => {
+        fake.state.sprints[3] = [{ id: 42, name: "Sprint 5", state: "future", startDate: "2026-11-18T09:00:00.000Z", endDate: "2026-12-02T09:00:00.000Z" }];
+        const c = await withCreds((creds) => X.boardContext(creds, "board:3", B.boardConfig));
+        expect(c.sprint).toBeUndefined();
+        expect(c.next).toMatchObject({ name: "Sprint 5" });
+        expect(c.boardType).toBe("scrum");
+        const n = fake.requests.length;
+        await withCreds((creds) => X.boardContext(creds, "board:3", B.boardConfig));
+        expect(fake.requests.length).toBe(n);
+      });
+
+      test("with a sprint running the next planned one is still named, for the card menu's Sprint row", async () => {
+        fake.state.sprints[3] = [...(fake.state.sprints[3] ?? []), { id: 43, name: "Sprint 6", state: "future", startDate: "2026-12-02T09:00:00.000Z", endDate: "2026-12-16T09:00:00.000Z" }];
+        const c = await withCreds((creds) => X.boardContext(creds, "board:3", B.boardConfig));
+        expect(c.sprint).toBeDefined();
+        expect(c.next).toMatchObject({ name: "Sprint 6" });
+      });
+
+      test("a kanban board says kanban and has no next sprint; an active sprint now also reads the next one (the card menu offers it)", async () => {
+        const k = await withCreds((creds) => X.boardContext(creds, "board:1", B.boardConfig));
+        expect(k.boardType).toBe("kanban");
+        expect(k.next).toBeUndefined();
+        fake.requests.length = 0;
+        await withCreds((creds) => X.boardContext(creds, "board:3", B.boardConfig));
+        expect(fake.requests.length).toBe(4);
+      });
+
+      test("every future sprint is listed in the board's order, the next one is the first dated", async () => {
+        fake.state.sprints[3] = [
+          ...(fake.state.sprints[3] ?? []).filter((x) => x.state !== "future"),
+          { id: 51, name: "S3", state: "future" },
+          { id: 52, name: "S4", state: "future", startDate: "2026-12-02T09:00:00.000Z", endDate: "2026-12-16T09:00:00.000Z" },
+          { id: 53, name: "S5", state: "future", startDate: "2026-12-16T09:00:00.000Z", endDate: "2026-12-30T09:00:00.000Z" },
+        ];
+        const c = await withCreds((creds) => X.boardContext(creds, "board:3"));
+        expect(c.futures?.map((x) => x.name)).toEqual(["S3", "S4", "S5"]);
+        expect(c.next).toMatchObject({ id: "52", name: "S4" });
+        const n = await withCreds((creds) => X.nextSprint(creds, "board:3".slice(6)));
+        expect(n.data).toMatchObject({ name: "S4" });
+      });
+
+      test("a kanban board has no future sprints", async () => {
+        const r = await withCreds((creds) => X.futureSprints(creds, "1"));
+        expect(r).toEqual({ ok: true, data: [] });
       });
 
       test("an id that is not digits asks nobody", async () => {

@@ -23,6 +23,7 @@
  * ignore it. And the first run after connecting is SILENT for the same reason:
  * it records where things stand and says nothing.
  */
+import { setTimeoutAs, waitedFor } from "./loopwatch.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
@@ -409,8 +410,8 @@ export function startCardWatch(emit: (n: CardNote) => void): void {
   };
   // Not immediately: a server that has just started has a browser attaching to
   // it, a scan running and a fleet to read. This can wait a minute.
-  timer = setInterval(() => { void tick(); }, WATCH_MS);
-  setTimeout(() => { void tick(); }, 60_000);
+  timer = setInterval(() => { waitedFor("clickup card watch", () => void tick()); }, WATCH_MS);
+  setTimeoutAs("boot:card-watch:first", () => { void tick(); }, 60_000);
 }
 
 export function stopCardWatch(): void {

@@ -71,7 +71,9 @@ afterAll(async () => {
 
 const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
 const post = (path: string, body: unknown, extra: Record<string, string> = {}) =>
-  fetch(base + path, { method: "POST", headers: { ...headers, ...extra }, body: JSON.stringify(body) });
+  fetch(base + path, { method: "POST", headers: { ...headers, origin: base, ...extra }, body: JSON.stringify(body) });
+// An agent's call: the bearer token and no Origin, which is how the server tells it from the person at the app window.
+const asAgent = (path: string, body: unknown) => fetch(base + path, { method: "POST", headers, body: JSON.stringify(body) });
 const GOOD = { email: FAKE_EMAIL, site: "acme.atlassian.net", token: FAKE_TOKEN };
 const BASE64 = Buffer.from(`${FAKE_EMAIL}:${FAKE_TOKEN}`).toString("base64");
 const secretsIn = (text: string) => [FAKE_TOKEN, BASE64].filter((s) => text.includes(s));
@@ -116,7 +118,7 @@ describe("the routes", () => {
     expect(text).not.toContain(FAKE_EMAIL);
     const file = join(dir, "agentglass", "credentials.json");
     expect(statSync(file).mode & 0o777).toBe(0o600);
-    expect(JSON.parse(readFileSync(file, "utf8")).jira.token).toBe(FAKE_TOKEN);
+    expect(JSON.parse(readFileSync(file, "utf8")).accounts.jira.primary.token).toBe(FAKE_TOKEN);
   });
 
   step("status after connecting names the site, the account and the keys, and no secret", async () => {
@@ -138,7 +140,7 @@ describe("the routes", () => {
   step("writes are off until asked, and the answer must be a boolean", async () => {
     expect((await post("/jira/writes", { on: "yes" })).status).toBe(400);
     // From an agent (no Origin) it would be a request the person approves: the settings door.
-    expect((await post("/jira/writes", { on: true })).status).toBe(202);
+    expect((await asAgent("/jira/writes", { on: true })).status).toBe(202);
     expect(await (await post("/jira/writes", { on: true }, { origin: base })).json()).toEqual({ ok: true, writes: true });
     expect((await (await fetch(base + "/jira/status", { headers })).json() as { writes: boolean }).writes).toBe(true);
     expect(JSON.parse(readFileSync(join(dir, "agentglass", "jira-settings.json"), "utf8"))).toEqual({ writes: true });

@@ -336,7 +336,7 @@ describe("a worker's body is a table, not a guess (the M1 class fix)", () => {
    * ordinal over every tab in the window, not over this worker's own pages.
    */
   const ALLOWED: Record<string, string[]> = {
-    open: ["url", "profile", "identity", "show", "ephemeral"],
+    open: ["url", "profile", "identity", "show", "ephemeral", "vault"],
     read: [],
     markdown: [],
     extract: ["fields"],
@@ -379,7 +379,10 @@ describe("a worker's body is a table, not a guess (the M1 class fix)", () => {
     events: ["kinds", "since", "wait", "timeoutMs"],
     whoami: ["identity", "tab"],
     health: [],
-    lane: ["action", "id", "profile", "shared", "force", "ephemeral", "container"],
+    lane: ["action", "id", "profile", "shared", "force", "ephemeral", "container", "site", "vault"],
+    /* Allowed: the CLI's `vault LANE --site S` is `lane vault` under another
+       name, so it is decided like `lane` (own ephemeral lane only). */
+    vault: ["id", "site", "vault"],
     a11y: [],
     inspect: ["action"],
     vitals: [],
@@ -392,13 +395,17 @@ describe("a worker's body is a table, not a guess (the M1 class fix)", () => {
     "debug", "tools", "call-tool", "clock", "download", "settings", "drag",
     "upload", "storage", "permission", "pdf", "throttle", "har", "region",
     "clipboard", "save", "headers", "fake", "trace", "intercept", "checkup",
-    "dialog", "handoff", "done",
+    "dialog", "handoff", "done", "guide", "point",
   ];
   const PAGE = "t9-orbit-own";
 
   test("the table covers every op, and matches the server's own", () => {
     expect(Object.keys(ALLOWED).sort()).toEqual([...WORKER_OPS].sort());
-    expect([...Object.keys(ALLOWED), ...REFUSED].sort()).toEqual([...BROWSER_OPS].sort());
+    /* `vault` is a CLI verb with its own decided row, but it travels as the
+       `lane` op, so it is not a wire op in BROWSER_OPS. */
+    const CLI_ONLY = ["vault"];
+    expect([...Object.keys(ALLOWED), ...REFUSED].filter((op) => !CLI_ONLY.includes(op)).sort())
+      .toEqual([...BROWSER_OPS].sort());
     expect(REFUSED.filter((op) => op in ALLOWED)).toEqual([]);
     for (const [op, fields] of Object.entries(ALLOWED)) {
       expect({ op, fields: [...(WORKER_OP_FIELDS.get(op) ?? [])].sort() })
@@ -426,6 +433,16 @@ describe("a worker's body is a table, not a guess (the M1 class fix)", () => {
       );
       expect({ op, refused }).not.toEqual({ op, refused: null });
     }
+  });
+
+  test("the turn's writable roots ride on any verb without being refused", () => {
+    resetWorkerPages();
+    noteWorkerPage("orbit-1", PAGE);
+    const roots = ["/home/orbit/code/acme-v2"];
+    expect(agentAskRefusal({ as: "orbit-1", roots }, "orbit-1", "health")).toBeNull();
+    expect(agentAskRefusal(
+      { as: "orbit-1", page: PAGE, roots, steps: [{ op: "click", args: { selector: "#x" } }] }, "orbit-1", "do",
+    )).toBeNull();
   });
 
   test("a step may not smuggle a field the step itself does not read", () => {

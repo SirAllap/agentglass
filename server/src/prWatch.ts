@@ -1,3 +1,4 @@
+import { setIntervalAs } from "./loopwatch.ts";
 /*
  * Re-asking the open pull request lists nobody is polling.
  *
@@ -93,7 +94,7 @@ export function startPrWatch(opts: {
   liveClients: () => number;
   relist: (root: string, filter: TrackedFilter) => void;
 }): () => void {
-  const timer = setInterval(() => tick(Date.now(), opts.liveClients(), opts.relist), WATCH_TICK_MS);
+  const timer = setIntervalAs("pr watch tick", () => tick(Date.now(), opts.liveClients(), opts.relist), WATCH_TICK_MS);
   timer.unref?.();
   return () => clearInterval(timer);
 }

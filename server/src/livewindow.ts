@@ -11,7 +11,9 @@ import { engineWindowName, liveWindows, samePlace, type LiveWindow } from "./tmu
 export async function findLiveWindow(q: { root: string; name: string; path?: string }): Promise<LiveWindow | null> {
   const name = engineWindowName(q.name);
   if (!name) return null;
-  const named = (await liveWindows()).filter((w) => w.name === name && (!q.path || samePlace(w.path, q.path)));
+  /* By the name it shows, and by the name agentglass gave it: a tab the person
+     renamed is still this card's tab, and it keeps the name they chose. */
+  const named = (await liveWindows()).filter((w) => (w.name === name || w.given === name) && (!q.path || samePlace(w.path, q.path)));
   if (!named.length) return null;
   const project = await projectRootOfAsync(q.root);
   if (!project) return null;

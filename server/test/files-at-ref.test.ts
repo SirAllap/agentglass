@@ -60,8 +60,8 @@ afterEach(() => {
 });
 
 describe("which files a branch has", () => {
-  it("lists the branch's migrations, not this checkout's", () => {
-    const r = findFiles(clone, "billing/migrations", 300, "origin/master");
+  it("lists the branch's migrations, not this checkout's", async () => {
+    const r = await findFiles(clone, "billing/migrations", 300, "origin/master");
     expect(r.ok).toBe(true);
     const names = r.files.map((f) => f.split("/").pop());
     expect(names).toContain("0095_order_is_gift_wrapped.py");
@@ -75,56 +75,56 @@ describe("which files a branch has", () => {
     expect(names).not.toContain("0097_returnlabelrequest.py");
   });
 
-  it("still sees this checkout's own when no ref is asked for", () => {
-    const r = findFiles(clone, "billing/migrations");
+  it("still sees this checkout's own when no ref is asked for", async () => {
+    const r = await findFiles(clone, "billing/migrations");
     expect(r.files.map((f) => f.split("/").pop())).toContain("0097_returnlabelrequest.py");
   });
 
-  it("says which ref answered, so a surprising list can be explained", () => {
-    expect(findFiles(clone, "migrations", 300, "origin/master").via).toContain("origin/master");
+  it("says which ref answered, so a surprising list can be explained", async () => {
+    expect((await findFiles(clone, "migrations", 300, "origin/master")).via).toContain("origin/master");
   });
 
-  it("finds the folders on that branch too", () => {
-    expect(findFiles(clone, "migrations", 300, "origin/master").dirs)
+  it("finds the folders on that branch too", async () => {
+    expect((await findFiles(clone, "migrations", 300, "origin/master")).dirs)
       .toContain("src/billing/migrations");
   });
 
-  it("never touches the worktree to answer", () => {
+  it("never touches the worktree to answer", async () => {
     // `ls-tree` reads the object store. If this ever became a checkout, the
     // file below would vanish and take uncommitted work with it.
     writeFileSync(join(clone, "scratch.txt"), "uncommitted");
-    findFiles(clone, "migrations", 300, "origin/master");
+    await findFiles(clone, "migrations", 300, "origin/master");
     expect(existsSync(join(clone, "scratch.txt"))).toBe(true);
     expect(existsSync(join(clone, "src/billing/migrations/0097_returnlabelrequest.py"))).toBe(true);
   });
 });
 
 describe("refusing a ref that is not there", () => {
-  it("says so instead of answering with nothing", () => {
+  it("says so instead of answering with nothing", async () => {
     /*
      * The failure mode worth the extra call. "No results" for a mistyped
      * branch reads as "your number is free", which is the exact wrong
      * conclusion to hand somebody checking for a collision.
      */
-    const r = findFiles(clone, "migrations", 300, "origin/mister");
+    const r = await findFiles(clone, "migrations", 300, "origin/mister");
     expect(r.ok).toBe(false);
     expect(r.error).toContain("origin/mister");
   });
 
-  it("refuses anything that could be read as an option", () => {
-    expect(resolveRef(clone, "--upload-pack=touch /tmp/pwn")).toBeNull();
-    expect(resolveRef(clone, "origin/master extra")).toBeNull();
-    expect(resolveRef(clone, "")).toBeNull();
+  it("refuses anything that could be read as an option", async () => {
+    expect(await resolveRef(clone, "--upload-pack=touch /tmp/pwn")).toBeNull();
+    expect(await resolveRef(clone, "origin/master extra")).toBeNull();
+    expect(await resolveRef(clone, "")).toBeNull();
   });
 
-  it("accepts a real one", () => {
-    expect(resolveRef(clone, "origin/master")).toBe("origin/master");
+  it("accepts a real one", async () => {
+    expect(await resolveRef(clone, "origin/master")).toBe("origin/master");
   });
 });
 
 describe("searching a branch's contents", () => {
-  it("greps the branch, with the line and the number", () => {
-    const r = grepFiles(clone, "0095", 200, "origin/master");
+  it("greps the branch, with the line and the number", async () => {
+    const r = await grepFiles(clone, "0095", 200, "origin/master");
     expect(r.ok).toBe(true);
     expect(r.hits.length).toBeGreaterThan(0);
     const hit = r.hits.find((h) => h.rel.endsWith("0096_entry_date.py"))!;
@@ -135,35 +135,35 @@ describe("searching a branch's contents", () => {
     expect(hit.rel).toBe("src/billing/migrations/0096_entry_date.py");
   });
 
-  it("does not find this checkout's own text on the branch", () => {
-    expect(grepFiles(clone, "0097 mine", 200, "origin/master").hits).toEqual([]);
-    expect(grepFiles(clone, "0097 mine", 200).hits.length).toBeGreaterThan(0);
+  it("does not find this checkout's own text on the branch", async () => {
+    expect((await grepFiles(clone, "0097 mine", 200, "origin/master")).hits).toEqual([]);
+    expect((await grepFiles(clone, "0097 mine", 200)).hits.length).toBeGreaterThan(0);
   });
 });
 
 describe("opening one of them", () => {
-  it("reads the file as that branch has it", () => {
-    const r = fileText(clone, "src/billing/migrations/0096_entry_date.py", "origin/master");
+  it("reads the file as that branch has it", async () => {
+    const r = await fileText(clone, "src/billing/migrations/0096_entry_date.py", "origin/master");
     expect(r.ok).toBe(true);
     expect(r.text).toContain("0095");
   });
 
-  it("says so for a file that is only here", () => {
+  it("says so for a file that is only here", async () => {
     // Opening it against the branch must not silently show the local copy.
-    const r = fileText(clone, "src/billing/migrations/0097_returnlabelrequest.py", "origin/master");
+    const r = await fileText(clone, "src/billing/migrations/0097_returnlabelrequest.py", "origin/master");
     expect(r.ok).toBe(false);
     expect(r.error).toContain("origin/master");
   });
 });
 
 describe("which branches to offer", () => {
-  it("lists the remote-tracking branches", () => {
-    const r = listRefs(clone);
+  it("lists the remote-tracking branches", async () => {
+    const r = await listRefs(clone);
     expect(r.ok).toBe(true);
     expect(r.remote).toContain("origin/master");
   });
 
-  it("lists the LOCAL ones too", () => {
+  it("lists the LOCAL ones too", async () => {
     /*
      * Asked for explicitly: "I need to be able to pick the local branch from
      * there". A branch sitting in this repository that this worktree is not on
@@ -171,32 +171,32 @@ describe("which branches to offer", () => {
      * or by cutting yet another worktree for a listing.
      */
     run(clone, "branch", "spike/no-checkout");
-    const r = listRefs(clone);
+    const r = await listRefs(clone);
     expect(r.local).toContain("spike/no-checkout");
     expect(r.local).toContain("master");
   });
 
-  it("says which branch this worktree is already on", () => {
+  it("says which branch this worktree is already on", async () => {
     // So the list can mark it rather than offer it as somewhere else to go.
-    expect(listRefs(clone).head).toBe("master");
+    expect((await listRefs(clone)).head).toBe("master");
   });
 
-  it("drops origin/HEAD, which is an alias for one already listed", () => {
-    expect(listRefs(clone).remote.some((x) => x.endsWith("/HEAD"))).toBe(false);
+  it("drops origin/HEAD, which is an alias for one already listed", async () => {
+    expect((await listRefs(clone)).remote.some((x) => x.endsWith("/HEAD"))).toBe(false);
   });
 
-  it("puts the default branch first, because it is the one being asked about", () => {
+  it("puts the default branch first, because it is the one being asked about", async () => {
     run(clone, "push", "-q", "origin", "master:zzz-topic");
     run(clone, "fetch", "-q", "origin");
-    expect(listRefs(clone).remote[0]).toBe("origin/master");
+    expect((await listRefs(clone)).remote[0]).toBe("origin/master");
   });
 
-  it("offering a branch never moves this worktree", () => {
+  it("offering a branch never moves this worktree", async () => {
     // The promise the control makes. Reading refs and then searching one must
     // leave HEAD and the working tree exactly where they were.
     const before = Bun.spawnSync(["git", "-C", clone, "rev-parse", "HEAD"]).stdout.toString();
-    listRefs(clone);
-    findFiles(clone, "migrations", 300, "origin/master");
+    await listRefs(clone);
+    await findFiles(clone, "migrations", 300, "origin/master");
     const after = Bun.spawnSync(["git", "-C", clone, "rev-parse", "HEAD"]).stdout.toString();
     expect(after).toBe(before);
     expect(existsSync(join(clone, "src/billing/migrations/0097_returnlabelrequest.py"))).toBe(true);
@@ -218,14 +218,14 @@ describe("which branches to offer", () => {
  * working tree's path.
  */
 describe("a branch's copy, on disk for the editor", () => {
-  it("writes the branch's content, not this checkout's", () => {
+  it("writes the branch's content, not this checkout's", async () => {
     const rel = "src/billing/migrations/0096_entry_date.py";
     // The same path, different on each side — which is the case that makes
     // opening the working tree's copy wrong rather than merely stale.
     put(clone, rel, "# 0096\nDEPENDS = 'billing/0095'\nLOCAL_EDIT = True\n");
     run(clone, "commit", "-qm", "local edit");
 
-    const r = fileToTemp(clone, rel, "origin/master");
+    const r = await fileToTemp(clone, rel, "origin/master");
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const wrote = readFileSync(r.file, "utf8");
@@ -236,8 +236,8 @@ describe("a branch's copy, on disk for the editor", () => {
     expect(readFileSync(join(clone, rel), "utf8")).toContain("LOCAL_EDIT");
   });
 
-  it("writes outside the checkout", () => {
-    const r = fileToTemp(clone, "src/billing/migrations/0095_order_is_gift_wrapped.py", "origin/master");
+  it("writes outside the checkout", async () => {
+    const r = await fileToTemp(clone, "src/billing/migrations/0095_order_is_gift_wrapped.py", "origin/master");
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     // A temp file inside the checkout turns up in somebody's `git status` an
@@ -246,10 +246,10 @@ describe("a branch's copy, on disk for the editor", () => {
     expect(existsSync(r.file)).toBe(true);
   });
 
-  it("names the file after the ref, so two of them are telling apart", () => {
+  it("names the file after the ref, so two of them are telling apart", async () => {
     const rel = "src/billing/migrations/0095_order_is_gift_wrapped.py";
-    const a = fileToTemp(clone, rel, "origin/master");
-    const b = fileToTemp(clone, rel, "master");
+    const a = await fileToTemp(clone, rel, "origin/master");
+    const b = await fileToTemp(clone, rel, "master");
     expect(a.ok && b.ok).toBe(true);
     if (!a.ok || !b.ok) return;
     // The same basename twice says nothing in an editor's tab strip, and the
@@ -258,21 +258,21 @@ describe("a branch's copy, on disk for the editor", () => {
     expect(a.file.split("/").pop()).toContain("origin-master");
   });
 
-  it("refuses a path that branch does not have, rather than writing an empty file", () => {
+  it("refuses a path that branch does not have, rather than writing an empty file", async () => {
     // 0097 exists HERE and not upstream. An empty temp file would open in the
     // editor as a real, blank version of a file that does not exist.
-    const r = fileToTemp(clone, "src/billing/migrations/0097_returnlabelrequest.py", "origin/master");
+    const r = await fileToTemp(clone, "src/billing/migrations/0097_returnlabelrequest.py", "origin/master");
     expect(r.ok).toBe(false);
   });
 
-  it("refuses a ref that does not exist, and one that was not given", () => {
-    expect(fileToTemp(clone, "src/billing/migrations/0095_order_is_gift_wrapped.py", "no/such/branch").ok).toBe(false);
-    expect(fileToTemp(clone, "src/billing/migrations/0095_order_is_gift_wrapped.py", "").ok).toBe(false);
+  it("refuses a ref that does not exist, and one that was not given", async () => {
+    expect((await fileToTemp(clone, "src/billing/migrations/0095_order_is_gift_wrapped.py", "no/such/branch")).ok).toBe(false);
+    expect((await fileToTemp(clone, "src/billing/migrations/0095_order_is_gift_wrapped.py", "")).ok).toBe(false);
   });
 
-  it("is contained by the same rules as every other reader here", () => {
+  it("is contained by the same rules as every other reader here", async () => {
     // `inside()` is fileText's, and this borrows it rather than growing a second
     // set of rules to keep in step.
-    expect(fileToTemp(clone, "../../etc/passwd", "origin/master").ok).toBe(false);
+    expect((await fileToTemp(clone, "../../etc/passwd", "origin/master")).ok).toBe(false);
   });
 });

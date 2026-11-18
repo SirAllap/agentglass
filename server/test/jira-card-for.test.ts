@@ -29,6 +29,7 @@ const C = await import("../src/credentials.ts");
 const V = await import("../src/jiraviews.ts");
 const CV = await import("../src/clickupviews.ts");
 const { cardFor } = await import("../src/prs.ts");
+const { __setTrackerProjectsPath, setTrackerChoice } = await import("../src/trackerProjects.ts");
 
 const SITE = "acme.atlassian.net";
 const view: SavedView = { id: "board:12", name: "Orbit board", url: "", addedAt: 0 };
@@ -122,17 +123,55 @@ describe("the card line on a pull request, Jira only", () => {
 });
 
 describe("with ClickUp connected too", () => {
-  it("leaves ClickUp's answer alone when ClickUp holds the card", () => {
+  /* Both boards hold the same key: Jira's card is the one the row draws, since
+     a key the site itself listed is not a guess and ClickUp is the fallback. */
+  const both = () => {
     connectJira();
     C.setCredential("clickup", { token: "pk_1_TEST", account: "Ada", workspace: "Orbit", workspaceId: "9001", accountId: "7" });
     const cu: SavedView = { id: "v1", name: "Sprint board", url: "https://app.clickup.com/1/v/l/v1", addedAt: 0 };
     CV.__setViewsPath(join(dir, "clickup-views.json"));
     CV.addView(cu);
     CV.putCache({ view: cu, tasks: [{ ...task("ORBIT-1042"), id: "86xaaa011", status: "in development" }], statuses: [], fields: [], at: Date.now() });
+  };
+
+  it("gives the row Jira's card, not ClickUp's", () => {
+    both();
     readBoard([task("ORBIT-1042")]);
-    const c = cardFor("fix/ORBIT-1042-x", "");
+    const c = cardFor("fix/ORBIT-1042-x", "", "acme/orbit");
+    expect(c?.tracker).toBe("jira");
+    expect(c?.id).not.toBe("86xaaa011");
+    CV.__setViewsPath(null);
+  });
+
+  it("a repository pinned to ClickUp keeps ClickUp's card", () => {
+    both();
+    readBoard([task("ORBIT-1042")]);
+    __setTrackerProjectsPath(join(dir, "tracker-projects.json"));
+    setTrackerChoice("acme/orbit", "clickup");
+    const c = cardFor("fix/ORBIT-1042-x", "", "Acme/Orbit");
     expect(c?.id).toBe("86xaaa011");
     expect(c?.tracker).toBeUndefined();
+    setTrackerChoice("acme/orbit", "auto");
+    __setTrackerProjectsPath(null);
+    CV.__setViewsPath(null);
+  });
+
+  it("a repository pinned to Jira is not left blank when only ClickUp holds the id", () => {
+    both();
+    __setTrackerProjectsPath(join(dir, "tracker-projects.json"));
+    setTrackerChoice("acme/orbit", "jira");
+    const c = cardFor("fix/ORBIT-1042-x", "", "acme/orbit");
+    expect(c?.id).toBe("86xaaa011");
+    expect(c?.tracker).toBeUndefined();
+    setTrackerChoice("acme/orbit", "auto");
+    __setTrackerProjectsPath(null);
+    CV.__setViewsPath(null);
+  });
+
+  it("no repository named is auto, and auto is Jira first", () => {
+    both();
+    readBoard([task("ORBIT-1042")]);
+    expect(cardFor("fix/ORBIT-1042-x", "")?.tracker).toBe("jira");
     CV.__setViewsPath(null);
   });
 });

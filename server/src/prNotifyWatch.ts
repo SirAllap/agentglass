@@ -61,7 +61,7 @@ import { randomUUID } from "node:crypto";
 import { db } from "./db.ts";
 import { raiseAsked } from "./askedAlerts.ts";
 import { askedAlertKey, watchPayload } from "../../shared/notifyPayload.ts";
-import { entered } from "./loopwatch.ts";
+import { entered, finished, setTimeoutAs } from "./loopwatch.ts";
 import type { PrCheck, PrCheckRollup, PrChecksRead, PrTalk, PrWatch, PrWatchFire, PrWatchPreset, PrWatchRule } from "../../shared/types.ts";
 
 db.exec(`
@@ -117,7 +117,7 @@ CREATE TABLE IF NOT EXISTS pr_watch_seen (
 `);
 try { db.exec("ALTER TABLE pr_watch ADD COLUMN primed INTEGER NOT NULL DEFAULT 1"); } catch { /* already present */ }
 
-/** How often the timer looks at what is due; the reads themselves are spread by `readEveryMs`. */
+/** The old fixed wake interval, kept as the cadence the tests simulate; the timer now sleeps to the next due read (wakeDelayMs). */
 export const WATCH_POLL_MS = 10_000;
 /** A PR whose CI is running is re-read this often, however long the rule has waited. */
 export const RUNNING_READ_MS = 30_000;
@@ -339,7 +339,8 @@ export function shareChecks(repo: string, number: number, s: Snapshot): void {
   if (sentChecks.get(k) === sig) return;
   sentChecks.set(k, sig);
   if (sentChecks.size > 500) sentChecks.delete(sentChecks.keys().next().value!);
-  for (const fn of checksListeners) { try { fn({ repo, number, checks: s.checks, all: s.all, ...(s.sha ? { sha: s.sha } : null) }); } catch { /* a listener must not break the tick */ } }
+  const at = Date.now();
+  for (const fn of checksListeners) { try { fn({ repo, number, checks: s.checks, all: s.all, at, ...(s.sha ? { sha: s.sha } : null) }); } catch { /* a listener must not break the tick */ } }
 }
 export function subscribeWatchFire(fn: (f: PrWatchFire) => void): () => void { fireListeners.add(fn); return () => { fireListeners.delete(fn); }; }
 const changed = () => { for (const fn of changeListeners) { try { fn(); } catch { /* a listener must not break a write */ } } };
@@ -380,6 +381,58 @@ export function removeWatch(id: string): { ok: boolean } {
   db.run(`DELETE FROM pr_watch WHERE id = ?`, [id]);
   changed();
   return { ok: true };
+}
+
+/** The three rules the "Tell me when…" cards stand for. A per-check rule ("tell me if `evals` fails") is not one of
+ *  them, so setting the cards on many pull requests never touches it. */
+const CARD_TYPES = new Set<PrWatchRule["type"]>(["ci-pass", "ci-fail", "comment"]);
+/** `expect`, when given, is the card rules the PR must have right now for this item to be written: Undo sends the
+ *  rules Apply set, so a PR changed since (a card pressed in its own popover) is left alone and named in `skipped`. */
+export interface SetManyItem { number: number; title: string; rules: unknown; expect?: unknown }
+export interface SetManyPrev { number: number; title: string; rules: PrWatchRule[] }
+
+/**
+ * The board's bulk "Tell me when…": each pull request ends with exactly these card rules on, whatever it had before.
+ * One transaction and one broadcast for the lot, where the single-PR popover writes one rule per press.
+ *
+ * A card rule already on and chosen again is left as it is, so its ignore list survives; a fired one chosen again is
+ * turned back on. Each item carries its own rules so the answer, `prev` (each PR's card rules as they were), can be
+ * sent straight back as the Undo.
+ */
+export function setManyWatches(repo: string, root: string, itemsIn: unknown): { ok: boolean; prev: SetManyPrev[]; skipped: number[]; failed: number[]; error?: string } {
+  if (!repo) return { ok: false, prev: [], skipped: [], failed: [], error: "which repository?" };
+  if (!Array.isArray(itemsIn) || !itemsIn.length) return { ok: false, prev: [], skipped: [], failed: [], error: "which pull requests?" };
+  const items = (itemsIn as SetManyItem[]).slice(0, 200);
+  if (items.some((i) => !i || !Number.isInteger(i.number) || i.number <= 0)) return { ok: false, prev: [], skipped: [], failed: [], error: "which pull request?" };
+  const prev: SetManyPrev[] = [];
+  const skipped: number[] = [];
+  /* Every PR that failed, not the first: a failed one has already lost its old rules, so the board keeps those picked. */
+  const failed: number[] = [];
+  const errors: string[] = [];
+  const keys = (rules: readonly PrWatchRule[]) => [...new Set(rules.map(ruleKey))].sort().join("|");
+  db.transaction(() => {
+    for (const it of items) {
+      const want = (Array.isArray(it.rules) ? it.rules : []).map(coerceRule)
+        .filter((r): r is PrWatchRule => !!r && CARD_TYPES.has(r.type))
+        .filter((r, i, all) => all.findIndex((x) => ruleKey(x) === ruleKey(r)) === i);
+      const rows = withRule(db.query<Row, [string, number]>(`SELECT * FROM pr_watch WHERE repo = ? AND number = ?`).all(repo, it.number))
+        .filter((x) => CARD_TYPES.has(x.rule.type));
+      const on = rows.filter((x) => x.r.active === 1);
+      if (Array.isArray(it.expect)) {
+        const expect = it.expect.map(coerceRule).filter((r): r is PrWatchRule => !!r && CARD_TYPES.has(r.type));
+        if (keys(expect) !== keys(on.map((x) => x.rule))) { skipped.push(it.number); continue; }
+      }
+      prev.push({ number: it.number, title: String(it.title ?? ""), rules: on.map((x) => x.rule) });
+      for (const x of on) if (!want.some((r) => ruleKey(r) === ruleKey(x.rule))) db.run(`DELETE FROM pr_watch WHERE id = ?`, [x.r.id]);
+      for (const r of want) {
+        if (on.some((x) => ruleKey(x.rule) === ruleKey(r))) continue;
+        const res = addWatch({ repo, number: it.number, root, title: String(it.title ?? ""), rule: r.type === "ci-pass" && !r.ignore ? withPrIgnores({ repo, number: it.number }, r) : r }, false);
+        if (!res.ok) { if (!failed.includes(it.number)) failed.push(it.number); errors.push(`#${it.number}: ${res.error}`); }
+      }
+    }
+  })();
+  changed();
+  return errors.length ? { ok: false, prev, skipped, failed, error: errors.join("; ") } : { ok: true, prev, skipped, failed };
 }
 
 export function setPreset(repo: string, rulesIn: unknown, auto: boolean): { ok: boolean; error?: string } {
@@ -562,6 +615,7 @@ export async function checkWatches(read: ReadChecks, now = Date.now(), gate = fa
     (byPr.get(k) ?? byPr.set(k, []).get(k)!).push(r);
   }
   for (const k of schedule.keys()) if (!byPr.has(k)) schedule.delete(k);
+  activeKeys = [...byPr.keys()];
   let due = [...byPr.entries()];
   if (gate) {
     due = due.filter(([k]) => (schedule.get(k)?.next ?? 0) <= now)
@@ -623,20 +677,53 @@ function noteHead(repo: string, number: number, sha: string | undefined): void {
   changed();
 }
 
-let timer: ReturnType<typeof setInterval> | null = null;
+/** Nothing watched: nothing to read, so the only wake is this safety tick (a watch added without a kick, e.g. an
+ *  auto preset, is picked up within it). */
+export const IDLE_WAKE_MS = 5 * 60_000;
+/** Longest sleep while PRs are watched, so a row added without a kick is never ignored for long. */
+const BUSY_WAKE_MS = 60_000;
+
+/**
+ * When the watch next needs to look. It used to wake every 10 s forever: four SQL statements (three of them
+ * writes) before it found nothing due, 7 stalls and 29.6 s in the stall log. Now: no active watch sleeps for
+ * IDLE_WAKE_MS (a kick wakes it sooner); otherwise it sleeps until the earliest read is due (a PR never read is
+ * due now), between 1 s and BUSY_WAKE_MS. Reads happen at the same cadence as before (30 s running, 3 min settled,
+ * 10 min comment-only, doubling on failure); only the empty wakes are gone, so what the person sees is as fresh
+ * as before or up to 10 s fresher, since a read is no longer rounded up to the next tick.
+ */
+export function wakeDelayMs(now: number, activeKeys: readonly string[], next: ReadonlyMap<string, { next: number }>): number {
+  if (!activeKeys.length) return IDLE_WAKE_MS;
+  let soonest = Infinity;
+  for (const k of activeKeys) soonest = Math.min(soonest, next.get(k)?.next ?? now);
+  return Math.min(BUSY_WAKE_MS, Math.max(1_000, soonest - now));
+}
+let activeKeys: string[] = [];
+
+let timer: ReturnType<typeof setTimeout> | null = null;
 let running = false;
+let started = false;
 export function startPrNotifyWatch(read: ReadChecks): { kick: () => void } {
+  const arm = (ms: number) => {
+    if (!started) return;
+    if (timer) clearTimeout(timer);
+    timer = setTimeoutAs("pr notify watch", () => run(true), ms);
+    (timer as unknown as { unref?: () => void }).unref?.();
+  };
   const run = (gate = false) => {
     if (running) return;
     running = true;
-    entered("pr notify watch");
-    void checkWatches(read, Date.now(), gate).catch(() => {}).finally(() => { running = false; });
+    /* The label covers only the synchronous start of the pass (the SQL before its first await). It used to be
+       entered and never finished, so any stall in the next seconds, whoever caused it, was filed under it:
+       4.2 s and 5.8 s of "pr notify watch" in the stall log were other work. */
+    const mark = entered("pr notify watch");
+    try {
+      void checkWatches(read, Date.now(), gate).catch(() => {}).finally(() => { running = false; arm(wakeDelayMs(Date.now(), activeKeys, schedule)); });
+    } finally { finished(mark); }
   };
-  if (!timer) {
-    timer = setInterval(() => run(true), WATCH_POLL_MS);
-    (timer as unknown as { unref?: () => void }).unref?.();
-    setTimeout(() => run(true), 5_000); // rules waiting when the server went down are read shortly after boot, off the startup path
+  if (!started) {
+    started = true;
+    arm(5_000); // rules waiting when the server went down are read shortly after boot, off the startup path
   }
   return { kick: () => run(false) };
 }
-export function stopPrNotifyWatch(): void { if (timer) clearInterval(timer); timer = null; running = false; }
+export function stopPrNotifyWatch(): void { if (timer) clearTimeout(timer); timer = null; running = false; started = false; }

@@ -33,6 +33,11 @@ process.env.AGENTGLASS_PROJECTS_DIR = join(dir, "projects");
    them ran green for a while without ever reaching an assertion. */
 const SCOPE = join(dir, "workspace");
 mkdirSync(SCOPE, { recursive: true });
+/* The scope is resolved UP to its repository root. When the temp dir sits inside
+   a checkout (TMPDIR=$PWD/.vt, which the worker setup uses) that root is the
+   whole checkout, which contains ELSEWHERE too: nothing is out of scope and the
+   four refusal tests fail. Making the workspace its own repo pins the root. */
+Bun.spawnSync(["git", "init", "-q", SCOPE]);
 process.env.AGENTGLASS_ROOT = SCOPE;
 process.env.AGENTGLASS_DB ||= join(dir, "scope.db");
 

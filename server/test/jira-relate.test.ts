@@ -29,8 +29,9 @@ const R = await import("../src/jiraRelate.ts");
 const D = await import("../src/jiraDoor.ts");
 const credFile = join(dir, "creds.json");
 
-afterAll(() => {
+afterAll(async () => {
   C.__clearAll();
+  (await import("../src/jiraEdit.ts")).__forgetOffered();
   C.__setCredentialsPath(null);
   J.__setJiraBase(null);
   for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v;

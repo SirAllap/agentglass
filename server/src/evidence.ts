@@ -50,7 +50,7 @@
  * Claiming a hang we cannot see is how the current thresholds lost trust, and
  * repeating that with better wording would be no improvement.
  */
-import { readdirSync, statSync } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { OpenToolCall, Liveness } from "../../shared/types.ts";
 import { transcriptPathOf } from "./transcripts.ts";
@@ -87,12 +87,32 @@ const SETTLE_MS = 20_000;
  */
 const QUIET_MS = 3 * 60_000;
 
+/** Test counter: every stat this module issues. */
+let statCalls = 0;
+export const evidenceStatCalls = () => statCalls;
+
+/** Directory listing per directory, valid while the directory's own mtime is
+ *  unchanged: entries only appear or vanish when it moves. */
+const listCache = new Map<string, { mtime: number; names: string[] }>();
+/** Newest-mtime answer per directory, valid for NEWEST_TTL_MS. An edit to an
+ *  existing file does not move the directory mtime, so this one expires by
+ *  time (checked on read; no timer) instead of by mtime. */
+const newestCache = new Map<string, { at: number; newest: number | null }>();
+const NEWEST_TTL_MS = 2000;
+const DIR_CACHE_MAX = 256;
+export const clearEvidenceDirCache = () => { listCache.clear(); newestCache.clear(); };
+const remember = <V>(m: Map<string, V>, k: string, v: V) => {
+  if (m.size >= DIR_CACHE_MAX && !m.has(k)) m.delete(m.keys().next().value as string);
+  m.set(k, v);
+};
+
 /** mtime in ms, or null when the path is gone, unreadable, or was never given.
  *  A tool that has not created its target yet is not evidence of anything. */
-function mtimeOf(path: string | null | undefined): number | null {
+async function mtimeOf(path: string | null | undefined): Promise<number | null> {
   if (!path) return null;
   try {
-    return statSync(path).mtimeMs;
+    statCalls++;
+    return (await stat(path)).mtimeMs;
   } catch {
     return null;
   }
@@ -101,6 +121,9 @@ function mtimeOf(path: string | null | undefined): number | null {
 /** Bounded so a home directory pointed at by mistake cannot turn into a
  *  thousand stats on every poll. */
 const DIR_ENTRY_MAX = 400;
+/** Entries in flight at once. Every stat is off the loop anyway; the batch is
+ *  what keeps a directory on a slow disk from queueing four hundred of them. */
+const ENTRY_BATCH = 64;
 
 /**
  * The freshest thing to have happened in a directory, one level down.
@@ -111,18 +134,33 @@ const DIR_ENTRY_MAX = 400;
  * without walking a tree. Nothing is skipped: `node_modules`, `dist` and
  * `target` are exactly where a build proves it is alive, which is the opposite
  * of what those directories mean to the repo scanner.
+ *
+ * Asynchronous because this is where POST /ingest was spending 11,945 ms: two
+ * hundred open calls times four hundred entries, every stat blocking the loop
+ * that the terminal and every other route ride. Awaiting them hands that loop
+ * back between batches; the answer is the same mtime it always was.
  */
-function newestUnder(dir: string | null | undefined): number | null {
+async function newestUnder(dir: string | null | undefined, now: number): Promise<number | null> {
   if (!dir) return null;
+  const fresh = newestCache.get(dir);
+  if (fresh && now >= fresh.at && now - fresh.at < NEWEST_TTL_MS) return fresh.newest;
   let newest: number | null = null;
   try {
-    newest = statSync(dir).mtimeMs;
-    let seen = 0;
-    for (const name of readdirSync(dir)) {
-      if (++seen > DIR_ENTRY_MAX) break;
-      const at = mtimeOf(join(dir, name));
-      if (at !== null && (newest === null || at > newest)) newest = at;
+    statCalls++;
+    const own = (await stat(dir)).mtimeMs;
+    newest = own;
+    let names: string[];
+    const listed = listCache.get(dir);
+    if (listed && listed.mtime === own) names = listed.names;
+    else {
+      names = await readdir(dir);
+      remember(listCache, dir, { mtime: own, names });
     }
+    for (let i = 0; i < names.length && i < DIR_ENTRY_MAX; i += ENTRY_BATCH) {
+      const at = await Promise.all(names.slice(i, i + ENTRY_BATCH).map((n) => mtimeOf(join(dir, n))));
+      for (const t of at) if (t !== null && (newest === null || t > newest)) newest = t;
+    }
+    remember(newestCache, dir, { at: now, newest });
   } catch { /* unreadable or gone — no evidence, which is not a verdict */ }
   return newest;
 }
@@ -198,25 +236,26 @@ export function classify(
  * reason about. Work is deduplicated per session and per directory, and the
  * call list is capped at 200 upstream.
  */
-export function withEvidence(calls: OpenToolCall[], now = Date.now()): OpenToolCall[] {
+export async function withEvidence(calls: OpenToolCall[], now = Date.now()): Promise<OpenToolCall[]> {
   // One transcript stat per session, and one scan per directory: a session with
   // four tools open would otherwise pay for the same answer four times over.
   const perSession = new Map<string, number | null>();
   const perDir = new Map<string, number | null>();
+  const out: OpenToolCall[] = [];
 
-  return calls.map((c) => {
+  for (const c of calls) {
     if (!perSession.has(c.session_id)) {
-      perSession.set(c.session_id, mtimeOf(transcriptPathOf(c.session_id)));
+      perSession.set(c.session_id, await mtimeOf(transcriptPathOf(c.session_id)));
     }
     const transcriptAt = perSession.get(c.session_id) ?? null;
-    const targetAt = WRITES_A_FILE.has(c.tool_name) ? mtimeOf(c.target) : null;
+    const targetAt = WRITES_A_FILE.has(c.tool_name) ? await mtimeOf(c.target) : null;
 
     // The directory is only scanned for the tools it can say anything about.
     // Reading a project directory to decide whether a WebFetch is alive would
     // be work spent to learn nothing.
     let dirAt: number | null = null;
     if (watchesDirectory(c.tool_name) && c.dir) {
-      if (!perDir.has(c.dir)) perDir.set(c.dir, newestUnder(c.dir));
+      if (!perDir.has(c.dir)) perDir.set(c.dir, await newestUnder(c.dir, now));
       dirAt = perDir.get(c.dir) ?? null;
     }
 
@@ -231,7 +270,7 @@ export function withEvidence(calls: OpenToolCall[], now = Date.now()): OpenToolC
     candidates.sort((a, b) => b[0] - a[0]);
     const best = candidates[0];
 
-    return {
+    out.push({
       ...c,
       ...(best ? { evidenceAt: best[0] } : {}),
       // Nothing to read. Not the same as "nothing happened": a tool with no
@@ -240,6 +279,7 @@ export function withEvidence(calls: OpenToolCall[], now = Date.now()): OpenToolC
       // a new place.
       evidenceKind: best ? best[1] : "none",
       liveness: classify(c, { transcriptAt, targetAt, dirAt }, now),
-    };
-  });
+    });
+  }
+  return out;
 }

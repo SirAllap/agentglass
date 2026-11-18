@@ -31,8 +31,9 @@ const R = await import("../src/jiraCardRead.ts");
 const credFile = join(dir, "creds.json");
 J.__setJiraSettingsPath(join(dir, "jira-settings.json"));
 
-afterAll(() => {
+afterAll(async () => {
   C.__clearAll();
+  (await import("../src/jiraEdit.ts")).__forgetOffered();
   C.__setCredentialsPath(null);
   J.__setJiraBase(null);
   J.__setJiraSettingsPath(null);

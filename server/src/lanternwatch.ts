@@ -41,6 +41,7 @@ import { reconcile as namedAlive, type NamedAgent } from "./agentops.ts";
 import { lanternWatch, lanternWatchMinutes } from "./config.ts";
 import { pushLanternFindings } from "./alerts.ts";
 import { wakeSeats } from "./seatwake.ts";
+import { setTimeoutAs } from "./loopwatch.ts";
 
 export interface Finding {
   kind: "waiting" | "forgotten" | "gone";
@@ -184,11 +185,12 @@ export async function tick(now = Date.now()): Promise<Finding[]> {
   }
 }
 
-function schedule(): void {
+/** `label` is "boot:…" for the first arming only: the re-arms after each tick are runtime work. */
+function schedule(label = "lantern watch tick"): void {
   if (timer) clearTimeout(timer);
   timer = null;
   if (!lanternWatch()) return;
-  timer = setTimeout(() => { void tick().finally(schedule); }, lanternWatchMinutes() * 60_000);
+  timer = setTimeoutAs(label, () => { void tick().finally(() => schedule()); }, lanternWatchMinutes() * 60_000);
   /* A timer must never be what keeps the server alive on shutdown. */
   (timer as { unref?: () => void }).unref?.();
 }
@@ -196,7 +198,7 @@ function schedule(): void {
 /** Start the clock, or restart it after Settings changed the interval — the
  *  first look is one interval away, not now: the instant alerts already cover
  *  "now", and a notification the second the app opens is noise. */
-export function startLanternWatch(): void { schedule(); }
+export function startLanternWatch(): void { schedule("boot:lantern-watch:tick"); }
 export function restartLanternWatch(): void { schedule(); }
 export function stopLanternWatch(): void { if (timer) clearTimeout(timer); timer = null; }
 

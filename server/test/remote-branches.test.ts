@@ -68,7 +68,7 @@ const step = story();
 
 describe("remoteBranches", () => {
   step("lists what is on the remote, newest first", async () => {
-    const r = gw.remoteBranches(clone, "origin");
+    const r = await gw.remoteBranches(clone, "origin");
     expect(r.ok).toBe(true);
     expect(r.remote).toBe("origin");
     expect(r.branches.map((b) => b.name)).toEqual(["WEB-3-gamma", "WEB-2-beta", "WEB-1-alpha", "main"]);
@@ -83,20 +83,20 @@ describe("remoteBranches", () => {
     // counted `refs/remotes/origin/HEAD`, which `%(refname:short)` renders as
     // the bare word "origin" — so a guard against names ending in "/HEAD"
     // matched nothing and the tab claimed one branch more than the pane shows.
-    const r = gw.remotes(clone).find((x) => x.name === "origin")!;
-    expect(r.branches).toBe(gw.remoteBranches(clone, "origin").branches.length);
+    const r = (await gw.remotes(clone)).find((x) => x.name === "origin")!;
+    expect(r.branches).toBe((await gw.remoteBranches(clone, "origin")).branches.length);
   });
 
   step("drops origin/HEAD — it points at another row in the same list", async () => {
     // A fresh clone always has one. Listed, it looks like a branch called HEAD
     // that you could check out.
     expect(run(clone, "symbolic-ref", "refs/remotes/origin/HEAD").stdout.trim()).toBe("refs/remotes/origin/main");
-    expect(gw.remoteBranches(clone, "origin").branches.some((b) => b.name === "HEAD")).toBe(false);
+    expect((await gw.remoteBranches(clone, "origin")).branches.some((b) => b.name === "HEAD")).toBe(false);
   });
 
   step("marks the ones you already have, and only those", async () => {
     // `main` is the clone's own branch; nothing else has been brought down.
-    const by = new Map(gw.remoteBranches(clone, "origin").branches.map((b) => [b.name, b]));
+    const by = new Map((await gw.remoteBranches(clone, "origin")).branches.map((b) => [b.name, b]));
     expect(by.get("main")!.local).toBe(true);
     expect(by.get("main")!.tracking).toBe(true);
     expect(by.get("WEB-1-alpha")!.local).toBe(false);
@@ -104,24 +104,24 @@ describe("remoteBranches", () => {
   });
 
   step("defaults to the repo's only remote when none is named", async () => {
-    expect(gw.remoteBranches(clone, "").remote).toBe("origin");
+    expect((await gw.remoteBranches(clone, "")).remote).toBe("origin");
   });
 
   step("answers nothing rather than everything for a remote that isn't there", async () => {
     // The refs/remotes/<name> namespace simply doesn't exist — the danger would
     // be falling back to listing every remote's branches under one name.
-    expect(gw.remoteBranches(clone, "upstream").branches).toEqual([]);
+    expect((await gw.remoteBranches(clone, "upstream")).branches).toEqual([]);
   });
 
   step("refuses a remote name that is really a path", async () => {
-    expect(gw.remoteBranches(clone, "origin/../../etc").ok).toBe(false);
+    expect((await gw.remoteBranches(clone, "origin/../../etc")).ok).toBe(false);
   });
 });
 
 describe("trackRemoteBranch", () => {
   step("creates a local branch tracking the remote one, without moving the checkout", async () => {
     const head = run(clone, "rev-parse", "--abbrev-ref", "HEAD").stdout.trim();
-    expect(gw.trackRemoteBranch(clone, "origin/WEB-1-alpha").ok).toBe(true);
+    expect((await gw.trackRemoteBranch(clone, "origin/WEB-1-alpha")).ok).toBe(true);
     expect(run(clone, "rev-parse", "--verify", "--quiet", "refs/heads/WEB-1-alpha").status).toBe(0);
     expect(run(clone, "config", "--get", "branch.WEB-1-alpha.merge").stdout.trim()).toBe("refs/heads/WEB-1-alpha");
     expect(run(clone, "config", "--get", "branch.WEB-1-alpha.remote").stdout.trim()).toBe("origin");
@@ -130,13 +130,13 @@ describe("trackRemoteBranch", () => {
   });
 
   step("shows up as local on the very next listing", async () => {
-    const b = gw.remoteBranches(clone, "origin").branches.find((x) => x.name === "WEB-1-alpha")!;
+    const b = (await gw.remoteBranches(clone, "origin")).branches.find((x) => x.name === "WEB-1-alpha")!;
     expect(b.local).toBe(true);
     expect(b.tracking).toBe(true);
   });
 
   step("switches the checkout when asked to", async () => {
-    expect(gw.trackRemoteBranch(clone, "origin/WEB-2-beta", { switch: true }).ok).toBe(true);
+    expect((await gw.trackRemoteBranch(clone, "origin/WEB-2-beta", { switch: true })).ok).toBe(true);
     expect(run(clone, "rev-parse", "--abbrev-ref", "HEAD").stdout.trim()).toBe("WEB-2-beta");
     run(clone, "checkout", "-q", "main");
   });
@@ -144,7 +144,7 @@ describe("trackRemoteBranch", () => {
   step("refuses when the local name is taken", async () => {
     // The existing branch may be a different branch that happens to share a
     // name; quietly reusing it is how you check out the wrong work.
-    const r = gw.trackRemoteBranch(clone, "origin/WEB-1-alpha");
+    const r = await gw.trackRemoteBranch(clone, "origin/WEB-1-alpha");
     expect(r.ok).toBe(false);
     expect(r.error).toContain("already have a local");
   });
@@ -152,12 +152,12 @@ describe("trackRemoteBranch", () => {
   step("refuses a ref whose prefix is not a remote", async () => {
     // Without this, a local branch literally called "origin/x" and a branch
     // called "x" on the remote "origin" are indistinguishable.
-    expect(gw.trackRemoteBranch(clone, "nope/WEB-3-gamma").ok).toBe(false);
-    expect(gw.trackRemoteBranch(clone, "WEB-3-gamma").ok).toBe(false);
+    expect((await gw.trackRemoteBranch(clone, "nope/WEB-3-gamma")).ok).toBe(false);
+    expect((await gw.trackRemoteBranch(clone, "WEB-3-gamma")).ok).toBe(false);
   });
 
   step("refuses a remote branch this clone has never seen", async () => {
-    const r = gw.trackRemoteBranch(clone, "origin/never-fetched");
+    const r = await gw.trackRemoteBranch(clone, "origin/never-fetched");
     expect(r.ok).toBe(false);
     expect(r.error).toContain("fetch first");
   });
@@ -169,7 +169,7 @@ const sibling = (branch: string) => `${clone}-${branch}`;
 describe("a remote branch as a worktree", () => {
   step("cuts the new branch from the remote ref, not from HEAD", async () => {
     const path = sibling("WEB-3-gamma");
-    expect(gw.addWorktree(clone, path, "WEB-3-gamma", true, "origin/WEB-3-gamma").ok).toBe(true);
+    expect((await gw.addWorktree(clone, path, "WEB-3-gamma", true, "origin/WEB-3-gamma")).ok).toBe(true);
     // The point of passing a start point at all: without it the worktree would
     // hold a copy of main under the ticket's name.
     expect(run(path, "rev-parse", "HEAD").stdout.trim())
@@ -178,13 +178,13 @@ describe("a remote branch as a worktree", () => {
   });
 
   step("reports the checkout that has it, so the list can offer to open it", async () => {
-    const b = gw.remoteBranches(clone, "origin").branches.find((x) => x.name === "WEB-3-gamma")!;
+    const b = (await gw.remoteBranches(clone, "origin")).branches.find((x) => x.name === "WEB-3-gamma")!;
     expect(b.local).toBe(true);
     expect(b.worktree).toBe(sibling("WEB-3-gamma"));
   });
 
   step("refuses a start point that isn't here", async () => {
-    const r = gw.addWorktree(clone, sibling("x"), "x", true, "origin/not-a-branch");
+    const r = await gw.addWorktree(clone, sibling("x"), "x", true, "origin/not-a-branch");
     expect(r.ok).toBe(false);
     expect(r.error).toContain("fetch first");
   });
@@ -195,18 +195,18 @@ describe("where a worktree may be created", () => {
   // sends `${root}-${branch}`, and this refused everything but
   // `<repo>/.worktrees/`. Every press of "+ add worktree" failed.
   step("accepts the sibling directory the panel actually asks for", async () => {
-    expect(gw.addWorktree(clone, sibling("WEB-2-beta-wt"), "WEB-2-beta-wt", true).ok).toBe(true);
+    expect((await gw.addWorktree(clone, sibling("WEB-2-beta-wt"), "WEB-2-beta-wt", true)).ok).toBe(true);
   });
 
   step("still accepts the nested layout", async () => {
-    expect(gw.addWorktree(clone, join(clone, ".worktrees", "nested"), "nested", true).ok).toBe(true);
+    expect((await gw.addWorktree(clone, join(clone, ".worktrees", "nested"), "nested", true)).ok).toBe(true);
   });
 
   step("refuses anywhere else", async () => {
     // A full checkout planted in a served web root or an autostart directory is
     // the thing the confinement exists to prevent.
     for (const p of [join(dir, "elsewhere"), join(dir, "sub", "deep"), "/tmp/agx-not-here", join(clone, "inside")]) {
-      const r = gw.addWorktree(clone, p, "nope", true);
+      const r = await gw.addWorktree(clone, p, "nope", true);
       expect(r.ok).toBe(false);
       expect(r.error).toContain("worktree path must be");
     }
@@ -214,12 +214,12 @@ describe("where a worktree may be created", () => {
 
   step("refuses a sibling that merely shares the parent", async () => {
     // `clone2` is next to `clone` and is not `clone-something`.
-    const r = gw.addWorktree(clone, join(dir, "clone2"), "nope", true);
+    const r = await gw.addWorktree(clone, join(dir, "clone2"), "nope", true);
     expect(r.ok).toBe(false);
   });
 
   step("cannot climb out with ..", async () => {
-    const r = gw.addWorktree(clone, join(clone, "..", "..", "escape"), "nope", true);
+    const r = await gw.addWorktree(clone, join(clone, "..", "..", "escape"), "nope", true);
     expect(r.ok).toBe(false);
   });
 });

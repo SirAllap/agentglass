@@ -73,9 +73,16 @@ describe("notifies", () => {
     expect(notifies(p, "blocked", "chip")).toBe(false);
     expect(notifies(p, "blocked", "bell")).toBe(true);
   });
-  test("none silences a kind that is otherwise fully on", () => {
+  test("none silences a kind that is otherwise fully on, except blocked", () => {
+    const p = { ...base, none: true, kinds: { ...base.kinds, idle: true } };
+    expect(notifies(p, "idle", "desktop")).toBe(false);
+    expect(notifies(p, "blocked", "desktop")).toBe(true);
+  });
+  test("none lets an asked-for notice through, still per kind and channel", () => {
     const p = { ...base, none: true };
-    expect(notifies(p, "blocked", "desktop")).toBe(false);
+    expect(notifies(p, "reminders", "desktop", { asked: true })).toBe(true);
+    expect(notifies(p, "reminders", "desktop")).toBe(false);
+    expect(notifies({ ...p, kinds: { ...p.kinds, reminders: false } }, "reminders", "desktop", { asked: true })).toBe(false);
   });
 });
 

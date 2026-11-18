@@ -100,10 +100,10 @@ describe("a read", () => {
     const rid = await ridOf(w);
     expect(w.frames[0]!.data).toEqual({ cmd: "ui", do: "ui.read", args: { panel: "bench" } });
     const value = { state: { count: 0 }, untrusted: {} };
-    expect(await (await result({ rid, ok: true, applied: true, value })).json()).toEqual({ ok: true, known: true });
+    expect(await (await result({ rid, ok: true, value })).json()).toEqual({ ok: true, known: true });
     const r = await asked;
     expect(r.status).toBe(200);
-    expect(await r.json()).toEqual({ ok: true, applied: true, value });
+    expect(await r.json()).toEqual({ ok: true, value });
   });
 
   test("a read the registry does not have, or with a bad panel, is a 400 before any window is asked", async () => {

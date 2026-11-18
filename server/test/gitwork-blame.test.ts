@@ -7,7 +7,11 @@ import { identify } from "./gitIdentity.ts";
 // All gitwork tests share one skeleton: a scratch repo outside the real tree,
 // a GIT_CONFIG_GLOBAL pointing at a temp config so nothing on this machine can
 // leak in, and guard() resolved against the scratch root via AGENTGLASS_ROOT.
+// A container can export GIT_AUTHOR_*/GIT_COMMITTER_*, which beat the repo's own config: take them out for the test and put them back after.
+const IDENTITY_ENV = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"];
+const savedIdentity: Record<string, string | undefined> = {};
 async function makeRepo() {
+  for (const k of IDENTITY_ENV) { if (!(k in savedIdentity)) savedIdentity[k] = process.env[k]; delete process.env[k]; }
   const dir = mkdtempSync(join(tmpdir(), "agx-blame-"));
   process.env.AGENTGLASS_ROOT = dir;
   const config = join(dir, ".gitconfig");
@@ -42,6 +46,7 @@ describe("blame", () => {
     rmSync(process.env.AGENTGLASS_ROOT!, { recursive: true, force: true });
     delete process.env.AGENTGLASS_ROOT;
     delete process.env.GIT_CONFIG_GLOBAL;
+    for (const k of IDENTITY_ENV) { if (savedIdentity[k] === undefined) delete process.env[k]; else process.env[k] = savedIdentity[k]; }
   });
 
   test("blames across two commits", async () => {
@@ -52,7 +57,7 @@ describe("blame", () => {
     git(["add", "a.txt"]);
     git(["commit", "-q", "-m", "tweak"]);
     const m = await import("../src/gitwork.ts");
-    const res = m.blameFile(repo, "a.txt", "");
+    const res = await m.blameFile(repo, "a.txt", "");
     expect(res.ok).toBe(true);
     expect(res.lines?.length).toBe(4);
     // Lines 1-2 from the first commit, 3-4 from the second, in final-line order.
@@ -71,7 +76,7 @@ describe("blame", () => {
     git(["commit", "-q", "-m", "seed"]);
     writeFileSync(join(repo, "a.txt"), "one\nbrand new\n");
     const m = await import("../src/gitwork.ts");
-    const res = m.blameFile(repo, "a.txt", "");
+    const res = await m.blameFile(repo, "a.txt", "");
     expect(res.ok).toBe(true);
     expect(res.lines!.length).toBe(2);
     expect(res.lines![0].sha).not.toBe("");
@@ -86,7 +91,7 @@ describe("blame", () => {
     git(["add", "a.txt"]);
     git(["commit", "-q", "-m", "tweak"]);
     const m = await import("../src/gitwork.ts");
-    const res = m.blameFile(repo, "a.txt", "HEAD~1");
+    const res = await m.blameFile(repo, "a.txt", "HEAD~1");
     expect(res.ok).toBe(true);
     expect(res.lines!.length).toBe(1);
     expect(res.lines![0]).toMatchObject({ line: 1, content: "one", subject: "seed" });
@@ -97,7 +102,7 @@ describe("blame", () => {
     git(["add", "a.txt"]);
     git(["commit", "-q", "-m", "seed"]);
     const m = await import("../src/gitwork.ts");
-    const res = m.blameFile(repo, "nope.txt", "");
+    const res = await m.blameFile(repo, "nope.txt", "");
     expect(res.ok).toBe(false);
     expect(res.error).toContain("not in HEAD");
   });
@@ -109,7 +114,7 @@ describe("blame", () => {
     git(["mv", "a.txt", "b.txt"]);
     git(["commit", "-q", "-m", "renamed"]);
     const m = await import("../src/gitwork.ts");
-    const res = m.fileHistory(repo, "b.txt");
+    const res = await m.fileHistory(repo, "b.txt");
     expect(res.ok).toBe(true);
     expect(res.entries?.length).toBe(2);
     expect(res.entries![0]).toMatchObject({ subject: "renamed", author: "T" });
@@ -122,7 +127,7 @@ describe("blame", () => {
     git(["add", "a.txt"]);
     git(["commit", "-q", "-m", "seed"]);
     const m = await import("../src/gitwork.ts");
-    const res = m.fileHistory(repo, "nope.txt");
+    const res = await m.fileHistory(repo, "nope.txt");
     expect(res.ok).toBe(true);
     expect(res.entries?.length ?? 0).toBe(0);
   });
@@ -132,8 +137,8 @@ describe("blame", () => {
     git(["add", "a.txt"]);
     git(["commit", "-q", "-m", "seed"]);
     const m = await import("../src/gitwork.ts");
-    expect(m.blameFile("/nope", "a.txt", "")).toEqual({ ok: false, error: "not a git repository root" });
-    expect(m.fileHistory(repo, "../escape")).toEqual({ ok: false, error: "invalid path" });
+    expect(await m.blameFile("/nope", "a.txt", "")).toEqual({ ok: false, error: "not a git repository root" });
+    expect(await m.fileHistory(repo, "../escape")).toEqual({ ok: false, error: "invalid path" });
     expect(readFileSync(join(process.env.AGENTGLASS_ROOT!, "setup.sh"), "utf8")).toBe("touch");
   });
 });

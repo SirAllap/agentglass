@@ -45,6 +45,8 @@
 //    now instead of later, and the sweep already de-duplicates.
 import { sidecarAllowed, tmuxEnv } from "./tmuxctl.ts";
 import { validSessionName } from "./tmuxpane.ts";
+import { setTimeoutAs } from "./loopwatch.ts";
+import { runChild } from "./broker/brokerRun.ts";
 
 /** The poll's rhythm when nothing pushes: 500 ms while anything moves, 2 s
  *  after QUIET_SWEEPS unchanged answers. See `arm` in terminal.ts. */
@@ -182,7 +184,7 @@ function down(s: Shared): void {
   if (s.closed || s.unsupported || s.listeners.size === 0 || s.fails >= MAX_FAILS) return;
   const wait = s.backoff;
   s.backoff = Math.min(BACKOFF_MAX_MS, s.backoff * 2);
-  s.restart = setTimeout(() => { s.restart = null; if (!s.closed) void start(s); }, wait);
+  s.restart = setTimeoutAs("tmux watch restart", () => { s.restart = null; if (!s.closed) void start(s); }, wait);
 }
 
 /** Whether `tmux -V` is a tmux with subscriptions (>= 3.2). Unparseable
@@ -194,10 +196,10 @@ function subscriptions(bin: string[]): Promise<boolean> {
   if (!v) {
     v = (async () => {
       try {
-        const p = Bun.spawn([...bin, "-V"], { stdout: "pipe", stderr: "ignore", env: tmuxEnv() });
-        const out = await new Response(p.stdout).text();
-        await p.exited;
-        const m = /(\d+)\.(\d+)/.exec(out);
+        // Started by the spawn broker (broker/brokerRun.ts), not a fork of this server.
+        const p = await runChild([...bin, "-V"], { env: tmuxEnv(), timeoutMs: 5_000, read: true });
+        if (p.error !== undefined) throw new Error(p.error);
+        const m = /(\d+)\.(\d+)/.exec(p.stdout);
         return !m || Number(m[1]) > 3 || (Number(m[1]) === 3 && Number(m[2]) >= 2);
       } catch { return true; }
     })();
@@ -209,8 +211,7 @@ function subscriptions(bin: string[]): Promise<boolean> {
 /** `has-session` answers without starting a server; `attach-session` would. */
 async function sessionExists(s: Shared): Promise<boolean> {
   try {
-    const p = Bun.spawn([...s.bin, ...s.socket, "has-session", "-t", `=${s.session}`], { stdout: "ignore", stderr: "ignore", env: tmuxEnv() });
-    return (await p.exited) === 0;
+    return (await runChild([...s.bin, ...s.socket, "has-session", "-t", `=${s.session}`], { env: tmuxEnv(), timeoutMs: 5_000, read: true })).code === 0;
   } catch { return false; }
 }
 
@@ -231,7 +232,7 @@ async function start(s: Shared): Promise<void> {
   const kill = () => { try { proc.kill(); } catch { /* gone */ } };
   let pending = SUBSCRIPTIONS.length;
   let block: { triple: string; ours: boolean; text: string; timer: ReturnType<typeof setTimeout> } | null = null;
-  const ready = setTimeout(() => { if (s.proc === proc && !s.up) kill(); }, READY_MS);
+  const ready = setTimeout(() => { if (s.proc === proc && !s.up) kill(); }, READY_MS); // loop-ok: kills one child
   const endBlock = () => { if (block) { clearTimeout(block.timer); block = null; } };
 
   const line = (raw: string) => {
@@ -278,7 +279,7 @@ async function start(s: Shared): Promise<void> {
       /* Flag bit 0 is "client-originated". The first block after attach has
          it clear and answers nothing we sent; counting it would take someone
          else's reply for ours, for good. */
-      block = { triple: b[1], ours: (Number(b[2]) & 1) === 1, text: "", timer: setTimeout(() => { if (s.proc === proc) kill(); }, BLOCK_MS) };
+      block = { triple: b[1], ours: (Number(b[2]) & 1) === 1, text: "", timer: setTimeout(() => { if (s.proc === proc) kill(); }, BLOCK_MS) }; // loop-ok: kills one child
       return;
     }
     if (s.up && MOVED.test(l)) emit(s, "change");

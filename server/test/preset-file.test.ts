@@ -255,7 +255,8 @@ describe("safety always wins", () => {
   const safety = (ceiling: Policy["ceiling"], workerDefault: Policy["workerDefault"]) => ({ ...file(), includes: ["safety"] as PresetFile["includes"], policy: { ceiling, workerDefault } });
 
   test("a file asking for the network when the project's ceiling has it off is refused, not applied", () => {
-    const before = target();
+    // The default ceiling lets the network through now, so this project's ceiling has it off on purpose.
+    const before = target({ policy: { ...policy(), ceiling: { ...policy().ceiling, network: false }, workerDefault: { ...policy().workerDefault, network: false } } });
     const asked = safety({ ...before.policy.ceiling, network: true }, { ...before.policy.workerDefault, network: true });
     const r = applyPreset(asked, before);
     expect(errorOf(r)).toContain("asks for more than this project's most the main agent may allow");

@@ -74,6 +74,15 @@ describe("blocks: the run refuses and names why", () => {
     expect(kinds(await planCleanup(w.main, PR, w.cfg(), ctx))).toEqual(["unreadable"]);
   });
 
+  test("the open-list refusal carries gh's first stderr line, token removed", async () => {
+    w = makeWorld();
+    const ctx = w.ctx({ gh: async (a) => (a[1] === "list" ? { code: 1, stdout: "", stderr: "HTTP 401: Bad credentials (token ghp_abc123SECRET)\nsecond line" } : { code: 0, stdout: JSON.stringify(w.pr), stderr: "" }) });
+    const why = (await planCleanup(w.main, PR, w.cfg(), ctx)).blocks[0]!.why;
+    expect(why).toContain("HTTP 401: Bad credentials");
+    expect(why).not.toContain("ghp_abc123SECRET");
+    expect(why).not.toContain("second line");
+  });
+
   test("a process whose cwd is inside the worktree", async () => {
     w = makeWorld();
     mkdirSync(join(w.wt, "sub"), { recursive: true });

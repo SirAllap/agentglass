@@ -153,7 +153,8 @@ describe.skipIf(!have)("the hook obeys the rules", () => {
       expect((await post("/agent-rules", { root, match, setting: "allow" }, fromApp())).status).toBe(200);
     }
     /* The force push no longer asks, though a never on `git push` is still in force for the plain one. */
-    expect((await hook("git push --force-with-lease origin main")).stdout).toBe("");
+    expect((await hook("git push --force-with-lease origin ORBIT-1042-fix")).stdout).toBe("");
+    expect((await hook("git push --force-with-lease origin main")).stdout).toContain("deny");
     expect((await hook("git push origin main")).stdout).toContain("deny");
 
     expect((await post("/agent-rules", { root, match: "Bash", remove: true }, fromAgent())).status).toBe(403);

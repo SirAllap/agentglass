@@ -30,44 +30,44 @@ for (const n of ["o1", "o2"]) {
 const remoteRefs = () => out(w, "for-each-ref", "--format=%(refname:short)", "refs/remotes");
 
 describe("/git/fetch with a remote name", () => {
-  it("moves only that remote", () => {
-    expect(fetchRemote(w, "o1").ok).toBe(true);
+  it("moves only that remote", async () => {
+    expect((await fetchRemote(w, "o1")).ok).toBe(true);
     expect(remoteRefs()).toContain("o1/o1-topic");
     expect(remoteRefs()).not.toContain("o2/o2-topic");
   });
-  it("refuses a name git remote does not list, and an option-shaped one", () => {
-    expect(fetchRemote(w, "nope")).toMatchObject({ ok: false, error: "no such remote: nope" });
-    expect(fetchRemote(w, "--all").ok).toBe(false);
+  it("refuses a name git remote does not list, and an option-shaped one", async () => {
+    expect(await fetchRemote(w, "nope")).toMatchObject({ ok: false, error: "no such remote: nope" });
+    expect((await fetchRemote(w, "--all")).ok).toBe(false);
   });
-  it("without a name still fetches every remote", () => {
-    expect(fetchRemote(w).ok).toBe(true);
+  it("without a name still fetches every remote", async () => {
+    expect((await fetchRemote(w)).ok).toBe(true);
     expect(remoteRefs()).toContain("o2/o2-topic");
   });
 });
 
 describe("/git/compare with @worktree", () => {
-  it("diffs the commit against the dirty file, with counts", () => {
+  it("diffs the commit against the dirty file, with counts", async () => {
     writeFileSync(join(w, "a.txt"), "one\nTWO\nthree\nfour\n");
-    const r = compareRefs(w, first, "@worktree");
+    const r = await compareRefs(w, first, "@worktree");
     expect(r.ok).toBe(true);
     expect(r.ahead).toEqual([]); expect(r.behind).toEqual([]);
     expect(r.diff).toHaveLength(1);
     expect(r.diff![0]).toMatchObject({ additions: 2, deletions: 1 });
   });
-  it("still demands a real base", () => {
-    expect(compareRefs(w, "nope", "@worktree").ok).toBe(false);
+  it("still demands a real base", async () => {
+    expect((await compareRefs(w, "nope", "@worktree")).ok).toBe(false);
   });
 });
 
 describe("stash list and branch-from", () => {
-  it("returns the stash commit's hash", () => {
+  it("returns the stash commit's hash", async () => {
     sh(w, "stash", "push", "-qm", "wip");
-    const [s] = stashList(w);
+    const [s] = await stashList(w);
     expect(s.hash).toBe(out(w, "rev-parse", "stash@{0}"));
   });
-  it("creates a branch at the commit asked for", () => {
-    expect(createBranch(w, "from-first", first).ok).toBe(true);
+  it("creates a branch at the commit asked for", async () => {
+    expect((await createBranch(w, "from-first", first)).ok).toBe(true);
     expect(out(w, "rev-parse", "HEAD")).toBe(first);
-    expect(createBranch(w, "x", "--evil").ok).toBe(false);
+    expect((await createBranch(w, "x", "--evil")).ok).toBe(false);
   });
 });

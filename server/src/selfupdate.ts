@@ -2,7 +2,9 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { agentglassCacheDir } from "./cachedir.ts";
 import type { UpdateStatus } from "../../shared/types.ts";
+import { waitedFor } from "./loopwatch.ts";
 
 /**
  * Updating the app to the newest released tag.
@@ -100,12 +102,12 @@ function scriptEnv(): NodeJS.ProcessEnv {
 // Overridable by the same env var the update script already reads, so a test
 // can point the clone at a fixture instead of writing into the developer's
 // real one — the mistake #144 fixed for the database.
-const SRC = process.env.AGENTGLASS_UPDATE_SRC || join(homedir(), ".cache", "agentglass", "source");
-const LOG = process.env.AGENTGLASS_UPDATE_LOG || join(homedir(), ".cache", "agentglass", "update.log");
-const STAMP = join(homedir(), ".cache", "agentglass", "last-update.json");
+const SRC = process.env.AGENTGLASS_UPDATE_SRC || join(agentglassCacheDir(), "source");
+const LOG = process.env.AGENTGLASS_UPDATE_LOG || join(agentglassCacheDir(), "update.log");
+const STAMP = join(agentglassCacheDir(), "last-update.json");
 
 function git(cwd: string, args: string[], timeout = 30_000) {
-  return spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout });
+  return waitedFor(`git ${args[0] ?? ""} (self-update)`, () => spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", timeout }));
 }
 
 /** Where an installed app keeps build-info.json: beside the binary. A checkout
@@ -434,7 +436,7 @@ export async function startUpdate(): Promise<{ ok: boolean; error?: string; log?
   const ev = child as unknown as { once(event: string, cb: () => void): void };
   ev.once("exit", clearLock);
   ev.once("error", clearLock);
-  const backstop = setTimeout(clearLock, 15 * 60_000);
+  const backstop = setTimeout(clearLock, 15 * 60_000); // loop-ok: clears a lock file flag
   backstop.unref?.();
   child.unref();
   return { ok: true, log: LOG };

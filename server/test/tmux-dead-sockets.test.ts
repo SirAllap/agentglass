@@ -10,6 +10,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { tmpdir as osTmpdir } from "node:os";
 import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import {
@@ -56,7 +57,7 @@ const tmux = (...args: string[]) =>
 
 describe("tmuxSockets against a hundred dead sockets", () => {
   beforeAll(() => {
-    tmpdir = mkdtempSync("/tmp/agx-deadsock-");
+    tmpdir = mkdtempSync(join(osTmpdir(), "agx-deadsock-"));
     sockDir = join(tmpdir, `tmux-${uid}`);
     mkdirSync(sockDir, { recursive: true, mode: 0o700 });
     const seeded = Bun.spawnSync(["python3", "-c", [
@@ -125,7 +126,7 @@ describe("tmuxSockets / /proc/net/unix", () => {
   let memoRoot = "";
   const saved = process.env.TMUX_TMPDIR;
 
-  beforeAll(() => { memoRoot = mkdtempSync("/tmp/agx-procmemo-"); });
+  beforeAll(() => { memoRoot = mkdtempSync(join(osTmpdir(), "agx-procmemo-")); });
   afterAll(() => {
     __setProcNetUnixPath(null);
     if (saved === undefined) delete process.env.TMUX_TMPDIR; else process.env.TMUX_TMPDIR = saved;

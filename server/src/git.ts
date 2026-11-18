@@ -13,13 +13,14 @@
 import { resolve, dirname, relative, sep } from "node:path";
 // readFileSync: /etc/wsl.conf, for the Windows drive translation below.
 import { readFileSync, statSync } from "node:fs";
-import { inScopeReal } from "./config.ts";
+import { inScopeReal, envLimit } from "./config.ts";
 import { record } from "./gitlog.ts";
-import { currentLabel, resumedAs } from "./loopwatch.ts";
+import { currentLabel, resumedAs, spawnSyncAs, waitedFor } from "./loopwatch.ts";
 import { withSpawnSlot } from "./spawnpool.ts";
+import { brokerExec } from "./broker/brokerHost.ts";
 import type { GitFileStatus, RepoStatus, CommitResult, GitCapability } from "../../shared/types.ts";
 
-export const COMMIT_ENABLED = process.env.AGENTGLASS_COMMIT_DISABLED !== "1";
+export const COMMIT_ENABLED = envLimit("AGENTGLASS_COMMIT_DISABLED") !== "1";
 
 type GitResult = { code: number; stdout: string; stderr: string };
 
@@ -103,7 +104,12 @@ export function git(cwd: string, args: string[]): GitResult {
   try {
     // A hung git call (index.lock contention, a repo on a stalled mount) would
     // otherwise freeze the whole single-threaded server indefinitely.
-    const proc = Bun.spawnSync(argv(cwd, args), { stdout: "pipe", stderr: "pipe", timeout: 15_000 });
+    //
+    // Under a label, like tmux's: a stall inside an unlabelled blocking wait is
+    // blamed on whatever ran before it. Measured: 28 `merge-tree` in a row held
+    // the loop 8467 ms and the stall log said `GET /agents/working`, then
+    // `tmux show-options` for the next 5044 ms; neither had run for seconds.
+    const proc = waitedFor(`git ${verbOf(args)}`, () => Bun.spawnSync(argv(cwd, args), { stdout: "pipe", stderr: "pipe", timeout: 15_000 }));
     const r = {
       code: proc.exitCode ?? 1,
       stdout: proc.stdout?.toString() ?? "",
@@ -164,7 +170,7 @@ export function gitCapability(): GitCapability {
     try {
       // Not through git()/record(): a capability probe must not land in the git
       // activity log. `git --version` needs no repo and cannot hang meaningfully.
-      const r = Bun.spawnSync([bin, "--version"], { stdout: "pipe", stderr: "ignore", timeout: 5_000 });
+      const r = spawnSyncAs("git version probe", [bin, "--version"], { stdout: "pipe", stderr: "ignore", timeout: 5_000 });
       version = r.exitCode === 0 ? (r.stdout?.toString().trim().replace(/^git version /, "") || undefined) : undefined;
     } catch { /* vanished between which and spawn — treat as present, callers still guard */ }
     cap = { available: true, version };
@@ -192,7 +198,7 @@ export function __resetGitCapForTest(): void {
  * gives: a module constant is decided by whichever file imports this first,
  * which in a test run is never the file doing the overriding.
  */
-const gitTimeoutMs = () => Number(process.env.AGENTGLASS_GIT_TIMEOUT_SECONDS ?? 120) * 1000;
+const gitTimeoutMs = () => Number(envLimit("AGENTGLASS_GIT_TIMEOUT_SECONDS") ?? 120) * 1000;
 
 /**
  * How long past the budget we go on waiting for git's output to end.
@@ -210,6 +216,57 @@ const gitTimeoutMs = () => Number(process.env.AGENTGLASS_GIT_TIMEOUT_SECONDS ?? 
  */
 const PIPE_GRACE_MS = 2_000;
 
+/** The most one stream of a git run through the broker may carry back. Past it a read is run again in-process. */
+const BROKER_GIT_MAX = 32 * 1024 * 1024;
+
+/**
+ * The same call, started by the spawn broker instead of by a fork of this
+ * process (see broker/wire.ts for the 2.4 s the fork was measured holding the
+ * only thread). Null means "not answered there": no broker, or an answer that
+ * cannot stand in for the in-process one and is safe to ask again, which is
+ * only ever a read. A write that was sent to a broker that then died is NOT
+ * run a second time: it may have run, and a commit made twice is worse than a
+ * commit reported as failed.
+ */
+function runGitBrokered(cwd: string, args: string[], t0: number, owner: string): Promise<GitResult | null> | null {
+  const budget = gitTimeoutMs();
+  const via = brokerExec({
+    argv: argv(cwd, args),
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS_REQUIRE: "never" },
+    timeoutMs: budget,
+    graceMs: PIPE_GRACE_MS,
+    maxBytes: BROKER_GIT_MAX,
+    read: READ_VERBS.has(verbOf(args)),
+  });
+  // No broker: said at once, with no await, so the in-process spawn below is
+  // still made inside the caller's own turn and is blamed on the caller.
+  if (!via) return null;
+  return via.done.then((a) => {
+    resumedAs(owner);
+    const verb = args[0] ?? "";
+    if ((a.lost || a.truncated) && READ_VERBS.has(verbOf(args))) return null;
+    if (a.error !== undefined) {
+      record(cwd, args, 1, performance.now() - t0, a.error);
+      return { code: 1, stdout: "", stderr: a.error };
+    }
+    if (a.lost) {
+      const err = `git ${verb} was handed to the spawn broker, which stopped before it answered; not run again, because it may have run`;
+      record(cwd, args, 1, performance.now() - t0, err);
+      return { code: 1, stdout: "", stderr: err };
+    }
+    if (a.held) {
+      const err = `git ${verb} gave up after ${budget / 1000}s — killed, and a process it started still held its output`;
+      record(cwd, args, 1, performance.now() - t0, err);
+      return { code: 1, stdout: "", stderr: err };
+    }
+    const err = a.signal && !a.stderr.trim()
+      ? `git ${verb} gave up after ${budget / 1000}s — killed with ${a.signal}`
+      : a.stderr;
+    record(cwd, args, a.code ?? 1, performance.now() - t0, err);
+    return { code: a.code ?? 1, stdout: a.stdout, stderr: err };
+  });
+}
+
 async function runGit(cwd: string, args: string[]): Promise<GitResult> {
   const t0 = performance.now();
   // Whose work this is, read while we are still standing inside the caller —
@@ -217,6 +274,9 @@ async function runGit(cwd: string, args: string[]): Promise<GitResult> {
   // arrive in the meantime. See loopwatch.
   const owner = currentLabel();
   try {
+    const asked = runGitBrokered(cwd, args, t0, owner);
+    const brokered = asked ? await asked : null;
+    if (brokered) return brokered;
     const proc = Bun.spawn(argv(cwd, args), {
       stdout: "pipe",
       stderr: "pipe",
@@ -341,10 +401,23 @@ export async function repoRootOfAsync(anchor: string): Promise<string | null> {
   if (!abs) return null;
   let dir = abs;
   try { if (!statSync(abs).isDirectory()) dir = dirname(abs); } catch { dir = dirname(abs); }
-  const r = await gitAsync(dir, ["rev-parse", "--show-toplevel"]);
-  if (r.code !== 0) return null;
-  return r.stdout.trim() || null;
+  // Callers that overlap (the PR table and the board on one Refresh press)
+  // share one spawn; the entry is gone the moment it settles, so nothing is cached.
+  const flying = ROOT_INFLIGHT.get(dir);
+  if (flying) return flying;
+  const p = (async () => {
+    try {
+      const r = await gitAsync(dir, ["rev-parse", "--show-toplevel"]);
+      if (r.code !== 0) return null;
+      return r.stdout.trim() || null;
+    } finally {
+      ROOT_INFLIGHT.delete(dir);
+    }
+  })();
+  ROOT_INFLIGHT.set(dir, p);
+  return p;
 }
+const ROOT_INFLIGHT = new Map<string, Promise<string | null>>();
 
 /**
  * The *project* a telemetry path belongs to — the main repo root.

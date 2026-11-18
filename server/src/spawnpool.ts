@@ -1,3 +1,4 @@
+import { envLimit } from "./config.ts";
 // A ceiling on how many subprocesses this server has in flight at once.
 //
 // Making the git and docker reads concurrent fixed the freezes and created a
@@ -50,7 +51,7 @@
  */
 const limit = () => Math.max(
   4,
-  Math.min(16, Number(process.env.AGENTGLASS_SPAWN_LIMIT) || navigator.hardwareConcurrency - 2 || 4),
+  Math.min(16, Number(envLimit("AGENTGLASS_SPAWN_LIMIT")) || navigator.hardwareConcurrency - 2 || 4),
 );
 
 // A backstop far above any legitimate spawn (the git spawns cap themselves at

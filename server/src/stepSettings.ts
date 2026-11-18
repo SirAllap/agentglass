@@ -7,7 +7,7 @@
  *
  * The tracker is the only thing that differs: whose person ids are numbers
  * (ClickUp) or account ids and logins (Jira), and which kinds of block exist
- * (Jira has a link and no custom field). ClickUp's sentences are kept exactly as
+ * (Jira has a link, and its field is set to the value saved rather than asked). ClickUp's sentences are kept exactly as
  * they were when this code lived in clickupPrefs.ts; its tests pin them.
  */
 import type { HandoffUnassign, StepAssign, StepBlock } from "../../shared/providers.ts";
@@ -62,7 +62,12 @@ export function assign(name: string, v: unknown, tracker: StepTracker = "clickup
       ? `${name}.who "author" is not offered for ClickUp: a pull request's author and a ClickUp member are different systems and never the same identity. Use { "who": "none", "ask": true } on an assign block to pick who when it runs.`
       : `${name}.who "author" is not offered for Jira: a pull request's author and a Jira user are different systems and never the same identity. Use { "who": "none", "ask": true } on an assign block to pick who when it runs.`);
   }
-  if (w !== "none" && w !== "me" && w !== "person") return bad(`${name}.who must be none, me or person`);
+  if (w === "reviewer") {
+    // A learned GitHub-to-Jira pair is a Jira thing: ClickUp has no such account to start at.
+    if (tracker === "clickup") return bad(`${name}.who "reviewer" is not offered for ClickUp: a reviewer's Jira account is learned from Jira, so use { "who": "none", "ask": true } instead.`);
+    return "person" in v && v.person != null ? bad(`${name}.person is only for who: "person"`) : { ok: true, value: { who: "reviewer" } };
+  }
+  if (w !== "none" && w !== "me" && w !== "person") return bad(`${name}.who must be ${tracker === "clickup" ? "none, me or person" : "none, me, person or reviewer"}`);
   if (w !== "person") {
     return "person" in v && v.person != null ? bad(`${name}.person is only for who: "person"`) : { ok: true, value: { who: w } };
   }
@@ -121,6 +126,8 @@ export function blockList(name: string, v: unknown, trigger: StepTrigger, tracke
       const r = assign(at, rest, tracker);
       if (!r.ok) return r;
       if (r.value.who === "none" && ask !== true) return bad(`${at}.who must be me, author or person: remove the block to assign nobody (or set ask: true, where none is “nobody” as the starting choice)`);
+      // The reviewer's account is learned on this machine and read by the question: it is a starting point, never a write of its own.
+      if (r.value.who === "reviewer" && ask !== true) return bad(`${at}.who "reviewer" is where the question starts: set ask: true, or name the person to assign`);
       let more: { id: number | string; name: string }[] = [];
       if (also !== undefined) {
         if (ask !== true || r.value.who !== "person") return bad(`${at}.also is for a block that asks when it runs and starts at a person`);
@@ -140,7 +147,7 @@ export function blockList(name: string, v: unknown, trigger: StepTrigger, tracke
       if (b.text.length > MAX_COMMENT) return bad(`${at}.text is longer than ${MAX_COMMENT} characters`);
       if ("ask" in b && b.ask !== true && b.ask !== false) return bad(`${at}.ask must be true or false`);
       out.push({ type: "comment", text: b.text, ...(b.ask === true ? { ask: true as const } : null) });
-    } else if (b.type === "field" && clickup) {
+    } else if (b.type === "field") {
       for (const k of Object.keys(b)) if (k !== "type" && k !== "field" && k !== "value" && k !== "ask") return bad(`${at}.${k} is not a setting`);
       const f = text(`${at}.field`, b.field);
       if (!f.ok) return f;
@@ -149,11 +156,14 @@ export function blockList(name: string, v: unknown, trigger: StepTrigger, tracke
       if (typeof b.value !== "string") return bad(`${at}.value must be text: an option's name, a number, or a date as YYYY-MM-DD`);
       if (b.value.length > MAX_FIELD_VALUE) return bad(`${at}.value is longer than ${MAX_FIELD_VALUE} characters`);
       if ("ask" in b && b.ask !== true && b.ask !== false) return bad(`${at}.ask must be true or false`);
+      // A Jira step sends the value saved here: the field's name is not one the question could offer, so an asking
+      // field would be a question with nothing to answer.
+      if (!clickup && b.ask === true) return bad(`${at}.ask is not offered for Jira: the step sets the field to the value saved here`);
       out.push({ type: "field", field: f.value, value: b.value.trim(), ...(b.ask === true ? { ask: true as const } : null) });
     } else if (b.type === "link" && !clickup) {
       for (const k of Object.keys(b)) if (k !== "type") return bad(`${at}.${k} is not a setting`);
       out.push({ type: "link" });
-    } else return bad(clickup ? `${at}.type must be move, unassign, assign, comment or field` : `${at}.type must be move, unassign, assign, comment or link`);
+    } else return bad(clickup ? `${at}.type must be move, unassign, assign, comment or field` : `${at}.type must be move, unassign, assign, comment, field or link`);
   }
   const problem = blocksProblem(trigger, out, tracker);
   return problem ? bad(`${name} ${problem}`) : { ok: true, value: out };

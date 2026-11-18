@@ -8,7 +8,7 @@
  * person reaches this, and who may write them is a promise and not a comment.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freePort } from "./freePort.ts";
@@ -28,8 +28,9 @@ process.env.XDG_CONFIG_HOME = join(dir, "config");
 process.env.AGENTGLASS_DOCTRINE = join(dir, "doctrine");
 process.env.AGENTGLASS_DB = join(dir, "flow.db");
 
-const { readFlow, writeFlow, deleteFlow, renderFlowForOrchestrator, roleLines, ROLE_LINES_MAX } = await import("../src/flow.ts");
+const { checkDeviation, noteDeviation, readFlow, writeFlow, deleteFlow, undoFlowWrite, renderFlowForOrchestrator, roleLines, ROLE_LINES_MAX, nextPathRole, autoContinueOn } = await import("../src/flow.ts");
 const { readStoredFlow } = await import("../src/config.ts");
+const { flowWriteAccess, FLOW_PERSON, FLOW_AGENT_EDIT_OFF } = await import("../src/flowaccess.ts");
 const { readPolicy, writePolicy } = await import("../src/orchestration.ts");
 const { templateFlow } = await import("../../shared/flowTemplates.ts");
 const { validateFlow, FLOW_ICONS, FLOW_HUES } = await import("../../shared/flow.ts");
@@ -60,6 +61,10 @@ function withQa(): Flow {
 }
 
 describe("the flow a project has when it saved none", () => {
+  test("the shipped template passes the validator", () => {
+    expect(validateFlow(templateFlow()).ok).toBe(true);
+  });
+
   test("is the template, and it is data rather than a picture", () => {
     const v = readFlow(join(dir, "proj-template"));
     expect(v.scope).toBe("template");
@@ -77,7 +82,7 @@ describe("the flow a project has when it saved none", () => {
     expect(f.roster.map((r) => r.name)).toEqual([
       "Planner", "Builder", "Inspector", "Verifier", "Landing",
       "QA-only", "Continuous development", "DevOps · server", "Security",
-      "Frontend", "Backend · Node", "CI", "Deployment", "Docs",
+      "Frontend", "Backend · Node", "CI", "Deployment", "Docs", "General",
     ]);
     for (const r of f.roster) {
       expect(r.does.length).toBeGreaterThan(10);
@@ -190,11 +195,140 @@ describe("a step a person adds", () => {
   });
 });
 
+describe("one step back", () => {
+  test("a write keeps the flow before it, and the person's undo puts it back", () => {
+    const root = join(dir, "proj-undo");
+    expect(writeFlow(root, withQa(), "the chair of orbit").ok).toBe(true);
+    expect(readFlow(root).undo?.who).toBe("the chair of orbit");
+    const r = undoFlowWrite(root);
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.who).toBe("the chair of orbit");
+    expect(readFlow(root).scope).toBe("template");
+    expect(readFlow(root).undo).toBeNull();
+  });
+
+  test("a person's write after an agent's replaces the step, so undo undoes the person's", () => {
+    const root = join(dir, "proj-undo-replace");
+    expect(writeFlow(root, withQa(), "the chair of orbit").ok).toBe(true);
+    const second = withQa();
+    second.roster = second.roster.map((r) => (r.id === "qa-only" ? { ...r, name: "QA again" } : r));
+    expect(writeFlow(root, second, "the person").ok).toBe(true);
+    expect(readFlow(root).undo?.who).toBe("the person");
+    const r = undoFlowWrite(root);
+    expect(r.ok).toBe(true);
+    expect(readFlow(root).flow.roster.find((x) => x.id === "qa-only")!.name).toBe("QA-only");
+  });
+
+  test("a write that changes nothing keeps the step, so the edit before it stays undoable", () => {
+    const root = join(dir, "proj-undo-noop");
+    expect(writeFlow(root, withQa(), "the person").ok).toBe(true);
+    const wanted = withQa();
+    wanted.roster = wanted.roster.map((r) => (r.id === "qa-only" ? { ...r, name: "QA again" } : r));
+    expect(writeFlow(root, wanted, "the chair of orbit").ok).toBe(true);
+    // The seat writes the same value again, as the CLI does when it reads and saves back.
+    expect(writeFlow(root, wanted, "the chair of orbit").ok).toBe(true);
+    expect(readFlow(root).undo?.who).toBe("the chair of orbit");
+    const r = undoFlowWrite(root);
+    expect(r.ok).toBe(true);
+    expect(readFlow(root).flow.roster.find((x) => x.id === "qa-only")!.name).toBe("QA-only");
+  });
+
+  test("deleting a saved flow keeps it, and undo restores it", () => {
+    const root = join(dir, "proj-undo-delete");
+    expect(writeFlow(root, withQa()).ok).toBe(true);
+    expect(deleteFlow(root, "the chair of orbit").ok).toBe(true);
+    expect(readFlow(root).scope).toBe("template");
+    const r = undoFlowWrite(root);
+    expect(r.ok).toBe(true);
+    expect(readFlow(root).scope).toBe("project");
+    expect(readFlow(root).flow.path).toContain("qa-only");
+  });
+
+  test("a second undo answers nothing to undo", () => {
+    const root = join(dir, "proj-undo-once");
+    expect(writeFlow(root, withQa()).ok).toBe(true);
+    expect(undoFlowWrite(root).ok).toBe(true);
+    const again = undoFlowWrite(root);
+    expect(again.ok).toBe(false);
+    expect(!again.ok && again.error).toBe("nothing to undo");
+  });
+});
+
+describe("who may write the flow", () => {
+  const on = () => true;
+  const off = () => false;
+  const seat = { person: false, seatRoot: "/orbit", root: "/orbit", agentEdit: on, controlLevel: 2 as const, readonly: false };
+
+  test("the person's own window writes it, as before", () => {
+    expect(flowWriteAccess({ ...seat, person: true, root: "/orbit" }).ok).toBe(true);
+  });
+
+  test("the seat of this project writes when flow.agentEdit is on", () => {
+    const r = flowWriteAccess(seat);
+    expect(r.ok).toBe(true);
+    expect(r.root).toBe("/orbit");
+  });
+
+  test("the seat of this project, with the setting off, hears which switch", () => {
+    const r = flowWriteAccess({ ...seat, agentEdit: off });
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.error).toBe(FLOW_AGENT_EDIT_OFF);
+  });
+
+  test("an agent that is not a seat, or another project's seat, hears the person's sentence and not the switch", () => {
+    const notASeat = flowWriteAccess({ ...seat, seatRoot: undefined });
+    expect(!notASeat.ok && notASeat.error).toBe(FLOW_PERSON);
+    const other = flowWriteAccess({ ...seat, seatRoot: "/acme" });
+    expect(!other.ok && other.error).toBe(FLOW_PERSON);
+    expect(!other.ok && other.error).not.toContain("flow.agentEdit");
+  });
+
+  test("a seat in a worktree of its project writes the project's own record", () => {
+    const r = flowWriteAccess({ ...seat, root: "/orbit/.worktrees/task-1" });
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.root).toBe("/orbit");
+  });
+
+  test("the control level is 2 only: 1 looks, 3 stages, readonly is refused", () => {
+    const held = flowWriteAccess({ ...seat, controlLevel: 1 });
+    expect(held.ok).toBe(false);
+    expect(!held.ok && held.error).toContain("allows up to level 1");
+    expect(flowWriteAccess({ ...seat, controlLevel: 2 }).ok).toBe(true);
+    const staged = flowWriteAccess({ ...seat, controlLevel: 3 });
+    expect(staged.ok).toBe(false);
+    expect(!staged.ok && staged.error).toContain("level 3 only stages");
+    expect(flowWriteAccess({ ...seat, controlLevel: 2, readonly: true }).ok).toBe(false);
+  });
+});
+
 describe("what a flow refuses, in sentences", () => {
   const errorOf = (f: unknown): string => {
     const v = validateFlow(f);
     return v.ok ? "" : v.error;
   };
+
+  test("the Gate is last or the flow is refused", () => {
+    const f = templateFlow();
+    expect(errorOf(f)).toBe("");
+    const mid = { ...f, path: ["planner", "landing", "builder", "inspector", "verifier"] };
+    expect(errorOf(mid)).toContain("has to be the last step");
+  });
+
+  test("an old flow with the Gate mid-path still loads, and only a move that does not worsen it saves", () => {
+    const { writeStoredFlow } = require("../src/config.ts");
+    const root = join(dir, "proj-old-gate");
+    const old = { ...templateFlow(), path: ["planner", "landing", "builder", "inspector", "verifier"] };
+    expect(writeStoredFlow(root, old).ok).toBe(true);
+    expect(readStoredFlow(root)?.path).toEqual(old.path);
+    expect(readFlow(root).flow.path).toEqual(old.path);
+    // Further from the end: refused. The same place: allowed. The Gate at the end: allowed.
+    expect(writeFlow(root, { ...old, path: ["landing", "planner", "builder", "inspector", "verifier"] }).ok).toBe(false);
+    expect(writeFlow(root, { ...old, path: ["planner", "landing", "inspector", "builder", "verifier"] }).ok).toBe(true);
+    expect(writeFlow(root, { ...old, path: ["planner", "builder", "inspector", "verifier", "landing"] }).ok).toBe(true);
+    expect(readStoredFlow(root)?.path.at(-1)).toBe("landing");
+    // A fresh flow still cannot put the Gate mid-path.
+    expect(writeFlow(join(dir, "proj-new-gate"), old).ok).toBe(false);
+  });
 
   test("a failing arrow needs a target and a round cap", () => {
     const noCap = withQa();
@@ -251,6 +385,23 @@ describe("what a flow refuses, in sentences", () => {
     expect(errorOf(f)).toContain("policy's");
   });
 
+  test("a person's step keeps no chain and no built-in beside it, and may be reads-only", () => {
+    const reads = withQa();
+    reads.roster = reads.roster.map((r) => (r.id === "landing" ? { ...r, readsOnly: true } : r));
+    const v = validateFlow(reads);
+    expect(v.ok).toBe(true);
+    const landing = v.ok && v.value.roster.find((r) => r.id === "landing")!;
+    expect(landing && [landing.actor, landing.readsOnly, landing.chain]).toEqual(["person", true, []]);
+
+    const chained = withQa();
+    chained.roster = chained.roster.map((r) => (r.id === "landing" ? { ...r, chain: [{ engine: "claude", model: "haiku" }] } : r));
+    expect(errorOf(chained)).toContain("a person answers this step");
+
+    const both = withQa();
+    both.roster = both.roster.map((r) => (r.id === "landing" ? { ...r, policyRole: "verifier" as const } : r));
+    expect(errorOf(both)).toContain("and policyRole cannot both be set");
+  });
+
   test("no sentence says true or false", () => {
     const f = withQa();
     const messages = [
@@ -278,9 +429,13 @@ describe("what a flow refuses, in sentences", () => {
       f.roster = f.roster.map((r) => (r.id === "qa-only" ? { ...r, allow: [never] } : r));
       expect(errorOf(f)).toContain(`"${never}" is never granted to a worker`);
     }
-    const force = withQa();
-    force.roster = force.roster.map((r) => (r.id === "qa-only" ? { ...r, allow: ["git push --force"] } : r));
-    expect(errorOf(force)).toContain('"git push" is never granted to a worker');
+    // The seat can push and use gh, so a role may name them; sudo is the floor.
+    const seats = withQa();
+    seats.roster = seats.roster.map((r) => (r.id === "qa-only" ? { ...r, allow: ["git push", "gh", "rm"] } : r));
+    expect(validateFlow(seats).ok).toBe(true);
+    const sudo = withQa();
+    sudo.roster = sudo.roster.map((r) => (r.id === "qa-only" ? { ...r, allow: ["sudo -u x"] } : r));
+    expect(errorOf(sudo)).toContain('"sudo" is never granted to a worker');
 
     const shaped = withQa();
     shaped.roster = shaped.roster.map((r) => (r.id === "qa-only" ? { ...r, allow: ["$(whoami)"] } : r));
@@ -320,6 +475,29 @@ describe("the policy and the flow are two records", () => {
     expect(readFlow(root).scope).toBe("template");
     expect(writeFlow(root, withQa()).ok).toBe(true);
     expect(readPolicy(root).policy.rules.map((r) => r.id)).toEqual(["keep-me"]);
+  });
+});
+
+describe("the next role on the path, for auto-continue", () => {
+  test("the role after a known one, in template order", () => {
+    const f = templateFlow();
+    expect(nextPathRole(f, "planner")).toBe("builder");
+    expect(nextPathRole(f, "inspector")).toBe("verifier");
+  });
+
+  test("null at the end of the path", () => {
+    expect(nextPathRole(templateFlow(), "landing")).toBe(null);
+  });
+
+  test("null for a role not on the path", () => {
+    expect(nextPathRole(templateFlow(), "no-such-role")).toBe(null);
+  });
+
+  test("auto-continue is off until the setting turns it on", () => {
+    const root = join(dir, "proj-auto-continue");
+    expect(autoContinueOn(root)).toBe(false);
+    putSetting(root, "flow.autoContinue", true);
+    expect(autoContinueOn(root)).toBe(true);
   });
 });
 
@@ -471,10 +649,257 @@ describe("/flow on a server", () => {
     expect((await getFlow(`/flow?root=${encodeURIComponent(root)}`)).scope).toBe("template");
   });
 
-  test("a seat reaches the flow at no power", () => {
+  test("a seat reaches the flow at no power, and the route decides whether it may write", () => {
     const seat = { kind: "machine", scope: "full", principal: "seat", seat: { root: "/orbit", powers: "assign" } } as const;
     expect(allowed(seat, "GET", "/flow")).toBe(true);
-    expect(allowed(seat, "PUT", "/flow")).toBe(false);
-    expect(allowed(seat, "DELETE", "/flow")).toBe(false);
+    expect(allowed(seat, "PUT", "/flow")).toBe(true);
+    expect(allowed(seat, "DELETE", "/flow")).toBe(true);
+    // The undo is the person's: the wall does not let a seat near it.
+    expect(allowed(seat, "POST", "/flow/undo")).toBe(false);
+  });
+});
+
+/* ── the seat, its setting, and the CLI, on a server that minted its token ── */
+
+const SEAT_ROOT = join(dir, "seat-project");
+const SEAT_SERVER_TOKEN = "tok-flow-seat-server";
+let seatBase = "";
+let seatToken = "";
+let seatProc: ReturnType<typeof Bun.spawn> | null = null;
+
+const seatApp = (b: string) => ({ Authorization: `Bearer ${SEAT_SERVER_TOKEN}`, Origin: b, "Content-Type": "application/json" });
+
+const seatHeaders = () => ({ Authorization: `Bearer ${seatToken}`, "Content-Type": "application/json" });
+const seatPut = (root: string, body: unknown) =>
+  fetch(`${seatBase}/flow?root=${encodeURIComponent(root)}`, { method: "PUT", headers: seatHeaders(), body: JSON.stringify(body) });
+const seatGet = async (root: string) => (await fetch(`${seatBase}/flow?root=${encodeURIComponent(root)}`, { headers: seatHeaders() })).json() as Promise<{ ok: boolean; scope?: string; flow?: Flow; undo?: { who: string } | null; error?: string }>;
+const seatUndo = () => fetch(`${seatBase}/flow/undo?root=${encodeURIComponent(SEAT_ROOT)}`, { method: "POST", headers: seatHeaders(), body: "{}" });
+const personSet = (id: string, value: unknown, root?: string) =>
+  fetch(`${seatBase}/settings/door`, { method: "POST", headers: seatApp(seatBase), body: JSON.stringify({ id, value, ...(root ? { root } : {}) }) });
+
+/** Run the agent's own CLI against the seat server, as the seat. */
+async function cli(args: string[]): Promise<{ code: number; out: Record<string, unknown> }> {
+  const p = Bun.spawn(["python3", new URL("../../bin/agentglass-ui", import.meta.url).pathname, ...args], {
+    env: {
+      PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: join(dir, "home"),
+      AGENTGLASS_SERVER: seatBase, AGENTGLASS_TOKEN: seatToken, AGENTGLASS_SEAT: "1",
+    },
+    stdout: "pipe", stderr: "pipe",
+  });
+  const text = await new Response(p.stdout).text();
+  const err = await new Response(p.stderr).text();
+  await p.exited;
+  let out: Record<string, unknown> = {};
+  try { out = JSON.parse(text) as Record<string, unknown>; } catch { out = { raw: text }; }
+  if (err) out.stderr = err;
+  return { code: p.exitCode ?? 1, out };
+}
+
+describe("the seat edits its own flow", () => {
+  test("boots with a seat token for its project", async () => {
+    mkdirSync(SEAT_ROOT, { recursive: true });
+    const port = await freePort();
+    seatBase = `http://127.0.0.1:${port}`;
+    const tokenFile = join(dir, "seat.token");
+    seatProc = Bun.spawn(["bun", "run", new URL("./seatBoot.ts", import.meta.url).pathname], {
+      env: {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        TMUX_TMPDIR: TMUX_TEST_TMPDIR,
+        HOME: join(dir, "seat-home"), XDG_CONFIG_HOME: join(dir, "seat-home", "config"), XDG_DATA_HOME: join(dir, "seat-home", "data"),
+        XDG_CACHE_HOME: join(dir, "seat-home", "cache"),
+        AGENTGLASS_STATE_DIR: join(dir, "seat-home", "state"),
+        AGENTGLASS_ROOT: join(dir, "seat-home"),
+        AGENTGLASS_DB: join(dir, "seat.db"),
+        AGENTGLASS_SCAN_DISABLED: "1",
+        AGENTGLASS_PORT: String(port),
+        AGENTGLASS_TOKEN: SEAT_SERVER_TOKEN,
+        SEAT_BOOT_TOKEN: tokenFile,
+        SEAT_BOOT_ROOT: SEAT_ROOT,
+      },
+      stdout: "ignore", stderr: "pipe",
+    });
+    for (let i = 0; i < 150; i++) {
+      try { if ((await fetch(seatBase + "/health")).ok) { seatToken = readFileSync(tokenFile, "utf8").trim(); return; } } catch { /* booting */ }
+      await Bun.sleep(100);
+    }
+    throw new Error("seat server did not start");
+  }, SERVER_BOOT_MS);
+
+  afterAll(() => { seatProc?.kill(); });
+
+  test("with the setting off the seat hears which switch, and nothing is written", async () => {
+    const res = await seatPut(SEAT_ROOT, withQa());
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toBe(FLOW_AGENT_EDIT_OFF);
+    expect((await seatGet(SEAT_ROOT)).scope).toBe("template");
+  });
+
+  test("another project's seat hears the person's sentence, not the switch's state", async () => {
+    const res = await seatPut(join(dir, "seat-other"), withQa());
+    expect(res.status).toBe(403);
+    const error = ((await res.json()) as { error: string }).error;
+    expect(error).toBe(FLOW_PERSON);
+    expect(error).not.toContain("flow.agentEdit");
+  });
+
+  test("the person turns it on in Settings; the seat then writes, and the person undoes", async () => {
+    const on = await personSet("flow.agentEdit", true, SEAT_ROOT);
+    expect(on.status).toBe(200);
+    // Off is the safer direction: an agent's turn-off applies at once. On is the person's alone.
+    const off = await cli(["settings", "set", "flow.agentEdit", "false", "--root", SEAT_ROOT]);
+    expect(off.code).toBe(0);
+    expect(off.out).toMatchObject({ ok: true, applied: true });
+    const onAsk = await cli(["settings", "set", "flow.agentEdit", "true", "--root", SEAT_ROOT]);
+    expect(onAsk.code).toBe(1);
+    expect(String(onAsk.out.error)).toContain("only the person");
+    const onAgain = await personSet("flow.agentEdit", true, SEAT_ROOT);
+    expect(onAgain.status).toBe(200);
+    const written = await seatPut(SEAT_ROOT, withQa());
+    expect(written.status).toBe(200);
+    const view = await seatGet(SEAT_ROOT);
+    expect(view.scope).toBe("project");
+    expect(view.flow!.path).toContain("qa-only");
+    expect(view.undo?.who).toBe("the chair of seat-project");
+
+    // The undo is the person's own window.
+    expect((await seatUndo()).status).toBe(403);
+    const undone = await fetch(`${seatBase}/flow/undo?root=${encodeURIComponent(SEAT_ROOT)}`, { method: "POST", headers: seatApp(seatBase), body: "{}" });
+    expect(undone.status).toBe(200);
+    const answer = (await undone.json()) as { undone?: string; flow?: Flow };
+    expect(answer.undone).toBe("the chair of seat-project");
+    expect((await seatGet(SEAT_ROOT)).scope).toBe("template");
+  });
+
+  test("the CLI creates planner-x with a prompt and puts it on the path; the page shows it; the person undoes it", async () => {
+    const add = await cli(["flow", "role", "add", "planner-x",
+      "--name", "Planner X", "--does", "Cuts the ask into steps.", "--prompt", "Plan the work and hand it back.",
+      "--policy-role", "builder", "--after", "builder", "--root", SEAT_ROOT]);
+    expect(add.code).toBe(0);
+    expect(add.out.ok).toBe(true);
+    const view = await seatGet(SEAT_ROOT);
+    const role = view.flow!.roster.find((r) => r.id === "planner-x");
+    expect(role?.name).toBe("Planner X");
+    expect(role?.prompt).toBe("Plan the work and hand it back.");
+    expect(role?.policyRole).toBe("builder");
+    expect(role?.tools).toEqual(["read", "run", "write", "commit"]);
+    expect(view.flow!.path).toContain("planner-x");
+    expect(view.flow!.path.indexOf("planner-x")).toBe(view.flow!.path.indexOf("builder") + 1);
+
+    const undo = await fetch(`${seatBase}/flow/undo?root=${encodeURIComponent(SEAT_ROOT)}`, { method: "POST", headers: seatApp(seatBase), body: "{}" });
+    expect(undo.status).toBe(200);
+    expect((await seatGet(SEAT_ROOT)).flow!.roster.some((r) => r.id === "planner-x")).toBe(false);
+  });
+
+  test("the CLI renames the label, edits the chain and puts a role on the path", async () => {
+    const none = await cli(["flow", "role", "add", "nope", "--name", "Nope", "--does", "Nothing yet.",
+      "--prompt", "Nothing yet.", "--root", SEAT_ROOT]);
+    expect(none.code).toBe(1);
+    expect(String(none.out.error)).toContain("--policy-role or --chain");
+    const add = await cli(["flow", "role", "add", "qa-x", "--name", "QA X", "--does", "Runs the change; never fixes.",
+      "--prompt", "Run the change and report it.", "--chain", "opencode:glm-4.6", "--team-only", "--root", SEAT_ROOT]);
+    expect(add.code).toBe(0);
+    let view = await seatGet(SEAT_ROOT);
+    expect(view.flow!.path).not.toContain("qa-x");
+
+    const renamed = await cli(["flow", "role", "rename", "qa-x", "QA X2", "--root", SEAT_ROOT]);
+    expect(renamed.code).toBe(0);
+    view = await seatGet(SEAT_ROOT);
+    expect(view.flow!.roster.find((r) => r.id === "qa-x")!.name).toBe("QA X2");
+
+    const edited = await cli(["flow", "role", "edit", "qa-x", "--chain", "opencode:deepseek-v4.1-flash", "--root", SEAT_ROOT]);
+    expect(edited.code).toBe(0);
+    view = await seatGet(SEAT_ROOT);
+    const role = view.flow!.roster.find((r) => r.id === "qa-x")!;
+    expect(role.policyRole).toBeUndefined();
+    expect(role.chain).toEqual([{ engine: "opencode", model: "deepseek-v4.1-flash" }]);
+
+    const placed = await cli(["flow", "path", "add", "qa-x", "--after", "builder", "--root", SEAT_ROOT]);
+    expect(placed.code).toBe(0);
+    view = await seatGet(SEAT_ROOT);
+    expect(view.flow!.path.indexOf("qa-x")).toBe(view.flow!.path.indexOf("builder") + 1);
+
+    // The validator's own icon normaliser: a legacy name is read as the glyph it became.
+    const icon = await cli(["flow", "role", "edit", "qa-x", "--ico", "compass", "--root", SEAT_ROOT]);
+    expect(icon.code).toBe(0);
+    view = await seatGet(SEAT_ROOT);
+    expect(view.flow!.roster.find((r) => r.id === "qa-x")!.ico).toBe("chart");
+
+    const required = await cli(["flow", "role", "edit", "qa-x", "--required", "yes", "--root", SEAT_ROOT]);
+    expect(required.code).toBe(0);
+    // A path that drops the role drops its hard rule too, and says so.
+    const set = await cli(["flow", "path", "set", "planner", "builder", "inspector", "verifier", "landing", "--root", SEAT_ROOT]);
+    expect(set.code).toBe(0);
+    expect((set.out.dropped as { required?: string[] }).required).toContain("qa-x");
+    view = await seatGet(SEAT_ROOT);
+    expect(view.flow!.path).not.toContain("qa-x");
+    expect(view.flow!.roster.find((r) => r.id === "qa-x")!.required).toBe(false);
+  });
+
+  test("the CLI makes a reads-only step a person answers, and clears the chain a built-in does not keep", async () => {
+    expect((await personSet("flow.agentEdit", true, SEAT_ROOT)).status).toBe(200);
+    const you = await cli(["flow", "role", "add", "you", "--name", "You", "--does", "Reads the result and answers.",
+      "--prompt", "Read what came back and say whether it is right.", "--actor", "person", "--reads-only", "yes",
+      "--team-only", "--root", SEAT_ROOT]);
+    expect(you.code).toBe(0);
+    let view = await seatGet(SEAT_ROOT);
+    const role = view.flow!.roster.find((r) => r.id === "you")!;
+    expect([role.actor, role.readsOnly, role.chain]).toEqual(["person", true, []]);
+
+    const mine = await cli(["flow", "role", "add", "mine-x", "--name", "Mine X", "--does", "Runs the change; never fixes.",
+      "--prompt", "Run the change and report it.", "--chain", "opencode:glm-4.6", "--team-only", "--root", SEAT_ROOT]);
+    expect(mine.code).toBe(0);
+
+    // --policy-role clears the chain first, so the answer is the kind rule and not the chain's.
+    const retyped = await cli(["flow", "role", "edit", "mine-x", "--policy-role", "reviewer", "--root", SEAT_ROOT]);
+    expect(retyped.code).toBe(1);
+    expect(String(retyped.out.error)).toContain("keeps its kind");
+    expect(String(retyped.out.error)).not.toContain("chain");
+
+    // --chain "" clears it, and the validator then asks for the chain a custom role needs.
+    const cleared = await cli(["flow", "role", "edit", "mine-x", "--chain", "", "--root", SEAT_ROOT]);
+    expect(cleared.code).toBe(1);
+    expect(String(cleared.out.error)).toContain("needs at least one engine and model");
+
+    const asked = await cli(["flow", "role", "edit", "mine-x", "--actor", "person", "--root", SEAT_ROOT]);
+    expect(asked.code).toBe(0);
+    view = await seatGet(SEAT_ROOT);
+    const qa = view.flow!.roster.find((r) => r.id === "mine-x")!;
+    expect([qa.actor, qa.chain, qa.policyRole]).toEqual(["person", [], undefined]);
+  });
+
+  test("with the setting off the same CLI call is refused with the sentence", async () => {
+    const off = await personSet("flow.agentEdit", false, SEAT_ROOT);
+    expect(off.status).toBe(200);
+    const add = await cli(["flow", "role", "add", "planner-y",
+      "--name", "Planner Y", "--does", "Cuts the ask into steps.", "--prompt", "Plan the work and hand it back.",
+      "--policy-role", "builder", "--root", SEAT_ROOT]);
+    expect(add.code).toBe(1);
+    expect(add.out.error).toBe(FLOW_AGENT_EDIT_OFF);
+  });
+});
+
+describe("a skipped or reordered step leaves a line with its reason", () => {
+  test("the brief tells the orchestrator the path is a guide and how to leave the line", () => {
+    const text = renderFlowForOrchestrator(withQa());
+    expect(text).toContain("The path is a guide");
+    expect(text).toContain("POST /flow/deviation");
+  });
+
+  test("a note needs a known step, a kind and a reason", () => {
+    const flow = withQa();
+    expect(checkDeviation(flow, { kind: "skipped", step: "qa-only", reason: "  docs only,\n no code  " }))
+      .toEqual({ ok: true, kind: "skipped", step: "qa-only", reason: "docs only, no code" });
+    expect(checkDeviation(flow, { kind: "skipped", step: "qa-only", reason: "" }).ok).toBe(false);
+    expect(checkDeviation(flow, { kind: "moved", step: "qa-only", reason: "x" }).ok).toBe(false);
+    expect(checkDeviation(flow, { kind: "reordered", step: "nope", reason: "x" }).ok).toBe(false);
+  });
+
+  test("the note lands in the Activity log with its reason and never blocks", async () => {
+    const { actionLog } = await import("../src/db.ts");
+    const d = checkDeviation(withQa(), { kind: "reordered", step: "builder", reason: "plan was one line" });
+    if (!d.ok) throw new Error("expected ok");
+    noteDeviation("127.0.0.1", "/home/x/orbit", d);
+    const row = actionLog(5).find((r) => r.action === "/flow/deviation")!;
+    expect([row.target, row.detail, row.ok]).toEqual(["orbit · reordered builder", "plan was one line", 1]);
   });
 });

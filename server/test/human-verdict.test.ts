@@ -16,10 +16,10 @@
  * "can this merge", which is what GitHub's field means.
  */
 import { describe, expect, test } from "bun:test";
-import { humanVerdict } from "../src/prs.ts";
+import { botReview, humanVerdict } from "../src/prs.ts";
 
-const r = (login: string, state: string, at = "2026-09-01T10:00:00Z", url = "") =>
-  ({ author: { login }, state, submittedAt: at, url });
+const r = (login: string, state: string, at = "2026-09-01T10:00:00Z", url = "", id = "") =>
+  ({ author: { login }, state, submittedAt: at, url, id });
 
 describe("the verdict of the people", () => {
   test("a bot approving is not a verdict", () => {
@@ -84,12 +84,21 @@ describe("the verdict of the people", () => {
 describe("what travels with the verdict", () => {
   test("names everybody who landed on it, newest first for the stamp", () => {
     const v = humanVerdict([
-      r("a", "APPROVED", "2026-09-01T09:00:00Z", "u/a"),
-      r("b", "APPROVED", "2026-09-02T09:00:00Z", "u/b"),
+      r("a", "APPROVED", "2026-09-01T09:00:00Z", "u/a", "PRR_a"),
+      r("b", "APPROVED", "2026-09-02T09:00:00Z", "u/b", "PRR_b"),
     ], { author: "maintainer" });
     expect(v?.who).toEqual(["a", "b"]);
     expect(v?.at).toBe("2026-09-02T09:00:00Z");
     expect(v?.url, "the newest one's message, which is the one to land on").toBe("u/b");
+    /* And where that message's row is: the card opens the Conversation ON it
+       instead of at the top of forty remarks. */
+    expect(v?.nodeId, "the newest one's row, so a press lands on the review").toBe("PRR_b");
+  });
+
+  test("no id in hand is no address, not a guess", () => {
+    const v = humanVerdict([r("a", "APPROVED", "2026-09-01T09:00:00Z", "u/a")], { author: "maintainer" });
+    expect(v?.kind).toBe("approved");
+    expect(v?.nodeId).toBeUndefined();
   });
 
   test("STALE when commits landed after the verdict", () => {
@@ -292,5 +301,56 @@ describe("people: every reviewer, one entry each", () => {
 
   test("nobody asked and nobody spoke is still null", () => {
     expect(humanVerdict([], { author: "maintainer" })).toBeNull();
+  });
+});
+
+/*
+ * THE BOT'S OWN REVIEW.
+ *
+ * A pull request only a bot has reviewed has no `humanReview`, so nothing on
+ * its card carried a row to land on: the Review cell opened the Conversation
+ * under Bots and left the reader to find the one review. Read from the same
+ * reviews the verdict is, so it costs no request.
+ */
+describe("the bot's review, and where it is", () => {
+  const bot = (nodes: unknown) => botReview(nodes);
+
+  test("the newest standing one, by id", () => {
+    expect(bot([
+      r("orbit-reviewer[bot]", "APPROVED", "2026-09-01T09:00:00Z", "", "PRR_old"),
+      r("orbit-reviewer[bot]", "APPROVED", "2026-09-02T09:00:00Z", "", "PRR_new"),
+    ])).toEqual({ nodeId: "PRR_new" });
+  });
+
+  test("a later changes-requested replaces the earlier approval", () => {
+    expect(bot([
+      r("orbit-reviewer[bot]", "APPROVED", "2026-09-01T09:00:00Z", "", "PRR_1"),
+      r("orbit-reviewer[bot]", "CHANGES_REQUESTED", "2026-09-02T09:00:00Z", "", "PRR_2"),
+    ])?.nodeId).toBe("PRR_2");
+  });
+
+  test("a dismissed review is no verdict at all", () => {
+    expect(bot([
+      r("orbit-reviewer[bot]", "APPROVED", "2026-09-01T09:00:00Z", "", "PRR_1"),
+      r("orbit-reviewer[bot]", "DISMISSED", "2026-09-02T09:00:00Z", "", "PRR_2"),
+    ])).toBeNull();
+  });
+
+  test("a person's review is not the bot's, and a bare comment is not a verdict", () => {
+    expect(bot([r("okoro", "APPROVED", "2026-09-01T09:00:00Z", "", "PRR_h")])).toBeNull();
+    expect(bot([r("orbit-reviewer[bot]", "COMMENTED", "2026-09-01T09:00:00Z", "", "PRR_c")])).toBeNull();
+    expect(bot([])).toBeNull();
+    expect(bot(undefined)).toBeNull();
+  });
+
+  test("a review with no id is no address, and nothing is made up", () => {
+    expect(bot([r("orbit-reviewer[bot]", "APPROVED")])).toBeNull();
+  });
+
+  test("the list query carries the id, on the same connection as the verdict", async () => {
+    const src = await Bun.file(new URL("../src/prs.ts", import.meta.url)).text();
+    const talk = src.slice(src.indexOf("const SEL_TALK = `"), src.indexOf("`;", src.indexOf("const SEL_TALK = `")));
+    expect(talk).toContain("submittedAt state viewerDidAuthor author{login} url id");
+    expect(src).toContain("botReview: botReview(n.reviews?.nodes),");
   });
 });

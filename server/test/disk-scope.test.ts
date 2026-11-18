@@ -61,47 +61,77 @@ afterAll(() => {
 describe("searching inside files", () => {
   // `-I` is "skip binary files" to grep and "no file names" to ripgrep: with it
   // every hit came back without its path and the parser dropped all of them.
-  test("finds text that is in a file, with its path and line", () => {
+  test("finds text that is in a file, with its path and line", async () => {
     writeFileSync(join(docs, "notes.txt"), "first\nthe lantern is lit\n");
-    const r = diskGrep(docs, "lantern");
+    const r = await diskGrep(docs, "lantern");
     expect(r.ok).toBe(true);
     expect(r.hits.map((h) => [basename(h.rel), h.line])).toEqual([["notes.txt", 2]]);
   });
 });
 
+// Two stalls of 9.7 s and 19.9 s were measured with the server's only thread
+// waiting on ripgrep: the search was a blocking spawn.
+const source = await Bun.file(new URL("../src/disk.ts", import.meta.url)).text();
+describe("a search does not hold the server", () => {
+  const at = source.indexOf("export async function diskGrep(");
+  const body = source.slice(at, source.indexOf("\n}\n", at));
+
+  test("it runs beside the loop: a timer ticks while it waits", async () => {
+    writeFileSync(join(docs, "ticks.txt"), "the lantern again\n");
+    // What runs, not a clock: a search that blocked the thread would hand back an already-answered promise, one that waits on the spawned process cannot answer within a microtask.
+    const pending = diskGrep(docs, "lantern");
+    let answered = false;
+    void pending.then(() => { answered = true; });
+    await Promise.resolve();
+    expect(answered, "the search answered at once: it did not wait on a process").toBe(false);
+    const r = await pending;
+    expect(r.ok).toBe(true);
+    expect(at).toBeGreaterThan(-1);
+    expect(body).not.toContain("spawnSync");
+  });
+
+  test("a second search ends the first, and both answer", async () => {
+    const [a, b] = await Promise.all([diskGrep(docs, "lantern"), diskGrep(docs, "lantern")]);
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true);
+    expect(b.hits.length).toBeGreaterThan(0);
+    expect(body).toContain("grepRunning?.kill();");
+  });
+});
+
 describe("what the machine search may touch", () => {
-  test("home, and what is under it", () => {
+  test("home, and what is under it", async () => {
     expect(diskRoots()).toEqual([home]);
     expect(diskAllows(home)).toBe(true);
     expect(diskAllows(docs)).toBe(true);
     expect(diskAllows(join(docs, "evidence.md"))).toBe(true);
   });
 
-  test("nothing above home", () => {
+  test("nothing above home", async () => {
     expect(diskAllows("/etc")).toBe(false);
     expect(diskAllows("/etc/shadow")).toBe(false);
     expect(diskAllows(outside)).toBe(false);
     expect(diskAllows(join(home, ".."))).toBe(false);
   });
 
-  test("nothing hidden — the dot is the rule, not a list of names", () => {
+  test("nothing hidden — the dot is the rule, not a list of names", async () => {
     expect(diskAllows(join(home, ".ssh"))).toBe(false);
     expect(diskAllows(join(home, ".ssh", "id_ed25519"))).toBe(false);
     expect(diskAllows(join(home, ".config", "agentglass", "token"))).toBe(false);
   });
 
-  test("a symlink out of home is followed BEFORE it is judged", () => {
+  test("a symlink out of home is followed BEFORE it is judged", async () => {
     // The thing that makes this worth a test: `shortcut` is spelled like a
     // folder in your own home directory, and resolve() alone says yes.
     expect(diskAllows(join(home, "shortcut"))).toBe(false);
     expect(diskAllows(join(home, "shortcut", "secret.txt"))).toBe(false);
   });
 
-  test("a sibling whose name merely starts with home's is not inside it", () => {
+  test("a sibling whose name merely starts with home's is not inside it", async () => {
     expect(diskAllows(`${home}-evil/x.txt`)).toBe(false);
   });
 
-  test("an operator can name another root, and only they can", () => {
+  test("an operator can name another root, and only they can", async () => {
     process.env.AGENTGLASS_DISK_ROOTS = outside;
     try {
       expect(diskAllows(join(outside, "secret.txt"))).toBe(true);
@@ -109,7 +139,7 @@ describe("what the machine search may touch", () => {
     } finally { delete process.env.AGENTGLASS_DISK_ROOTS; }
   });
 
-  test("a root reached through a symlink (e.g. macOS /var -> /private/var) is allowed", () => {
+  test("a root reached through a symlink (e.g. macOS /var -> /private/var) is allowed", async () => {
     const linkedRoot = join(home, "linked-mount");
     symlinkSync(outside, linkedRoot);
     process.env.AGENTGLASS_DISK_ROOTS = linkedRoot;
@@ -123,48 +153,50 @@ describe("what the machine search may touch", () => {
     }
   });
 
-  test("the switch turns all of it off", () => {
+  test("the switch turns all of it off", async () => {
     process.env.AGENTGLASS_DISK_DISABLED = "1";
     try {
       expect(diskAllows(docs)).toBe(false);
       expect(diskRoots()).toEqual([]);
-      expect(diskFind(home, "evidence").ok).toBe(false);
+      expect((await diskFind(home, "evidence")).ok).toBe(false);
       expect(diskPlaces().ok).toBe(false);
       // And the checkout browser must not become a way back in.
-      expect(fileTree(docs, "").ok).toBe(false);
+      expect((await fileTree(docs, "")).ok).toBe(false);
     } finally { delete process.env.AGENTGLASS_DISK_DISABLED; }
   });
 });
 
+const diskSource = await Bun.file(new URL("../src/disk.ts", import.meta.url)).text();
+
 describe("what the machine search answers", () => {
-  test("a document nobody committed, found by a piece of its path", () => {
-    const r = diskFind(home, "ORBIT-1042");
+  test("a document nobody committed, found by a piece of its path", async () => {
+    const r = await diskFind(home, "ORBIT-1042");
     expect(r.ok).toBe(true);
     expect(r.files).toContain("Documents/projects/PoL ORBIT-1042/evidence.md");
     expect(r.dirs).toContain("Documents/projects/PoL ORBIT-1042");
   });
 
-  test("one letter is not a search", () => {
-    const r = diskFind(home, "e");
+  test("one letter is not a search", async () => {
+    const r = await diskFind(home, "e");
     expect(r.ok).toBe(true);
     expect(r.files).toEqual([]);
   });
 
-  test("hidden files are not among the answers", () => {
-    const r = diskFind(home, "id_ed25519");
+  test("hidden files are not among the answers", async () => {
+    const r = await diskFind(home, "id_ed25519");
     expect(r.ok).toBe(true);
     expect(r.files).toEqual([]);
     expect(r.dirs).toEqual([]);
   });
 
-  test("a query found only in the root's own name matches nothing under it", () => {
+  test("a query found only in the root's own name matches nothing under it", async () => {
     // fd matches the absolute path, so `-H` under a root called `agx-home-Hk2j9x`
     // (one mkdtemp name in 62 starts that way) listed every file in it, and a
     // query for the folder's own name did the same on every run. The root is
     // not part of what is being searched.
     const own = basename(home);
     for (const q of [own, own.toUpperCase(), tmpdir().slice(1), `${basename(home).slice(0, 5)}-`]) {
-      const r = diskFind(home, q);
+      const r = await diskFind(home, q);
       expect(r.ok).toBe(true);
       expect(r.files, q).toEqual([]);
       expect(r.dirs, q).toEqual([]);
@@ -172,27 +204,27 @@ describe("what the machine search answers", () => {
     // ...and a name below the root that happens to contain regex syntax is
     // still a plain string.
     writeFileSync(join(docs, "a+b (1).md"), "x\n");
-    expect(diskFind(home, "a+b (1)").files).toContain("Documents/projects/PoL ORBIT-1042/a+b (1).md");
-    expect(diskFind(home, "a.b").files).toEqual([]);
+    expect((await diskFind(home, "a+b (1)")).files).toContain("Documents/projects/PoL ORBIT-1042/a+b (1).md");
+    expect((await diskFind(home, "a.b")).files).toEqual([]);
   });
 
-  test("a query spelled like an fd option is a pattern, not an option", () => {
+  test("a query spelled like an fd option is a pattern, not an option", async () => {
     // Measured before the fix: `--search-path=/etc` as the bare last word made
     // fd list /etc, and every line survived `keep()` because joining an
     // absolute path onto the root lands under the root. Now it is a string
     // to look for, and nothing here is called that.
     for (const q of ["--search-path=/etc", "--max-results=100000", "-H"]) {
-      const r = diskFind(home, q);
+      const r = await diskFind(home, q);
       expect(r.ok).toBe(true);
       expect(r.files).toEqual([]);
       expect(r.dirs).toEqual([]);
     }
     // And a name that happens to start with a dash is still findable.
     writeFileSync(join(docs, "-draft-notes.md"), "leading dash\n");
-    expect(diskFind(home, "-draft-notes").files).toContain("Documents/projects/PoL ORBIT-1042/-draft-notes.md");
+    expect((await diskFind(home, "-draft-notes")).files).toContain("Documents/projects/PoL ORBIT-1042/-draft-notes.md");
   });
 
-  test("the fd-less fallback answers the same question", () => {
+  test("the fd-less fallback answers the same question", async () => {
     // Nothing reaches it on a machine with `fd` installed, which is exactly how
     // a fallback rots: the day it is needed is the day nobody has run it.
     const r = diskWalk(home, "ORBIT-1042");
@@ -205,24 +237,41 @@ describe("what the machine search answers", () => {
     expect(diskWalk(home, "secret.txt").files).toEqual([]);
   });
 
-  test("a folder outside home is refused as a place to search from", () => {
-    const r = diskFind(outside, "secret");
+  // Same class as the content search that froze the installed app for 20 s at
+  // a time: this one was a blocking fd with a 10 s limit on the only thread.
+  test("the search runs beside the loop: a timer ticks while fd walks", async () => {
+    let ticks = 0;
+    const timer = setInterval(() => { ticks++; }, 1);
+    const r = await diskFind(home, "ORBIT-1042");
+    clearInterval(timer);
+    expect(r.ok).toBe(true);
+    expect(r.files).toContain("Documents/projects/PoL ORBIT-1042/evidence.md");
+    if (r.via === "fd") expect(ticks).toBeGreaterThan(0);
+    const at = diskSource.indexOf("export async function diskFind(");
+    expect(at).toBeGreaterThan(-1);
+    const code = diskSource.slice(at, diskSource.indexOf("\n}\n", at)).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+    expect(code).not.toContain("spawnSync");
+    expect(code).toContain("latest: `disk-find:${root}`");
+  });
+
+  test("a folder outside home is refused as a place to search from", async () => {
+    const r = await diskFind(outside, "secret");
     expect(r.ok).toBe(false);
     expect(r.error).toContain("outside");
   });
 });
 
 describe("reading what it found", () => {
-  test("the viewer can open a document that is in no checkout", () => {
-    const r = fileText(docs, join(docs, "evidence.md"));
+  test("the viewer can open a document that is in no checkout", async () => {
+    const r = await fileText(docs, join(docs, "evidence.md"));
     expect(r.ok).toBe(true);
     expect(r.text).toContain("what the fix proves");
   });
 
-  test("and cannot be walked out of the place it was pointed at", () => {
-    expect(fileText(docs, "../../../.ssh/id_ed25519").ok).toBe(false);
-    expect(fileTree(home, ".ssh").ok).toBe(false);
-    expect(fileTree(home, "shortcut").ok).toBe(false);
-    expect(fileText(home, "shortcut/secret.txt").ok).toBe(false);
+  test("and cannot be walked out of the place it was pointed at", async () => {
+    expect((await fileText(docs, "../../../.ssh/id_ed25519")).ok).toBe(false);
+    expect((await fileTree(home, ".ssh")).ok).toBe(false);
+    expect((await fileTree(home, "shortcut")).ok).toBe(false);
+    expect((await fileText(home, "shortcut/secret.txt")).ok).toBe(false);
   });
 });

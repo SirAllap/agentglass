@@ -30,6 +30,7 @@ import { underTmp } from "./portstale.ts";
 import type { OrphanProc, OrphanReport, OrphanStopResult } from "../../shared/types.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { setIntervalAs, setTimeoutAs } from "./loopwatch.ts";
 
 /** How often the background sampler looks. Slow on purpose: a six-day process
  *  does not need a minute-level answer. */
@@ -361,7 +362,7 @@ export function orphanReport(fresh: boolean, ctx: Partial<OrphanContext> = {}): 
 export function startOrphanSampler(ctx: () => Partial<OrphanContext> = () => ({})): () => void {
   const tick = () => { try { sampleOrphans(ctx()); } catch { /* the next tick tries again */ } };
   tick();
-  const t = setInterval(tick, ORPHAN_SAMPLE_MS);
+  const t = setIntervalAs("orphans sample", tick, ORPHAN_SAMPLE_MS);
   t.unref?.();
   return () => clearInterval(t);
 }
@@ -384,7 +385,7 @@ export function stopOrphan(pidIn: unknown, ctx: Partial<OrphanContext> = {}, gra
   if (!report.procs.some((p) => p.pid === pid)) return { ok: false, error: "that process is not flagged as left behind any more" };
   const start = startsOf.get(pid);
   try { process.kill(pid, "SIGTERM"); } catch { return { ok: false, error: "that process could not be stopped" }; }
-  const t = setTimeout(() => {
+  const t = setTimeoutAs("orphans timer", () => {
     // Same process still? The ring's start time says; a reused pid has another.
     const again = walkProcs();
     if (!again || again.raw.get(pid)?.start !== start) return;

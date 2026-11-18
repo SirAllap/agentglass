@@ -61,6 +61,37 @@ async function handTab(cwd: string): Promise<string> {
   return pane;
 }
 
+/** The app's own desk, held while it answers: an adoption card is the person's
+ *  click, and an Origin is a header the agent that asked can write. */
+const KEY = "desk-key-the-trust-route-claimed-0123456789abcdef";
+async function holdDesk(): Promise<() => void> {
+  for (let i = 0; i < 40; i++) {
+    const ac = new AbortController();
+    const r = await fetch(base + "/desk/claim", { method: "POST", headers: { ...auth, "x-agentglass-desk": KEY }, signal: ac.signal });
+    if (r.status === 200) {
+      const body = r.body!.getReader();
+      await body.read();
+      return () => { void body.cancel().catch(() => {}); ac.abort(); };
+    }
+    await r.text();
+    ac.abort();
+    await Bun.sleep(50);
+  }
+  throw new Error("the desk could not be claimed");
+}
+
+/** The person's adoption: the app holds the desk, and its key is the click. */
+const adoptAsPerson = async (root: string, session: string) => {
+  const body = { root, session, pane: await handTab(root), powers: "assign" };
+  const release = await holdDesk();
+  try {
+    const r = await fetch(base + "/seat/adopt", {
+      method: "POST", headers: { ...auth, Origin: base, "x-agentglass-desk": KEY }, body: JSON.stringify(body),
+    });
+    return { status: r.status, body: (await r.json()) as Record<string, any> };
+  } finally { release(); }
+};
+
 beforeAll(async () => {
   if (!have) return;
   dir = mkdtempSync(join(tmpdir(), "agx-trustroute-"));
@@ -92,7 +123,7 @@ beforeAll(async () => {
     await Bun.sleep(100);
   }
 
-  const adopted = await post("/seat/adopt", { root: dir, session: "s-trust-route", pane: await handTab(dir), powers: "assign" });
+  const adopted = await adoptAsPerson(dir, "s-trust-route");
   if (!adopted.body.ok) throw new Error(`the seat was not adopted: ${JSON.stringify(adopted.body)}`);
   seatToken = String(adopted.body.token);
   expect(seatToken).toMatch(/^st_/);

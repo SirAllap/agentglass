@@ -1,6 +1,6 @@
 import { test, expect, beforeEach, describe } from "bun:test";
 import { notePaneAgent } from "../src/panewt.ts";
-import { noteEvent, paneStatus, markSeen, __resetAgentDone } from "../src/agentdone.ts";
+import { noteEvent, paneStatus, markSeen, __resetAgentDone, __sessionsHeld, SESSION_CAP } from "../src/agentdone.ts";
 
 beforeEach(() => __resetAgentDone());
 
@@ -178,5 +178,56 @@ describe("error", () => {
     seed("%23", "s23");
     noteEvent("s23", "PostToolUseFailure", 1000, { isError: true, toolUseId: "e" });
     expect(paneStatus("%23", 1000 + LATER)).toBe("error");
+  });
+});
+
+describe("memory", () => {
+  test("old sessions are let go once the cap is passed; the recent one in a pane stays", () => {
+    seed("%30", "live");
+    noteEvent("live", "PreToolUse", 10_000_000, { toolUseId: "run" });
+    // A boot backfill of every session this machine ever ran, all older.
+    for (let i = 0; i < SESSION_CAP * 2; i++) {
+      noteEvent(`old-${i}`, "PreToolUse", 1000 + i, { toolUseId: `t${i}` });
+      noteEvent(`old-${i}`, "PostToolUse", 1001 + i, { toolUseId: `t${i}` });
+    }
+    expect(__sessionsHeld()).toBeLessThanOrEqual(SESSION_CAP);
+    expect(paneStatus("%30", 10_000_000 + LATER)).toBe("working");
+    seed("%31", "old-0");
+    noteEvent("new", "Stop", 20_000_000);
+    expect(paneStatus("%31", 20_000_000)).toBe("idle");
+  });
+
+  test("out-of-order backfill keeps a quiet live session's open tool", () => {
+    seed("%32", "quiet");
+    // Oldest of all, so it would go first by age: only its open call saves it.
+    noteEvent("quiet", "PreToolUse", 1, { toolUseId: "build" });
+    for (let i = 0; i < SESSION_CAP * 2; i++) {
+      noteEvent(`bf-${i}`, "Stop", 1000 + i);
+    }
+    expect(__sessionsHeld()).toBeLessThanOrEqual(SESSION_CAP);
+    expect(paneStatus("%32", 1 + 5_000)).toBe("working");
+  });
+
+  test("a session seen in the last minutes is not pruned", () => {
+    // Every session seen a moment ago: all may be live, so none is let go.
+    const now = Date.now();
+    for (let i = 0; i < SESSION_CAP * 2; i++) noteEvent(`r-${i}`, "Stop", now - i);
+    expect(__sessionsHeld()).toBe(SESSION_CAP * 2);
+  });
+
+  test("recent sessions past the hard ceiling: the oldest go anyway", () => {
+    const now = Date.now();
+    for (let i = 0; i < SESSION_CAP * 2 + 1; i++) noteEvent(`h-${i}`, "PreToolUse", now - i, { toolUseId: `t${i}` });
+    expect(__sessionsHeld()).toBeLessThanOrEqual(Math.floor(SESSION_CAP * 0.9) + 1);
+  });
+
+  test("nothing prunable: no sort runs on a new session", () => {
+    const now = Date.now();
+    for (let i = 0; i < SESSION_CAP + 5; i++) noteEvent(`s-${i}`, "Stop", now - i);
+    const real = Array.prototype.sort;
+    let sorts = 0;
+    Array.prototype.sort = function (this: unknown[], cmp?: (a: never, b: never) => number) { sorts++; return real.call(this, cmp as never); };
+    try { noteEvent("fresh", "Stop", now); } finally { Array.prototype.sort = real; }
+    expect(sorts).toBe(0);
   });
 });

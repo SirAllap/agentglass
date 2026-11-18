@@ -11,6 +11,7 @@
 // composite indexes with a timestamp bound.
 import { describe, expect, test, beforeAll } from "bun:test";
 import { mkdtempSync, mkdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -19,6 +20,8 @@ const SCOPED = join(dir, "scoped");
 const OTHER = join(dir, "other");
 mkdirSync(SCOPED, { recursive: true });
 mkdirSync(OTHER, { recursive: true });
+// Own repo, so a TMPDIR under the checkout cannot widen the scope to it.
+spawnSync("git", ["init", "-q", SCOPED]);
 process.env.AGENTGLASS_DB = join(dir, "statsidx.db");
 process.env.AGENTGLASS_ROOT = SCOPED;
 process.env.XDG_CONFIG_HOME = dir;

@@ -10,17 +10,17 @@
  * which wait for a build — so the write guard and the view cannot disagree.
  */
 import { basename } from "node:path";
-import { db } from "./db.ts";
+import { db, durably } from "./db.ts";
 import { gitAsync } from "./git.ts";
 import { defaultBranch } from "./gitwork.ts";
 import { projectRootOf } from "./git.ts";
 import { saidRows } from "./agentboard.ts";
-import { recentPaneAgents } from "./panewt.ts";
+import { noteForSession, recentPaneAgents } from "./panewt.ts";
 import { buildInfo } from "./selfupdate.ts";
 import { workspaceRoots } from "./config.ts";
 import type {
   ManifestGroup, ManifestInProgress, ManifestProject, ManifestRow, ManifestSigned,
-  ManifestSignOff, ManifestSummaryProject, ManifestCounters,
+  ManifestSignOff, ManifestSummaryProject, ManifestCounters, ManifestStep,
 } from "../../shared/manifest.ts";
 import { MANIFEST_NOTE_MAX } from "../../shared/manifest.ts";
 
@@ -37,6 +37,8 @@ export interface Commit {
   time: number;
   parents: string[];
   subject: string;
+  /** The commit message below the subject. */
+  body?: string;
 }
 
 export interface Verdict {
@@ -68,6 +70,26 @@ export const manifestDeps = {
  */
 const TICKET = /\b([A-Z][A-Z0-9]{1,9})-([0-9]{2,6})\b/g;
 const NOT_A_TICKET = new Set(["UTF", "SHA", "ISO", "RFC", "AES", "TLS", "HTTP", "MD", "BASE"]);
+
+/** One commit body must not inflate `/manifest`: cap the steps and clip each text. */
+const MAX_STEPS = 20;
+const MAX_STEP_TEXT = 300;
+
+/**
+ * The test steps a commit body carries: lines `Test: run|look|do <text>`.
+ * Text between backticks becomes the copyable command.
+ */
+export function stepsOf(body: string | undefined): ManifestStep[] {
+  const steps: ManifestStep[] = [];
+  for (const line of (body ?? "").split("\n")) {
+    if (steps.length >= MAX_STEPS) break;
+    const m = /^Test:\s*(run|look|do)\s+(\S.*?)\s*$/i.exec(line);
+    if (!m) continue;
+    const cmd = /`([^`]+)`/.exec(m[2]!);
+    steps.push({ kind: m[1]!.toLowerCase() as ManifestStep["kind"], text: m[2]!.replace(/`/g, "").slice(0, MAX_STEP_TEXT), command: cmd ? cmd[1]!.slice(0, MAX_STEP_TEXT) : null });
+  }
+  return steps;
+}
 
 export function ticketOf(subject: string): string | null {
   for (const m of subject.matchAll(TICKET)) {
@@ -120,6 +142,7 @@ export function deriveRows(o: {
       subject: c.subject,
       time: c.time,
       ticket: ticketOf(c.subject),
+      steps: stepsOf(c.body),
       inBuild,
       verdict: v?.verdict ?? null,
       at: v?.at ?? null,
@@ -165,11 +188,11 @@ const deleteVerdict = db.query<never, [string, string]>("DELETE FROM signoff WHE
 /** Signing again keeps `at`: a row does not restart its 24 hours. */
 export function signOff(project: string, sha: string, verdict: ManifestSigned, kind: "person" | "phone",
   by: string, note: string | null, now = Date.now()): void {
-  upsertVerdict.run(project, sha, verdict, kind, by, now, note ?? "");
+  durably(() => upsertVerdict.run(project, sha, verdict, kind, by, now, note ?? ""));
 }
 
 export function clearVerdict(project: string, sha: string): void {
-  deleteVerdict.run(project, sha);
+  durably(() => deleteVerdict.run(project, sha));
 }
 
 /* ── the start line ─────────────────────────────────────────────────────── */
@@ -214,24 +237,22 @@ export async function readTrunk(root: string, now: number): Promise<{ branch: st
   const h = await gitAsync(root, ["rev-parse", "--verify", "--quiet", `${branch}^{commit}`]);
   const head = h.code === 0 && /^[0-9a-f]{40}$/.test(h.stdout.trim()) ? h.stdout.trim() : null;
   const since = `--since=@${Math.floor((now - WINDOW_MS) / 1000)}`;
-  const r = await gitAsync(root, ["log", "--first-parent", "--format=%H%x00%ct%x00%P%x00%s", since, branch]);
+  const r = await gitAsync(root, ["log", "--first-parent", "--format=%H%x00%ct%x00%P%x00%s%x00%b%x01", since, branch]);
   if (r.code !== 0) return { branch, commits: [], head };
   const commits = parseCommits(r.stdout);
   const merged = commits.filter((c) => c.parents.length >= 2).map((c) => c.parents[1]!);
   if (merged.length) {
-    const s = await gitAsync(root, ["log", "--no-walk", "--format=%H%x00%s", ...new Set(merged)]);
+    const s = await gitAsync(root, ["log", "--no-walk", "--format=%H%x00%s%x00%b%x01", ...new Set(merged)]);
     if (s.code === 0) {
-      const bySha = new Map<string, string>();
-      for (const line of s.stdout.split("\n")) {
-        if (!line) continue;
-        const [sha = "", ...sub] = line.split("\x00");
-        const subject = sub.join("\x00");
-        if (sha && subject) bySha.set(sha, subject);
+      const bySha = new Map<string, { subject: string; body: string }>();
+      for (const rec of s.stdout.split("\x01")) {
+        const [sha = "", subject = "", body = ""] = rec.replace(/^\n/, "").split("\x00");
+        if (sha && subject) bySha.set(sha, { subject, body });
       }
       for (const c of commits) {
         if (c.parents.length < 2) continue;
-        const subject = bySha.get(c.parents[1]!);
-        if (subject) c.subject = subject;
+        const m = bySha.get(c.parents[1]!);
+        if (m) { c.subject = m.subject; c.body = m.body; }
       }
     }
   }
@@ -240,11 +261,10 @@ export async function readTrunk(root: string, now: number): Promise<{ branch: st
 
 function parseCommits(stdout: string): Commit[] {
   const commits: Commit[] = [];
-  for (const line of stdout.split("\n")) {
-    if (!line) continue;
-    const [sha = "", ct = "0", parents = "", ...rest] = line.split("\x00");
+  for (const rec of stdout.split("\x01")) {
+    const [sha = "", ct = "0", parents = "", subject = "", body = ""] = rec.replace(/^\n/, "").split("\x00");
     if (!/^[0-9a-f]{40}$/.test(sha)) continue;
-    commits.push({ sha, time: Number(ct) || 0, parents: parents.split(" ").filter(Boolean), subject: rest.join("\x00") });
+    commits.push({ sha, time: Number(ct) || 0, parents: parents.split(" ").filter(Boolean), subject, body });
   }
   return commits;
 }
@@ -252,7 +272,7 @@ function parseCommits(stdout: string): Commit[] {
 /** The commits a verdict names, including ones older than the window. */
 export async function commitsBySha(root: string, shas: string[]): Promise<Commit[]> {
   if (!shas.length) return [];
-  const r = await gitAsync(root, ["log", "--no-walk", "--format=%H%x00%ct%x00%P%x00%s", ...shas]);
+  const r = await gitAsync(root, ["log", "--no-walk", "--format=%H%x00%ct%x00%P%x00%s%x00%b%x01", ...shas]);
   return r.code === 0 ? parseCommits(r.stdout) : [];
 }
 
@@ -269,13 +289,35 @@ export async function ancestorsOf(root: string, build: string): Promise<Set<stri
   return new Set(r.stdout.split("\n").filter(Boolean));
 }
 
+/** Its newest word is a SessionEnd: the same test `recentSessions` uses, for one session and with no time window. */
+const endedQ = db.query<{ n: number }, [string]>(`
+  SELECT EXISTS (SELECT 1 FROM sessions s JOIN events e ON e.session_id = s.session_id
+    WHERE s.session_id = ? AND e.hook_event_type = 'SessionEnd' AND e.timestamp >= s.last_seen) AS n`);
+export function sessionEnded(session: string): boolean {
+  try { return endedQ.get(session)?.n === 1; } catch { return false; }
+}
+
+/**
+ * Is this agent still running? The answer In progress is drawn from.
+ *
+ * Idle time does not count against it. An agent waiting on a person fires no
+ * hooks for hours and is still there, so the only "gone" is a gone process:
+ * - a pane on any tmux server, attached or not, still runs it (`held`): running;
+ * - it was seen in a pane and no pane holds it now: the pane was killed, gone;
+ * - it was never seen in a pane, so there is no pane to ask: running until its
+ *   own SessionEnd says otherwise.
+ */
+export function stillRunning(held: Set<string>, ended: (s: string) => boolean = sessionEnded): (session: string) => boolean {
+  return (s) => held.has(s) || (!noteForSession(s) && !ended(s));
+}
+
 /**
  * The agents working on this project.
  *
  * `saidRows` is `board()` without its hourly sweep: a GET must not write. A row
  * of another project, or one whose path is not a checkout, is not drawn.
  */
-export async function inProgress(root: string, said = saidRows()): Promise<ManifestInProgress[]> {
+export async function inProgress(root: string, said = saidRows(), alive: ((session: string) => boolean) | null = null): Promise<ManifestInProgress[]> {
   const here = projectRootOf(root) ?? root;
   const panes = recentPaneAgents({ cap: 200 });
   const paneOf = new Map(panes.map((p) => [p.sessionId, p.paneId]));
@@ -283,6 +325,10 @@ export async function inProgress(root: string, said = saidRows()): Promise<Manif
   for (const row of said) {
     const at = (row.worktree ?? "").trim();
     if (!at || (projectRootOf(at) ?? at) !== here) continue;
+    // A session that has ended is not in progress; see `stillRunning`. Null
+    // means tmux could not be asked, and a row with no session id cannot be
+    // checked, so both are kept.
+    if (alive && row.session && !alive(row.session)) continue;
     out.push({
       name: row.name,
       doing: row.doing ?? "",
@@ -304,7 +350,7 @@ function countersFor(rows: ManifestRow[], running: number): ManifestCounters {
 }
 
 /** One project's answer, with the caller's sign-off rule already decided. */
-export async function readProject(root: string, signOff: ManifestSignOff, now: number): Promise<ManifestProject> {
+export async function readProject(root: string, signOff: ManifestSignOff, now: number, alive: ((session: string) => boolean) | null = null): Promise<ManifestProject> {
   const { branch, commits: trunk, head } = await readTrunk(root, now);
   const ancestors = branch ? await ancestorsOf(root, manifestDeps.buildCommit()) : null;
   const known = verdicts(root);
@@ -319,7 +365,7 @@ export async function readProject(root: string, signOff: ManifestSignOff, now: n
   // The line's own commit is not "older"; it is the point counting begins at.
   const lineCommit = start ? commits.find((c) => c.sha === start.sha) : undefined;
   const atLine = lineCommit && lineCommit.time * 1000 >= now - WINDOW_MS && !known.has(lineCommit.sha) ? 1 : 0;
-  const running = branch ? await inProgress(root) : [];
+  const running = branch ? await inProgress(root, saidRows(), alive) : [];
   return {
     root,
     name: basename(root) || root,

@@ -15,13 +15,20 @@
 // theirs. `tmux ls` in their terminal cannot see any of this, and ours cannot see
 // their sessions — which is also what makes `tmux -L agentglass attach` a safe
 // thing to hand them.
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { agentWindowDrops, BROWSER_OFF_VAR } from "./browseraccess.ts";
+import {
+  agentWindowDrops, BROWSER_CREDENTIAL_VARS, BROWSER_OFF_BYPASS_REASON, BROWSER_OFF_REASON_VAR, BROWSER_OFF_VAR,
+  discardCredentialFile, personPaneEnv, sessionCredentialArgv, sessionCredentialFile, withoutBrowserWindowVars,
+} from "./browseraccess.ts";
 import { failed } from "./refused.ts";
-import { resolveTmuxBin, tmuxSocket, engineSocketArgs } from "./tmuxbin.ts";
+import { OWNER_OPTION, OWNER_TMP_VAR, OWNER_VAR } from "./reaper.ts";
+import { resolveTmuxBin, tmuxSocket, engineSocketArgs, engineRefused } from "./tmuxbin.ts";
 import { confPath, confHealth, ensureConf } from "./tmuxconf.ts";
+import { credentialsStripped, credentialsStrippedSync, kickCredentialStrip, spawnsPane } from "./tmuxctl.ts";
 import { PLACE_FORMAT, parsePlaceWindows, placeArgs } from "./tmuxplace.ts";
+import { setIntervalAs, spawnSyncAs } from "./loopwatch.ts";
+import { runChild } from "./broker/brokerRun.ts";
 /* The restore layer is bookkeeping ON TOP of this one, and it already imports
    this file — so it hands its recorder down here instead of us reaching up for
    it. A static import upwards would be a cycle; a dynamic one made the bundler
@@ -32,6 +39,8 @@ let captureNowFn: (() => void) | null = null;
 export function setCaptureHook(fn: () => void): void {
   captureNowFn = fn;
 }
+/** A window was created, renamed or killed: write the layout down now instead of at the next sweep. Never fails the caller. */
+export function noteLayoutChanged(): void { captureNow(); }
 function captureNow(): void {
   try {
     captureNowFn?.();
@@ -82,9 +91,46 @@ export function engineSessionName(root: string): string {
 export function engineAttachArgv(root: string, name = engineSessionName(root)): string[] | null {
   const bin = resolveTmuxBin();
   if (!bin) return null;
+  if (engineRefused()) return null;
   if (!confHealth().ok) return null;
   ensureConf();
   return [bin, ...engineSocketArgs(true), "-f", confPath(), "new-session", "-A", "-s", name, "-c", root];
+}
+
+/**
+ * The same command, with the person's own credential handed to the FIRST
+ * window of the session it creates.
+ *
+ * The client is spawned without the browser variables (a tmux server takes the
+ * environment of the client that starts it), so the shell this attach opens
+ * would otherwise be the one place a person's token went missing. It used to
+ * ride on `-e`, which looked like "never tmux's global environment" and was
+ * really "tmux's SESSION environment instead" — every window that session
+ * gets afterwards, an agent's included, can read it back with
+ * `tmux show-environment` (see `sessionCredentialFile`). `-A` on an existing
+ * session only attaches, so the appended command below is simply ignored
+ * there, which is why this never needed to check whether the session was
+ * already up.
+ */
+export function withPersonEnv(argv: string[], env: Record<string, string> = personPaneEnv()): string[] {
+  const at = argv.indexOf("new-session");
+  if (at < 0 || !Object.keys(env).length) return argv;
+  /* A panel view (`enginePanelArgv`) chains `; attach -t …` after its
+     new-session. Appending here would put the command after `attach-session`,
+     which takes none: "too many arguments (need at most 0)". The window such a
+     view shows was made with its credential already (`ensurePanelWindow`). */
+  if (argv.includes(";")) return argv;
+  const file = sessionCredentialFile(env);
+  return [...argv, ...sessionCredentialArgv(file, {}, [], [])];
+}
+
+/** The running engine's own identity (`pid.start_time`), the same server for
+ *  as long as both hold — see `layoutCredentialName`, the one caller of this.
+ *  Empty when the session (or the server) cannot answer, which that caller
+ *  reads as "cannot tell, so do not try" rather than refuse the window. */
+export async function engineIdentity(session: string): Promise<string> {
+  const r = await tmux(["display-message", "-p", "-t", `=${session}:`, "#{pid}.#{start_time}"]);
+  return r.ok ? r.stdout.trim() : "";
 }
 
 /**
@@ -123,17 +169,23 @@ export const isPanelViewSession = (n: string): boolean => VIEW_SESSION.test(n);
 
 /** A window of the engine session, addressed by tmux's own id: a name is
  *  matched by prefix and would let `bench-1` be `bench-19`. */
-export interface EngineWindowRef { windowId: string }
+export interface EngineWindowRef {
+  windowId: string;
+  /** False when the window was already there: a caller that minted an
+   *  environment for a new one has nothing it was handed to, and can take it
+   *  back rather than leave it live. */
+  made?: boolean;
+}
 
 /** One row per window of a session, with whether every pane in it is dead. */
-function sessionWindows(session: string): { id: string; name: string; dead: boolean }[] {
-  const r = tmuxSync(["list-panes", "-s", "-t", `=${session}:`, "-F", "#{window_id}\t#{window_name}\t#{pane_dead}"]);
+function sessionWindows(session: string): { id: string; name: string; dead: boolean; panel: string }[] {
+  const r = tmuxSync(["list-panes", "-s", "-t", `=${session}:`, "-F", `#{window_id}\t#{window_name}\t#{pane_dead}\t#{${PANEL_OPTION}}`]);
   if (!r.ok) return [];
-  const by = new Map<string, { id: string; name: string; dead: boolean }>();
+  const by = new Map<string, { id: string; name: string; dead: boolean; panel: string }>();
   for (const line of r.stdout.split("\n")) {
-    const [id = "", name = "", dead = ""] = line.split("\t");
+    const [id = "", name = "", dead = "", panel = ""] = line.split("\t");
     if (!id.startsWith("@")) continue;
-    const row = by.get(id) ?? { id, name, dead: true };
+    const row = by.get(id) ?? { id, name, dead: true, panel };
     row.dead = row.dead && dead === "1";
     by.set(id, row);
   }
@@ -152,11 +204,17 @@ function sessionWindows(session: string): { id: string; name: string; dead: bool
  *
  * Synchronous because the pty that will attach to it is built inside one
  * synchronous pass — see terminal.ts — the same reason `readerSessionState` is.
+ *
+ * `person` is the same flag `engineWindowOutcome` takes: a bench tab that runs
+ * an agent is an agent window, and a pane inherits the tmux SERVER's
+ * environment — so without it the tab arrived holding the person's machine
+ * token. The person's own bench (an editor, a shell) passes it and keeps the
+ * environment it always had.
  */
 export function ensurePanelWindow(
   root: string,
   name: string,
-  o: { runs?: string[] | null; env?: Record<string, string>; cwd?: string } = {},
+  o: { runs?: string[] | null; env?: Record<string, string>; cwd?: string; person?: boolean } = {},
 ): EngineWindowRef | null {
   const clean = engineWindowName(name);
   if (!clean) return null;
@@ -166,33 +224,56 @@ export function ensurePanelWindow(
   ensureConf();
   const mine = sessionWindows(session).filter((w) => w.name === clean);
   const live = mine.find((w) => !w.dead);
-  if (live) return { windowId: live.id };
-  for (const w of mine) tmuxSync(["kill-window", "-t", w.id]);
-  const shape = [
-    "-P", "-F", "#{window_id}",
-    "-c", o.cwd ?? root,
-    "-n", clean,
-    // Variables for the window's panes: a pane inherits the tmux SERVER's
-    // environment, not the one this process has — see engineWindowOutcome.
-    ...Object.entries(o.env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
-    /*
-     * The window's own command, when the tab is for something in particular.
-     * tmux takes it as argv — no shell, nothing interpreted — so the editor or
-     * the agent becomes the process holding the pane, and the next attach
-     * finds it still running.
-     */
-    ...(o.runs ?? []),
-  ];
+  if (live) return { windowId: live.id, made: false };
+  for (const w of mine) if (closablePanelCorpse(w, clean)) tmuxSync(["kill-window", "-t", w.id]);
+  const person = o.person === true;
+  const runs = o.runs ?? [];
+  /* The one door, as in `engineWindowOutcome`: a window handed no credential is
+     marked off rather than left to inherit the server's, and the variables it
+     must not inherit are removed from the command. A person's own window is
+     handed the server's credential explicitly, because tmux no longer starts
+     with it in its global environment. */
+  const given = person
+    ? { ...o.env, ...personPaneEnv() }
+    : o.env?.AGENTGLASS_TOKEN || o.env?.[BROWSER_OFF_VAR] ? o.env
+    : { ...o.env, [BROWSER_OFF_VAR]: "1", [BROWSER_OFF_REASON_VAR]: BROWSER_OFF_BYPASS_REASON };
   const there = tmuxSync(["has-session", "-t", `=${session}`]).ok;
   /* The first window is the run: `new-session` without a command would leave a
      stray shell in a session nobody asked for — the note above
      engineWindowOutcome spells out what that cost. */
-  const out = there
-    ? tmuxSync(["new-window", "-d", "-t", `=${session}:`, ...shape])
-    : tmuxSync(["new-session", "-d", "-s", session, ...shape]);
-  if (!out.ok) return null;
+  let out: TmuxResult;
+  let credFile: string | null = null;
+  if (there) {
+    /* An EXISTING session: `-e` here only ever reaches this one window
+       (probed, see `sessionCredentialFile`), so the credential and the owner
+       attribution travel exactly as they did before this function cared about
+       which branch it was in. */
+    const { session: sessionEnv, process: procEnv } = splitOwnerEnv(given);
+    const drops = person || runs.length === 0 ? [] : agentWindowDrops(sessionEnv);
+    const prefix = runs.length === 0 ? [] : envCommand(drops, procEnv);
+    out = tmuxSync(["new-window", "-d", "-t", `=${session}:`,
+      "-P", "-F", "#{window_id}", "-c", o.cwd ?? root, "-n", clean,
+      ...Object.entries(sessionEnv).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
+      ...prefix, ...runs]);
+  } else {
+    /* The SESSION'S FIRST WINDOW: never `-e` for the credential or the
+       off-marker — see `sessionCredentialFile`. Everything else (an arbitrary
+       extra the caller set, the owner attribution) is not a secret, and rides
+       the command the way it always has. */
+    const { rest, cred, plain } = splitWindowVars(given);
+    const { session: sessionEnv, process: procEnv } = splitOwnerEnv(rest);
+    const drops = person || runs.length === 0 ? [] : agentWindowDrops(given);
+    credFile = sessionCredentialFile(cred);
+    const command = sessionCredentialArgv(credFile, { ...procEnv, ...plain }, drops, runs);
+    out = tmuxSync(["new-session", "-d", "-s", session,
+      "-P", "-F", "#{window_id}", "-c", o.cwd ?? root, "-n", clean,
+      ...Object.entries(sessionEnv).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
+      ...command]);
+  }
+  if (!out.ok) { discardCredentialFile(credFile); return null; }
   const windowId = (out.stdout.split("\n")[0] ?? "").trim();
   if (!windowId.startsWith("@")) return null;
+  tmuxSync(["set-option", "-w", "-t", windowId, PANEL_OPTION, clean]);
   if (!there) {
     /* A SESSION THIS PANEL MADE LEAVES A SHELL CURRENT.
      *
@@ -210,7 +291,7 @@ export function ensurePanelWindow(
     // bring back. Bookkeeping may never fail the real operation.
     captureNow();
   }
-  return { windowId };
+  return { windowId, made: true };
 }
 
 /**
@@ -311,12 +392,35 @@ const TMUX_TIMEOUT_MS = 5_000;
  * existing setting is kept — this is a floor, not a preference.
  */
 function tmuxEnv(): Record<string, string | undefined> {
-  return process.env.LC_ALL || process.env.LANG || process.env.LC_CTYPE
+  const env = process.env.LC_ALL || process.env.LANG || process.env.LC_CTYPE
     ? process.env
     : { ...process.env, LC_ALL: "C.UTF-8" };
+  return withoutBrowserWindowVars(env);
 }
 
-export interface TmuxResult { ok: boolean; stdout: string; stderr: string }
+/** Take the four credential variables out of the GLOBAL environment of a
+ *  server that was started before this rule existed. A tmux server started by
+ *  this app already gets a client without them (see `tmuxEnv`); one already
+ *  running still holds what it was born with, and a pane can ask it for any
+ *  variable by name.
+ *
+ *  Remembered per SERVER, not per process: a server that died and came back is
+ *  a new process carrying whatever the client that started it handed over, so
+ *  the sweep runs again rather than being remembered as done.
+ */
+/* The credential strip is tmuxctl's: memoized per socket, async, fail-closed,
+   and it only calls "no server" clean on tmux's own words. The pane engine used
+   to keep a second, sync copy of it (up to 7 `Bun.spawnSync` on the loop at the
+   first call per socket, and it let a pane start after a failed strip). It
+   passes its own binary, because the bundled tmux may be the only one here. */
+const stripRefused = (args: string[]): TmuxResult => {
+  console.error(`tmux ${args[0] ?? ""} refused: the credential strip did not land on the pane engine socket`);
+  return { ok: false, stdout: "", stderr: "credential strip did not land" };
+};
+
+/** `refused` is the test guard saying no (tmuxbin.ts `engineRefused`): the engine
+ *  was never asked, so it is not "down" and no caller may restart or re-poll it. */
+export interface TmuxResult { ok: boolean; stdout: string; stderr: string; refused?: true }
 
 /** Run one tmux command against our server. `stdin` feeds commands that read it
  *  (`load-buffer -`), which is how prompt text gets in without ever being
@@ -326,12 +430,20 @@ export interface TmuxResult { ok: boolean; stdout: string; stderr: string }
 export async function tmux(args: string[], stdin?: string): Promise<TmuxResult> {
   const bin = resolveTmuxBin();
   if (!bin) return { ok: false, stdout: "", stderr: "tmux is not installed" };
+  const refused = engineRefused();
+  if (refused) return { ok: false, stdout: "", stderr: refused, refused: true };
+  ensureConf();
+  if (spawnsPane(args)) {
+    if (!(await credentialsStripped(engineSocketArgs(true), bin))) return stripRefused(args);
+  } else await credentialsStripped(engineSocketArgs(true), bin);
+  /* Awaited, not kicked, for a verb that starts no pane: a kicked strip is 6
+     tmux calls that land inside whatever tick comes next. Its answer is not
+     needed here, so a strip that fails does not refuse the verb. */
   const argv = [bin, ...engineSocketArgs(true), "-f", confPath(), ...args];
   try {
-    const proc = Bun.spawn(argv, {
-      stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin),
-      stdout: "pipe",
-      stderr: "pipe",
+    // Started by the spawn broker (broker/brokerRun.ts), not a fork of this server.
+    const r = await runChild(argv, {
+      ...(stdin === undefined ? {} : { stdin }),
       /*
        * `env: process.env`, which reads like a no-op and is not one.
        *
@@ -359,14 +471,10 @@ export async function tmux(args: string[], stdin?: string): Promise<TmuxResult> 
        * its own comment for the locale floor it adds.
        */
       env: tmuxEnv(),
+      timeoutMs: TMUX_TIMEOUT_MS,
     });
-    const kill = setTimeout(() => { try { proc.kill(); } catch { /* gone */ } }, TMUX_TIMEOUT_MS);
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
-      new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
-      proc.exited,
-    ]);
-    clearTimeout(kill);
+    if (r.error !== undefined && r.error !== "lost") throw new Error(r.error);
+    const { stdout, stderr, code } = r;
     return { ok: code === 0, stdout, stderr };
   } catch (e) {
     /* A spawn that threw, not tmux talking: tmux's own stderr is returned above
@@ -381,8 +489,15 @@ export async function tmux(args: string[], stdin?: string): Promise<TmuxResult> 
 export function tmuxSync(args: string[]): TmuxResult {
   const bin = resolveTmuxBin();
   if (!bin) return { ok: false, stdout: "", stderr: "tmux is not installed" };
+  const refused = engineRefused();
+  if (refused) return { ok: false, stdout: "", stderr: refused, refused: true };
+  ensureConf();
+  if (spawnsPane(args)) {
+    /* Sync because ptyOpen is; the async strip memoizes the server, so this spawns only on first contact. */
+    if (!credentialsStrippedSync(engineSocketArgs(true), bin)) return stripRefused(args);
+  } else kickCredentialStrip(engineSocketArgs(true), bin);
   try {
-    const r = Bun.spawnSync([bin, ...engineSocketArgs(true), "-f", confPath(), ...args], {
+    const r = spawnSyncAs("tmux pane cmd", [bin, ...engineSocketArgs(true), "-f", confPath(), ...args], {
       stdout: "pipe", stderr: "pipe", env: tmuxEnv(), timeout: TMUX_TIMEOUT_MS,
     });
     return { ok: r.exitCode === 0, stdout: r.stdout.toString(), stderr: r.stderr.toString() };
@@ -511,7 +626,31 @@ export async function listPanes(): Promise<string[]> {
 export type EngineWindow = { ok: true; paneId: string; windowId: string; reused?: true } | { ok: false; reason: string };
 
 /** A window that has a live pane, as the panel needs to find it again. */
-export type LiveWindow = { session: string; windowId: string; paneId: string; name: string; path: string };
+export type LiveWindow = {
+  session: string; windowId: string; paneId: string; name: string; path: string;
+  /**
+   * The name agentglass gave the window when it made it, pinned as a tmux
+   * window option (`@agx-given`). A rename by hand rewrites `window_name` and
+   * leaves this, which is how a tab somebody renamed is still found as the
+   * card's tab — and why it is never renamed back.
+   */
+  given?: string;
+  /** The card this window is for, pinned as `@agx-card`. Two cards can share a
+   *  display name, and this is what tells them apart. */
+  card?: string;
+};
+
+/** The window option that keeps the name agentglass chose, whatever the tab is called now. */
+export const GIVEN_OPTION = "@agx-given";
+/** The window option that says which card owns the window. */
+export const CARD_OPTION = "@agx-card";
+/** The window option `ensurePanelWindow` stamps on a panel window it opened
+ *  (a bench tab, the console): the name it gave it. A dead window is closed
+ *  only when it carries this stamp for that name, so a person's kept dead pane
+ *  renamed to `bench-3` is never closed for being called that. */
+export const PANEL_OPTION = "@agx-panel";
+/** Whether a window found by name is a dead panel window this app may close. */
+export const closablePanelCorpse = (w: { dead: boolean; panel: string }, name: string): boolean => w.dead && w.panel === name;
 
 /* tmux escapes the free-form fields itself so no value can hold a separator. */
 const escField = (v: string): string => `#{s/%/%25/;s/\t/%09/;s/\n/%0A/:${v}}`;
@@ -527,20 +666,67 @@ const unescField = (s: string): string => s.replace(/%(25|09|0A)/g, (_, h: strin
  */
 export async function liveWindows(session?: string): Promise<LiveWindow[]> {
   if (session !== undefined && !validSessionName(session)) return [];
-  const fmt = `${escField("session_name")}\t#{window_id}\t#{pane_id}\t#{pane_dead}\t${escField("window_name")}\t${escField("pane_current_path")}`;
+  const fmt = `${escField("session_name")}\t#{window_id}\t#{pane_id}\t#{pane_dead}\t${escField("window_name")}\t${escField("pane_current_path")}\t${escField(GIVEN_OPTION)}\t${escField(CARD_OPTION)}`;
   const r = await tmux(session === undefined ? ["list-panes", "-a", "-F", fmt] : ["list-panes", "-s", "-t", `=${session}:`, "-F", fmt]);
   if (!r.ok) return [];
   const seen = new Set<string>();
   const rows: LiveWindow[] = [];
   for (const line of r.stdout.split("\n")) {
     const f = line.split("\t");
-    if (f.length !== 6 || f[3] === "1") continue;
-    const [sess, windowId, paneId, , name, path] = [unescField(f[0]!), f[1]!, f[2]!, f[3], unescField(f[4]!), unescField(f[5]!)];
+    if (f.length !== 8 || f[3] === "1") continue;
+    const [sess, windowId, paneId, , name, path, given, card] = [unescField(f[0]!), f[1]!, f[2]!, f[3], unescField(f[4]!), unescField(f[5]!), unescField(f[6]!), unescField(f[7]!)];
     if (!windowId.startsWith("@") || !paneId.startsWith("%") || seen.has(`${sess}\t${windowId}`)) continue;
     seen.add(`${sess}\t${windowId}`);
-    rows.push({ session: sess, windowId, paneId, name, path });
+    rows.push({ session: sess, windowId, paneId, name, path, ...(given ? { given } : {}), ...(card ? { card } : {}) });
   }
   return rows;
+}
+
+/**
+ * The variables that describe ONE launch — whose it is, and the scratch its
+ * `TMPDIR` points into — kept apart from the ones the session may carry.
+ *
+ * `-e` writes the SESSION's environment too, and the owner a worker was launched
+ * with stayed there: every window opened in that session afterwards, a person's
+ * own shell among them, named a worker whose window was long gone, handed its
+ * processes that worker's scratch, and had them taken for its leftovers
+ * (reaper.ts). So these three ride on the pane's own command.
+ */
+/** The credential and off-marker variables, pulled out before any `-e` is
+ *  built for a session's first window: see `sessionCredentialFile`. `cred` is
+ *  the four that are secret and go to the file; `plain` is the two that say
+ *  "no credential" and are not, so they ride the command like any other
+ *  non-secret variable; `rest` is everything else, unaffected. */
+function splitWindowVars(given: Record<string, string>): {
+  rest: Record<string, string>; cred: Record<string, string>; plain: Record<string, string>;
+} {
+  const rest: Record<string, string> = {};
+  const cred: Record<string, string> = {};
+  const plain: Record<string, string> = {};
+  for (const [k, v] of Object.entries(given)) {
+    if ((BROWSER_CREDENTIAL_VARS as readonly string[]).includes(k)) cred[k] = v;
+    else if (k === BROWSER_OFF_VAR || k === BROWSER_OFF_REASON_VAR) plain[k] = v;
+    else rest[k] = v;
+  }
+  return { rest, cred, plain };
+}
+
+function splitOwnerEnv(env: Record<string, string> | undefined): { session: Record<string, string>; process: Record<string, string> } {
+  const session: Record<string, string> = {};
+  const process: Record<string, string> = {};
+  for (const [k, v] of Object.entries(env ?? {})) {
+    if (k === OWNER_VAR || k === OWNER_TMP_VAR || k === "TMPDIR") process[k] = v;
+    else session[k] = v;
+  }
+  return { session, process };
+}
+
+/** `env -u A … K=V …` in front of a command, or nothing. Never on its own: a
+ *  window whose whole command is `env -u X` prints the environment and exits,
+ *  and the tab is gone the moment it was asked for (measured on tmux 3.8). */
+function envCommand(drops: readonly string[], env: Record<string, string>): string[] {
+  const args = [...drops.flatMap((v) => ["-u", v]), ...Object.entries(env).map(([k, v]) => `${k}=${v}`)];
+  return args.length ? ["env", ...args] : [];
 }
 
 export async function engineWindowOutcome(
@@ -617,6 +803,20 @@ export async function engineWindowOutcome(
    * inherited machine token (`agentWindowDrops`).
    */
   person = false,
+  /**
+   * THE CARD THIS WINDOW IS FOR, its own id.
+   *
+   * A display name is not identity: a ClickUp space and a connected Jira site
+   * can both spell a card `DEV-1042`. When reuse is asked for, this is what
+   * says whether the window already there is this card's.
+   */
+  cardId = "",
+  /**
+   * THE INDEX THIS TAB HAD, for a resumed turn: the window closed with the
+   * last turn and a new one is born under the same name, which must come back
+   * where the person left it, not at the end of the bar.
+   */
+  slot?: number,
 ): Promise<EngineWindow> {
   /* One place that says no, so the reason is written down the same way for all
      of them: returned to the button that asked, and logged once so the log and
@@ -664,31 +864,81 @@ export async function engineWindowOutcome(
    * nothing at all, silently. `has-session` costs one more call and cannot lie.
    */
   const clean = engineWindowName(name);
+  const card = cardId.trim().slice(0, 128);
   /* An agent window with nothing to run is `env -u …` alone: it opens and
      exits at once. No caller asks for that, and one that does is a bug with a
      window attached, so it is refused here rather than in each caller. */
   if (!person && argv.length === 0) return fail("an agent window was asked for with no command to run");
+  /* An agent whose directory is gone is refused, not opened somewhere else. Measured on tmux 3.8:
+     `new-session -c /no/such/dir` exits 0 and the pane starts in $HOME, so a worker would run
+     (and write) in the wrong tree. A person's own terminal keeps tmux's fallback. */
+  if (!person && !existsSync(cwd)) return fail(`the directory for this window is not there: ${String(cwd).slice(0, 200)}`);
   /* The one door, here rather than at every caller: a caller that forgets is
      still covered. See `agentWindowDrops`. A window handed no credential is
      marked off, because the environment alone cannot tell it from one that was
      given nothing — and the supplied CLI would otherwise fall back to the
      person's token file. */
-  const given = person || env?.AGENTGLASS_TOKEN || env?.[BROWSER_OFF_VAR] ? env : { ...env, [BROWSER_OFF_VAR]: "1" };
-  const drops = person ? [] : agentWindowDrops(given);
+  const given = person
+    ? { ...env, ...personPaneEnv() }
+    : env?.AGENTGLASS_TOKEN || env?.[BROWSER_OFF_VAR] ? env
+    : { ...env, [BROWSER_OFF_VAR]: "1", [BROWSER_OFF_REASON_VAR]: BROWSER_OFF_BYPASS_REASON };
+  /* Every window this app opens for an agent names itself in the environment,
+     so a process it starts is still attributable after a `nohup` and a reparent
+     to systemd, where no parent chain says whose it is (reaper.ts). The person's
+     own tab is left alone: its shell is theirs, not a worker's turn. */
+  const owned = !person && clean && !given?.[OWNER_VAR] ? { ...given, [OWNER_VAR]: clean } : given;
+
+  const there = await tmux(["has-session", "-t", `=${session}`]);
+  /* An EXISTING session only ever applies `-e` to the one window it is making
+     (probed, see `sessionCredentialFile`), so a window going into one keeps
+     the shape this had before creation got its own branch below. Computed
+     only on this branch: the other one never touches a credential file. */
+  const { session: sessionEnv, process: procEnv } = there.ok ? splitOwnerEnv(owned) : { session: {}, process: {} };
+  /* Nothing unsets a worker's name out of a person's shell any more, because
+     nothing puts one in a session any more: their window keeps the environment
+     it always had. `env` is never asked for without a command to carry it. */
+  const drops = there.ok && !(person || argv.length === 0) ? agentWindowDrops(sessionEnv) : [];
+  const prefix = there.ok && argv.length > 0 ? envCommand(drops, procEnv) : [];
   /* Everything that describes the window, built once: whichever tmux command
      ends up making it takes the same flags in the same order. */
   const shape = [
     "-P", "-F", "#{pane_id}\t#{window_id}", "-c", cwd,
     ...(clean ? ["-n", clean] : []),
-    ...Object.entries(given ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
-    ...(drops.length ? ["env", ...drops.flatMap((v) => ["-u", v])] : []),
+    ...Object.entries(sessionEnv).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
+    ...prefix,
     ...argv,
   ];
-
-  const there = await tmux(["has-session", "-t", `=${session}`]);
-  if (reuse && there.ok && clean) {
-    const mine = (await liveWindows(session)).find((w) => w.name === clean && samePlace(w.path, cwd));
+  /* The SESSION'S FIRST WINDOW instead gets none of that: no `-e` for the
+     credential or the off-marker, the same as `ensurePanelWindow`'s own
+     creation branch — see `sessionCredentialFile`. Computed only here, so a
+     reused window never writes a credential file it will not read. */
+  const creationProcEnv: Record<string, string> = {};
+  let creationShape: string[] = [];
+  let creationCredFile: string | null = null;
+  if (!there.ok) {
+    const { rest, cred, plain } = splitWindowVars(owned);
+    const { session: creationSessionEnv, process: cp } = splitOwnerEnv(rest);
+    Object.assign(creationProcEnv, cp);
+    const creationDrops = person || argv.length === 0 ? [] : agentWindowDrops(owned);
+    creationCredFile = sessionCredentialFile(cred);
+    creationShape = [
+      "-P", "-F", "#{pane_id}\t#{window_id}", "-c", cwd,
+      ...(clean ? ["-n", clean] : []),
+      ...Object.entries(creationSessionEnv).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
+      ...sessionCredentialArgv(creationCredFile, { ...cp, ...plain }, creationDrops, argv),
+    ];
+  }
+  if (reuse && there.ok && (clean || card)) {
+    /* Found by the card it belongs to first, then by the name it was GIVEN as
+       well as the one it shows. A person who renamed the tab (`orbit-ORBIT-1042`
+       → `my notes`) still means this card's work, and looking only at
+       `window_name` opened a second tab with the card's name beside it. When
+       both windows carry a card, a different card with the same display name is
+       not this one. Nothing is renamed here. */
+    const mine = (await liveWindows(session)).find((w) => samePlace(w.path, cwd)
+      && (card ? w.card === card || (!w.card && (w.name === clean || w.given === clean)) : w.name === clean || w.given === clean));
     if (mine) {
+      if (card && mine.card !== card) await tmux(["set-option", "-w", "-t", mine.windowId, CARD_OPTION, card]);
       if (select) await tmux(["select-window", "-t", mine.windowId]);
       return { ok: true, paneId: mine.paneId, windowId: mine.windowId, reused: true };
     }
@@ -726,16 +976,18 @@ export async function engineWindowOutcome(
    */
   const out = there.ok
     ? await tmux(["new-window", ...(select ? [] : ["-d"]),
-        ...placeArgs(parsePlaceWindows((await tmux(["list-windows", "-t", `=${session}:`, "-F", PLACE_FORMAT])).stdout), clean ?? "", `=${session}:`),
+        ...placeArgs(parsePlaceWindows((await tmux(["list-windows", "-t", `=${session}:`, "-F", PLACE_FORMAT])).stdout), clean ?? "", `=${session}:`, undefined, slot),
         ...shape])
-    : await tmux(["new-session", "-d", "-s", session, ...shape]);
+    : await tmux(["new-session", "-d", "-s", session, ...creationShape]);
   if (!out.ok) {
+    if (!there.ok) discardCredentialFile(creationCredFile);
     const said = out.stderr.replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 200);
     if (said === "tmux is not installed") return fail("tmux is not installed on this machine");
     /* The size goes with tmux's own words because the one refusal that depends
        on it, "command too long", does not say how long. Arguments plus the
        variables for the window: those are what tmux packs into one message. */
-    const bytes = [...argv, ...Object.entries(given ?? {}).map(([k, v]) => `${k}=${v}`), ...(drops.length ? ["env", ...drops.flatMap((v) => ["-u", v])] : [])].reduce((n, a) => n + Buffer.byteLength(a) + 1, 0);
+    const bytes = (there.ok ? [...prefix, ...argv, ...Object.entries(sessionEnv).map(([k, v]) => `${k}=${v}`)] : creationShape)
+      .reduce((n, a) => n + Buffer.byteLength(a) + 1, 0);
     return fail(`tmux refused the command: ${said || "it exited without saying why"} (${Math.max(1, Math.ceil(bytes / 1024))} KB)`);
   }
   /* Write it down straight away rather than waiting for the sweep. A session
@@ -749,7 +1001,28 @@ export async function engineWindowOutcome(
   const [paneId = "", windowId = ""] = (out.stdout.split("\n")[0] ?? "").trim().split("\t");
   // Both or neither: tmux printing something this does not recognise is not a
   // reason to hand a caller a string that goes on a command line.
-  if (paneId.startsWith("%") && windowId.startsWith("@")) return { ok: true, paneId, windowId };
+  if (paneId.startsWith("%") && windowId.startsWith("@")) {
+    /* The owner rides in the environment, where only a process can be asked for
+       it, and in a window NAME, which a rename changes — a person renames a tab,
+       and a dot in a name is rewritten to a dash here. The option survives both,
+       so the sweep still knows whose window this is (agentops.ts). A window
+       opened before this line existed has none, so a rename of it is the old
+       case until it closes. */
+    const owner = (there.ok ? procEnv : creationProcEnv)[OWNER_VAR];
+    if (owner) await tmux(["set-option", "-w", "-t", windowId, OWNER_OPTION, owner]);
+    /* The name this app gave the tab, pinned so a rename by hand does not lose
+       it: the next open of the same card finds this window by it instead of
+       opening a second one. */
+    if (clean) await tmux(["set-option", "-w", "-t", windowId, GIVEN_OPTION, clean]);
+    if (card) await tmux(["set-option", "-w", "-t", windowId, CARD_OPTION, card]);
+    return { ok: true, paneId, windowId };
+  }
+  // Exit 0 is not "the window came up": a bad `-c` on some tmux builds still
+  // creates the session and prints something other than a pane/window id
+  // pair. The file `sessionCredentialFile` wrote for that first window is
+  // never sourced by anything either way, so it is discarded here too, not
+  // only on the non-zero-exit branch above.
+  if (!there.ok) discardCredentialFile(creationCredFile);
   return fail(`tmux opened a window but printed ids this app could not read (${JSON.stringify(out.stdout.trim().slice(0, 60))})`);
 }
 
@@ -801,11 +1074,18 @@ export async function engineSplitRunning(
      create an agent pane: a split gets the server's environment like any other
      window. No agent split today (`terminal.ts` passes a person), so this is
      what keeps the next one from being the hole. */
-  const given = person || env?.AGENTGLASS_TOKEN || env?.[BROWSER_OFF_VAR] ? env : { ...env, [BROWSER_OFF_VAR]: "1" };
-  const drops = person ? [] : agentWindowDrops(given);
+  const given = person
+    ? { ...env, ...personPaneEnv() }
+    : env?.AGENTGLASS_TOKEN || env?.[BROWSER_OFF_VAR] ? env
+    : { ...env, [BROWSER_OFF_VAR]: "1", [BROWSER_OFF_REASON_VAR]: BROWSER_OFF_BYPASS_REASON };
+  // A person's split is their shell, however the session's own environment was
+  // last named: nothing here puts an owner in it (see `engineWindowOutcome`).
+  const { session: sessionEnv, process: procEnv } = splitOwnerEnv(given);
+  const drops = (person || argv.length === 0) ? [] : agentWindowDrops(sessionEnv);
+  const prefix = argv.length === 0 ? [] : envCommand(drops, procEnv);
   const out = await tmux(["split-window", "-h", "-P", "-F", "#{pane_id}", "-t", `=${session}:`, "-c", cwd,
-    ...(person ? [] : Object.entries(given ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`])),
-    ...(drops.length ? ["env", ...drops.flatMap((v) => ["-u", v])] : []),
+    ...Object.entries(sessionEnv).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
+    ...prefix,
     ...argv]);
   if (!out.ok) return null;
   const paneId = (out.stdout.split("\n")[0] ?? "").trim();
@@ -1062,7 +1342,7 @@ let sweeper: ReturnType<typeof setInterval> | null = null;
  *  tmux is unusable, so callers need not check either. */
 export function startPaneSweeper(): void {
   if (sweeper || !idleEvictMs() || !tmuxCapability().available) return;
-  sweeper = setInterval(() => { void evictIdlePanes(); }, 60_000);
+  sweeper = setIntervalAs("tmux pane evict sweep", () => { void evictIdlePanes(); }, 60_000);
   // Never hold the process open for a memory optimisation.
   (sweeper as unknown as { unref?: () => void }).unref?.();
 }

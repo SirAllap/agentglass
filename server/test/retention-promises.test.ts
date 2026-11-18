@@ -62,10 +62,10 @@ describe("the promises SECURITY.md makes about retention", () => {
        * retention as everything else. Deleting the flag is the session moving
        * on, which is why it sits here beside db_claim and not in pruneOldRows.
        */
-      "db.ts:session_wait",
-      /* Twice: the session moving on, and the Lantern's own chat, whose
-         "waiting for your input" is a person mid-conversation — its flag is
-         dropped the moment its hooks say what it is. Same flag, same reason. */
+      /* Once, for two callers: the session moving on, and the Lantern's own
+         chat, whose "waiting for your input" is a person mid-conversation — its
+         flag is dropped the moment its hooks say what it is. Same flag, same
+         reason, and since clearWait() one statement for both. */
       "db.ts:session_wait",
       "db.ts:sessions",
       // The understudy's own two windows: the bare fact of a write ages out at
@@ -132,15 +132,37 @@ describe("the promises SECURITY.md makes about retention", () => {
       "db.ts:understudy_snapshots",
       "db.ts:understudy_work",
       "db.ts:daily_rollup",
+      /* Not recorded data: the scanner's progress marker for a transcript file that is
+         no longer on disk (pruneGoneTranscripts). The events it fed age out like any
+         other; the row only said how far a file that no longer exists was read. */
+      "transcripts.ts:transcript_files",
+      /* Not recorded data, two derived caches (added with the restart-resume
+         work, 03d1a8942 and 2fe49fce1): transcript_resume is the saved read
+         offset and parser state of a transcript file, transcript_refused the
+         memo of files the scanner declined. Neither holds anything a person
+         wrote; both are rebuilt by re-reading the transcript, and they are
+         dropped when the file is gone, changed, or the scanner is off. */
+      "transcripts.ts:transcript_refused",
+      "transcripts.ts:transcript_refused",
+      "transcripts.ts:transcript_resume",
+      "transcripts.ts:transcript_resume",
+      "transcripts.ts:transcript_resume",
     ].sort());
     // …and all eight are inside pruneOldRows, bounded by a cutoff.
-    const prune = src.slice(src.indexOf("export function pruneOldRows"));
+    // pruneOldRows is the one door: it runs pruneOldRowsNow, which holds the
+    // deletes, and then gives the freed pages back. Nothing else calls the inner one.
+    const door = src.slice(src.indexOf("export function pruneOldRows"));
+    expect(door.slice(0, door.indexOf("\n}\n"))).toContain("pruneOldRowsNow()");
+    // definition, the sync door, and the yielding door (pruneOldRowsYielding, slices of events).
+    expect(src.split("pruneOldRowsNow(").length - 1).toBe(3);
+    const prune = src.slice(src.indexOf("function pruneOldRowsNow"));
     const body = prune.slice(0, prune.indexOf("\n}\n"));
     for (const t of ["events_fts", "events", "sessions", "gates", "reminders",
                      "understudy_snapshots", "understudy_ledger",
                      "understudy_proposals", "understudy_shifts", "understudy_acts",
                      "understudy_work", "understudy_asked", "understudy_help", "named_agent", "session_role", "agent_schedule", "seat_line", "seat_report", "seat_need"]) {
-      expect(body, `DELETE FROM ${t} escaped pruneOldRows`).toContain(`DELETE FROM ${t}`);
+      // The ledger's stubs go in bounded slices (pruneStubsChunk), still called from inside pruneOldRows.
+      expect(body, `DELETE FROM ${t} escaped pruneOldRows`).toContain(t === "understudy_ledger" ? "pruneStubsChunk(" : `DELETE FROM ${t}`);
     }
 
     /*
@@ -276,6 +298,11 @@ describe("the promises SECURITY.md makes about retention", () => {
     // ClickUp comment above: it is their workspace's text, ours records nothing
     // about it, and no database is opened. The check below holds it to that.
     "/jira/comment/delete",
+    // Drops one learned login → Jira account pair from jira-pairs.json, a
+    // config file of the person's own picks beside the ClickUp prefs. The pair
+    // is a suggestion the person can take back, not something recorded about
+    // them; no database is opened. The check below holds it to that.
+    "/jira/pairs/forget",
     // Takes one of the person's OWN attachments off a Jira card, in Jira, by its
     // id, and only a file the card's own read lists as theirs. Their workspace's
     // file, nothing of ours is recorded about it, and no database is opened. The

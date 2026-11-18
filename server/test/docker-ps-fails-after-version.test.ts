@@ -33,7 +33,7 @@ esac
   const p = Bun.spawnSync(["bun", "-e", PROBE], {
     env: {
       PATH: `${join(dir, "bin")}:${process.env.PATH ?? ""}`,
-      HOME: dir, XDG_CONFIG_HOME: dir, XDG_DATA_HOME: dir, XDG_CACHE_HOME: dir,
+      HOME: dir, TMPDIR: dir, XDG_CONFIG_HOME: dir, XDG_DATA_HOME: dir, XDG_CACHE_HOME: dir,
       AGENTGLASS_STATE_DIR: join(dir, "state"), AGENTGLASS_DB: join(dir, "d.db"), AGENTGLASS_ROOT: dir,
       AGENTGLASS_SCAN_DISABLED: "1", NODE_ENV: "test",
     },

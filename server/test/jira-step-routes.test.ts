@@ -68,7 +68,7 @@ afterAll(async () => {
 const headers = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
 let seen = "";
 const call = async (method: string, path: string, body?: unknown, extra: Record<string, string> = {}) => {
-  const r = await fetch(base + path, { method, headers: { ...headers, ...extra }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const r = await fetch(base + path, { method, headers: { ...headers, origin: base, ...extra }, body: body === undefined ? undefined : JSON.stringify(body) });
   const text = await r.text();
   seen += text;
   return { status: r.status, body: JSON.parse(text) as Record<string, any> };
@@ -93,7 +93,7 @@ describe("the step routes", () => {
   });
 
   step("the steps read as defaults, then save, then read back", async () => {
-    expect((await call("GET", "/jira/steps")).body).toEqual({ ok: true, overrides: [], steps: { handoff: { enabled: false, blocks: [] }, review: { enabled: false, blocks: [] }, merge: { enabled: false, blocks: [] } } });
+    expect((await call("GET", "/jira/steps")).body).toEqual({ ok: true, overrides: [], steps: { handoff: { enabled: false, blocks: [] }, review: { enabled: false, blocks: [] }, merge: { enabled: false, blocks: [] }, people: { enabled: false, blocks: [] }, note: { enabled: false, blocks: [] } } });
     const blocks = [{ type: "move", statusNames: ["In Review"] }, { type: "comment", text: "Opened {pr}" }, { type: "link" }];
     const saved = await call("POST", "/jira/steps", { steps: { handoff: { enabled: true, blocks } } });
     expect(saved.status).toBe(200);
@@ -104,7 +104,7 @@ describe("the step routes", () => {
   });
 
   step("a refused save is a 400 with a sentence, and the saved step is unchanged", async () => {
-    const r = await call("POST", "/jira/steps", { steps: { handoff: { blocks: [{ type: "field", field: "Team", value: "Blue" }] } } });
+    const r = await call("POST", "/jira/steps", { steps: { handoff: { blocks: [{ type: "field", field: "Team", value: "Blue", ask: true }] } } });
     expect(r.status).toBe(400);
     expect(r.body.ok).toBe(false);
     expect((await call("GET", "/jira/steps")).body.steps.handoff.blocks.length).toBe(3);
@@ -117,6 +117,15 @@ describe("the step routes", () => {
     expect(r.status).toBe(400);
     expect(r.body).toEqual({ ok: false, error: "Writing to Jira is switched off" });
     expect(fake.requests.length).toBe(0);
+  });
+
+  step("the site's custom fields are offered by name, for a step that sets one", async () => {
+    const r = await call("GET", "/jira/fields");
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ ok: true });
+    const names = (r.body.fields as { name: string; type: string }[]).map((f) => f.name);
+    expect(names).toContain("Start date");
+    expect(names).not.toContain("Sprint");
   });
 
   step("a page from another origin can neither run a step nor change one", async () => {
@@ -183,7 +192,7 @@ describe("the step routes", () => {
     expect(r.body.source).toBe("tasks");
     const unit = (r.body.spaces as { id: string; statuses: { status: string }[]; counted?: boolean }[]).find((u) => u.id === "ORBIT")!;
     expect(unit.counted).toBeUndefined();
-    expect(unit.statuses.map((x) => x.status)).toEqual(["To Do", "In Progress", "In Review", "QA", "Done"]);
+    expect(unit.statuses.map((x) => x.status)).toEqual(["To Do", "In Progress", "In Review", "QA", "Done", "In staging", "Ready for deployment"]);
     expect(r.body.counted).toEqual([]);
     expect((await call("POST", "/jira/status-units", { counted: ["ORBIT"] })).body).toEqual({ ok: true, counted: ["ORBIT"] });
     expect((await call("GET", "/jira/status-units")).body).toMatchObject({ source: "chosen", counted: ["ORBIT"] });
@@ -193,7 +202,7 @@ describe("the step routes", () => {
 
   step("the pick of projects is a closed shape: no extra keys, no empty body, no key longer than a key can be", async () => {
     expect((await call("POST", "/jira/status-units", { counted: ["ORBIT"], extra: 1 })).status).toBe(400);
-    const r = await fetch(base + "/jira/status-units", { method: "POST", headers, body: "null" });
+    const r = await fetch(base + "/jira/status-units", { method: "POST", headers: { ...headers, origin: base }, body: "null" });
     expect(r.status).toBe(400);
     expect((await call("POST", "/jira/status-units", { counted: ["A".repeat(40)] })).status).toBe(400);
     expect((await call("GET", "/jira/status-units")).body.counted).toEqual(["ORBIT"]);

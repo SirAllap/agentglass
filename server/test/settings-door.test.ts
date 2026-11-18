@@ -6,10 +6,12 @@
  * table (shared/settingClass.ts) is the real one. The last block reads
  * serverSettings.ts as text and fails for a setting it defines without a class.
  */
+import { SWITCHABLE_COMMANDS } from "../../shared/workerRoles.ts";
 import { describe, expect, test } from "bun:test";
 import { makeDoor, leafDiff, MAX_PENDING, type ServerSettingDef } from "../src/settingsDoor.ts";
 import { classOf, REQUEST_TTL_MS, SETTING_CLASSES } from "../../shared/settingClass.ts";
 import { DOOR_IDS } from "../../shared/polaris.ts";
+import { APP_DOORS } from "../src/preflightStore.ts";
 
 const SOURCE = await Bun.file(new URL("../src/serverSettings.ts", import.meta.url)).text();
 
@@ -32,6 +34,7 @@ function rig(start: Record<string, unknown> = {}) {
     def("seat.wakeHours", "number", (v) => typeof v === "number"),
     def("lantern.cacheTtlMinutes", "number", (v) => typeof v === "number"),
     def("agents.changeWithoutAsking", "boolean", (v) => typeof v === "boolean"),
+    def("flow.agentEdit", "boolean", (v) => typeof v === "boolean"),
     def("orchestration.policy", "json", (v) => !!v && typeof v === "object"),
     def("jira.token", "string", () => true),
   ];
@@ -119,6 +122,21 @@ describe("the person's switch", () => {
     r.trust(true);
     expect(await r.door.change("launch.mode", "auto", r.agent)).toMatchObject({ ok: true, applied: true });
     expect(r.door.pending()).toEqual([]);
+  });
+
+  test("flow.agentEdit is the person's on, and an agent may turn it off", async () => {
+    const r = rig({ "flow.agentEdit": true });
+    r.trust(true);
+    // Off is the safer direction: it applies at once, even for an agent.
+    expect(await r.door.change("flow.agentEdit", false, r.agent)).toMatchObject({ ok: true, applied: true });
+    expect(r.store["flow.agentEdit"]).toBe(false);
+    // On is the person's alone, never a request.
+    const on = await r.door.change("flow.agentEdit", true, r.agent);
+    expect(on).toMatchObject({ ok: false, status: 403 });
+    expect(!on.ok && on.error).toContain("only the person");
+    expect(r.store["flow.agentEdit"]).toBe(false);
+    expect(r.door.pending()).toEqual([]);
+    expect(await r.door.change("flow.agentEdit", true, r.person)).toMatchObject({ ok: true, applied: true });
   });
 });
 
@@ -270,7 +288,11 @@ describe("every server setting has a class", () => {
      whose `${...}` part names a member of a list (a role, a plugin). */
   const ids = [...SOURCE.matchAll(/\bid: (?:"([^"]+)"|`([^`]+)`)/g)].map((m) => (m[1] ?? m[2]!).replace(/\$\{[^}]+\}/g, "acme"))
     // polaris.door.${d} is one id per door in DOOR_IDS
-    .flatMap((id) => (id === "polaris.door.acme" ? DOOR_IDS.map((d) => `polaris.door.${d}`) : [id]));
+    .flatMap((id) => (id === "polaris.door.acme" ? DOOR_IDS.map((d) => `polaris.door.${d}`) : [id]))
+    // workers.appDoors.${door} is one id per app door in APP_DOORS
+    .flatMap((id) => (id === "workers.appDoors.acme" ? APP_DOORS.map((d) => `workers.appDoors.${d}`) : [id]))
+    // workers.commands.${cmd...} is one id per SWITCHABLE_COMMANDS entry, a space becoming "-"
+    .flatMap((id) => (id === "workers.commands.acme" ? SWITCHABLE_COMMANDS.map((c) => `workers.commands.${c.replace(/ /g, "-")}`) : [id]));
 
   test("the source defines the settings it is expected to", () => {
     expect(ids.length).toBeGreaterThan(20);
@@ -283,7 +305,9 @@ describe("every server setting has a class", () => {
   });
 
   test("every server line in the table is a setting there, or one no agent reaches", () => {
-    const windowish = /^(appearance|diff|terminal|rail|notifications|browser|tasks|keys|prefs|about|usage)\.|^plugins\.sessionReads\.|^clickup\.statusSpaces\.|^jira\.statusUnits\.|^jira\.tree\./;
+    // jira.board.confirmMoves (flowtable): a board-drag confirm, read and
+    // written through jiraBoardMovePref's own localStorage, never the server.
+    const windowish = /^(appearance|diff|terminal|rail|notifications|browser|tasks|keys|prefs|about|usage)\.|^plugins\.sessionReads\.|^clickup\.statusSpaces\.|^jira\.statusUnits\.|^jira\.tree\.|^jira\.syncFavourites$|^jira\.board\.confirmMoves$/;
     const stale = Object.entries(SETTING_CLASSES)
       .filter(([k, row]) => !windowish.test(k) && row.class !== "secret" && !(row.class === "personOnly" && !ids.includes(k)))
       .filter(([k]) => !ids.some((id) => (k.includes("*") ? classOf(id) === SETTING_CLASSES[k] : id === k)))

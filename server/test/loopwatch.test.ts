@@ -67,7 +67,7 @@ describe("loop watchdog", () => {
 
     const seen = lw.stalls(before).stalls;
     expect(seen.length).toBeGreaterThan(0);
-    expect(seen.at(-1)!.what).toContain("background");
+    expect(seen.at(-1)!.what).toContain("unlabelled: ");
   });
 
   step("keeps running totals, so a session can be judged rather than a moment", () => {
@@ -161,7 +161,7 @@ describe("attribution across an await", () => {
     block(520);
     await Bun.sleep(300);
     const worst = lw.stalls(before).stalls.reduce((a, b) => (b.ms > a.ms ? b : a));
-    expect(worst.what).toContain("background");
+    expect(worst.what).toContain("unlabelled: ");
 
     // …while one that was still running across the block answers for it.
     await Bun.sleep(300);
@@ -194,6 +194,85 @@ describe("attribution across an await", () => {
     expect(worst.cpuMs).toBeLessThan(worst.ms / 2);
   });
 
+  step("does not blame a mark closed right away, even for a stall long after it", async () => {
+    // The broadcast bug: `entered()` with no matching `finished()` left `done`
+    // at 0 forever, so every later stall was blamed on it until some other
+    // label entered. A mark that closes synchronously, the way `broadcast()`
+    // now does, must not still be "recent" by the time an unrelated stall
+    // happens — proven here with an unrelated label in between and a real gap.
+    await Bun.sleep(300);
+    const before = lw.stalls().stalls.at(-1)?.id ?? 0;
+    lw.finished(lw.entered("broadcast to clients"));
+    block(520); // an unrelated stall, right after broadcast already returned
+    await Bun.sleep(300);
+
+    const worst = lw.stalls(before).stalls.reduce((a, b) => (b.ms > a.ms ? b : a));
+    expect(worst.what).not.toBe("broadcast to clients");
+    expect(worst.what).toContain("unlabelled: ");
+  });
+
+  step("blames a synchronous child wait run under waitedFor", async () => {
+    // `waitedFor()` is the wrapper the hot tmux spawnSync sites run under, so
+    // the watchdog gets a name for the wait instead of pinning it on whatever
+    // else was `entered()` last.
+    await Bun.sleep(300);
+    const before = lw.stalls().stalls.at(-1)?.id ?? 0;
+    lw.waitedFor("tmux list-panes", () => block(520));
+    await Bun.sleep(300);
+
+    const worst = lw.stalls(before).stalls.reduce((a, b) => (b.ms > a.ms ? b : a));
+    expect(worst.ms).toBeGreaterThanOrEqual(150);
+    expect(worst.what).toBe("tmux list-panes");
+  });
+
+  describe("the broadcast bug, reproduced directly", () => {
+    // index.ts's broadcast() called entered() then finished() with nothing
+    // between them to catch a throw. broadcastTo() can throw (a dead
+    // socket's getBufferedAmount — see broadcast.test.ts), and when it does,
+    // finished() never ran: `done` stayed 0 forever, so the mark looked
+    // exactly like one still legitimately running. The very next stall — even
+    // an unrelated, unmarked sync wait that nothing wrapped in waitedFor —
+    // got blamed on "broadcast to clients" instead of showing up as
+    // background work nobody named. The fix is try/finally around the call
+    // that can throw, same as `waitedFor()` already does.
+    step("an unguarded throw leaves the mark open, and an unrelated stall right after borrows its name", async () => {
+      await Bun.sleep(300);
+      const before = lw.stalls().stalls.at(-1)?.id ?? 0;
+      const mark = lw.entered("broadcast to clients");
+      try {
+        throw new Error("getBufferedAmount on a dead socket");
+      } catch {
+        // No finally: this is the bug. finished(mark) is skipped entirely.
+      }
+      block(520); // an unmarked sync wait, with nothing else entered() since
+      await Bun.sleep(300);
+
+      const worst = lw.stalls(before).stalls.reduce((a, b) => (b.ms > a.ms ? b : a));
+      expect(worst.what).toBe("broadcast to clients"); // wrong: broadcast already returned
+    });
+
+    step("try/finally around the same throw stops the mark from outliving it", async () => {
+      await Bun.sleep(300);
+      const before = lw.stalls().stalls.at(-1)?.id ?? 0;
+      const mark = lw.entered("broadcast to clients");
+      try {
+        try {
+          throw new Error("getBufferedAmount on a dead socket");
+        } finally {
+          lw.finished(mark); // the fix: entered()/finished() always pair up
+        }
+      } catch {
+        // the caller still swallows the error, same as before
+      }
+      block(520);
+      await Bun.sleep(300);
+
+      const worst = lw.stalls(before).stalls.reduce((a, b) => (b.ms > a.ms ? b : a));
+      expect(worst.what).not.toBe("broadcast to clients");
+      expect(worst.what).toContain("unlabelled: ");
+    });
+  });
+
   step("blames the request that owns the continuation, not the poll that arrived meanwhile", async () => {
     await Bun.sleep(120);
     const before = lw.stalls().stalls.at(-1)?.id ?? 0;
@@ -217,4 +296,29 @@ describe("attribution across an await", () => {
     expect(worst.ms).toBeGreaterThanOrEqual(150);
     expect(worst.what).toBe("GET /the-real-culprit");
   }, 10_000);
+});
+
+describe("an unlabelled stall names itself", () => {
+  it("is reported as unlabelled plus the top frame, never blank", () => {
+    const stack = "Error\n    at tick (/srv/loopwatch.ts:347:12)\n    at runTimer (node:timers:9:1)";
+    expect(lw.topFrame(stack)).toBe("tick (/srv/loopwatch.ts:347:12)");
+    expect(lw.unlabelledWhat(stack)).toBe("unlabelled: tick (/srv/loopwatch.ts:347:12)");
+    expect(lw.unlabelledWhat(undefined)).toBe("unlabelled: no frame");
+    // A waiting stall caught in the watcher's own tick is the OS, not a JS frame.
+    expect(lw.unlabelledWhat(stack, true)).toContain("no JS was running");
+    // Compiled build: no file name, so the watcher's own frame is matched by identity.
+    const own = "Error\n    at <anonymous> (/$bunfs/root/agentglass-server:3793:116)";
+    expect(lw.unlabelledWhat(own, true, "<anonymous> (/$bunfs/root/agentglass-server:3793:116)")).toContain("no JS was running");
+    expect(lw.unlabelledWhat(own, false, "<anonymous> (/$bunfs/root/agentglass-server:3793:116)")).toContain("unlabelled: <anonymous>");
+    expect(lw.unlabelledWhat("Error\n    at work (/srv/git.ts:10:1)", true)).toBe("unlabelled: work (/srv/git.ts:10:1)");
+  });
+  it("a stall with no label records that name in the ring", async () => {
+    await Bun.sleep(400);
+    const before = lw.stalls().stalls.at(-1)?.id ?? 0;
+    block(520);
+    await Bun.sleep(300);
+    const seen = lw.stalls(before).stalls;
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.some((s) => s.what.startsWith("unlabelled: ") && s.what.length > "unlabelled: ".length)).toBe(true);
+  });
 });

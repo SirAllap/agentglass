@@ -26,12 +26,14 @@
 // checkout (node_modules, .env) go with it.
 
 import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { anyInside, parseDockerSize, spawnRunner, type DiskCtx, type Runner } from "./diskclean.ts";
 import { cleanupCardLines } from "../../shared/cleanupCard.ts";
 import { parseWorktreeList } from "./gitwork.ts";
+import { checkTagTemplate, matchTagTemplate, shaInAny, slugForTag, templateHasSha } from "../../shared/dockerTag.ts";
+import { parseLiveCheckouts, volumePatternRegex } from "./dockerorphans.ts";
 import { gh as ghDefault } from "./prs.ts";
 
 // ------------------------------------------------------------- settings ----
@@ -39,8 +41,15 @@ import { gh as ghDefault } from "./prs.ts";
 export interface CleanupConfig {
   /** Container names that are never stopped or removed, whatever their name says. */
   sharedContainerNames: string[];
-  /** An exact image ref with `{slug}` in it, tried besides the images whose tag contains the slug. */
+  /**
+   * An image ref with `{slug}` and/or `{sha}` in it (`app:{slug}`, `app:{sha}`, `app:{slug}-{sha}`). Only `{slug}`: an exact ref,
+   * tried besides the images whose tag contains the slug. With `{sha}`: the images built at one of the PR's commits (dockerItems).
+   */
   dockerImageTagTemplate: string;
+  /** Named volume patterns with `{slug}` (`app-cache-{slug}`) the orphan sweep may list; empty lists no volume ever. */
+  orphanVolumePatterns: string[];
+  /** Volume names (globs) the orphan sweep never lists, whatever else matches; empty by default like every repo-specific setting. */
+  orphanKeep: string[];
   /** Test databases start with this; empty skips the step. */
   testDbPrefix: string;
   /** The psql command (words split on spaces) that lists and drops them; empty skips the step. */
@@ -54,6 +63,13 @@ export interface CleanupConfig {
   transientMarkers: string[];
   briefsDir: string;
   worklogDir: string;
+  /**
+   * A repo-relative script that removes what the checkout's own tooling created (volumes named by a build id, test databases).
+   * It runs from the MAIN checkout, with the worktree path as $1, before anything else of that checkout is removed; empty = off.
+   */
+  teardownScript: string;
+  /** The checkout's own file the teardown script reads (`worktree.env`); empty = none. Without it in a checkout, a teardown that says no cannot be retried, so the clean, merged worktree is removed with a warning. */
+  teardownStateFile: string;
   /** The kinds of leftover the plan may hold; one not listed is omitted (not a block). Its own setting, `cleanup.include`. */
   include: CleanupGroup[];
   /**
@@ -67,6 +83,12 @@ export interface CleanupConfig {
    * above it is literal. Empty finds nothing. Its own setting, `cleanup.otherFolders`.
    */
   otherFolders: string[];
+  /** The orphan sweep removes what it lists by itself when Docker > Disk loads. Off by default; turning it on waits for the person. Its own setting, `cleanup.orphanAutoRemove`. */
+  orphanAutoRemove: boolean;
+  /** Move the card to `moveCardStatus` as one more step of this plan, through the same move door session-start uses. Off by default. Its own setting, `cleanup.moveCard`. */
+  moveCard: boolean;
+  /** The status `moveCard` lands the card on, as the tracker names it. Empty = not configured, even with `moveCard` on. Its own setting, `cleanup.moveCardStatus`. */
+  moveCardStatus: string;
 }
 
 /** What a person ticks. test databases ride with docker, briefs with notes, the fetch with the branch. */
@@ -82,20 +104,22 @@ export function parseCleanupInclude(raw: unknown): { value: CleanupGroup[] } | {
 const GROUP_OF: Partial<Record<CleanupKind, CleanupGroup>> = {
   "docker-container": "docker", "docker-volume": "docker", "docker-image": "docker", "test-db": "docker", worktree: "worktree", branch: "branch", "fetch-prune": "branch",
   stash: "stashes", evidence: "evidence", note: "notes", brief: "notes", tab: "tab",
-  "agent-scratch": "agent-scratch", "agent-history": "agent-history", "other-folder": "worktree",
+  "agent-scratch": "agent-scratch", "agent-history": "agent-history", "other-folder": "worktree", "teardown-script": "worktree",
 };
+// `card-move` carries no group of its own, same as `own-state`/`worklog`: it is never a tick, only `moveCard`/`moveCardStatus` turn it on.
 
 export const EMPTY_CLEANUP_CONFIG: CleanupConfig = {
-  sharedContainerNames: [], dockerImageTagTemplate: "", testDbPrefix: "", testDbCommand: "", stashArchiveDir: "",
-  evidenceDirs: [], notesDirs: [], transientMarkers: [], briefsDir: "", worklogDir: "", include: DEFAULT_CLEANUP_INCLUDE, evidenceRoots: [], otherFolders: [],
+  sharedContainerNames: [], dockerImageTagTemplate: "", orphanVolumePatterns: [], orphanKeep: [], testDbPrefix: "", testDbCommand: "", stashArchiveDir: "",
+  evidenceDirs: [], notesDirs: [], transientMarkers: [], briefsDir: "", worklogDir: "", teardownScript: "", teardownStateFile: "", include: DEFAULT_CLEANUP_INCLUDE, evidenceRoots: [], otherFolders: [], orphanAutoRemove: false,
+  moveCard: false, moveCardStatus: "",
 };
 
 const PATHY = ["stashArchiveDir", "briefsDir", "worklogDir"] as const;
-const LISTS = ["sharedContainerNames", "evidenceDirs", "notesDirs", "transientMarkers"] as const;
+const LISTS = ["sharedContainerNames", "evidenceDirs", "notesDirs", "transientMarkers", "orphanVolumePatterns", "orphanKeep"] as const;
 const absOrHome = (p: string) => isAbsolute(p) || p.startsWith("~/");
 
 /** A config as the settings door stores it, or why not. Unknown keys are refused so a typo cannot read as "unset". */
-export type CleanupConfigBody = Omit<CleanupConfig, "include" | "evidenceRoots" | "otherFolders">;
+export type CleanupConfigBody = Omit<CleanupConfig, "include" | "evidenceRoots" | "otherFolders" | "orphanAutoRemove" | "moveCard" | "moveCardStatus">;
 /** `cleanup.evidenceRoots` as the door validates it: absolute (or ~/) folders, never the filesystem root or a home directory itself. */
 export function parseCleanupEvidenceRoots(raw: unknown): { value: string[] } | { error: string } {
   if (!Array.isArray(raw) || raw.length > 50 || raw.some((x) => typeof x !== "string" || !x.trim() || x.length > 500 || x.includes("\0"))) return { error: "a list of up to 50 folders" };
@@ -107,7 +131,7 @@ export function parseCleanupEvidenceRoots(raw: unknown): { value: string[] } | {
   return { value: out };
 }
 /** The own settings of `CleanupConfig`: they are not part of the `cleanup.config` body. */
-const OWN_SETTING = ["include", "evidenceRoots", "otherFolders"];
+const OWN_SETTING = ["include", "evidenceRoots", "otherFolders", "orphanAutoRemove", "moveCard", "moveCardStatus"];
 /**
  * `cleanup.otherFolders` as the door validates it: `<absolute or ~/ folder>/<name or glob>`, the folder literal and at least two
  * deep (never a home or a top folder), the name holding `{card}` or `{number}` so a pattern can never be one fixed folder for
@@ -129,8 +153,8 @@ export function parseCleanupOtherFolders(raw: unknown): { value: string[] } | { 
 export function parseCleanupConfig(raw: unknown): { value: CleanupConfigBody } | { error: string } {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return { error: "an object of cleanup settings" };
   const o = raw as Record<string, unknown>;
-  const { include: _kinds, evidenceRoots: _roots, otherFolders: _other, ...empty } = EMPTY_CLEANUP_CONFIG;
-  const out: CleanupConfigBody = { ...empty, sharedContainerNames: [], evidenceDirs: [], notesDirs: [], transientMarkers: [] };
+  const { include: _kinds, evidenceRoots: _roots, otherFolders: _other, orphanAutoRemove: _auto, moveCard: _move, moveCardStatus: _moveStatus, ...empty } = EMPTY_CLEANUP_CONFIG;
+  const out: CleanupConfigBody = { ...empty, sharedContainerNames: [], evidenceDirs: [], notesDirs: [], transientMarkers: [], orphanVolumePatterns: [], orphanKeep: [] };
   for (const k of Object.keys(o)) if (!(k in EMPTY_CLEANUP_CONFIG) || OWN_SETTING.includes(k)) return { error: `unknown cleanup setting "${k}"${OWN_SETTING.includes(k) ? ` (it is the setting cleanup.${k})` : ""}` };
   for (const k of Object.keys(empty) as (keyof CleanupConfigBody)[]) {
     const v = o[k];
@@ -151,8 +175,14 @@ export function parseCleanupConfig(raw: unknown): { value: CleanupConfigBody } |
   }
   for (const n of out.sharedContainerNames) if (!/^[\w.-]+$/.test(n)) return { error: `sharedContainerNames: ${n} is not a container name` };
   if (out.testDbPrefix && !/^[A-Za-z0-9_]+$/.test(out.testDbPrefix)) return { error: "testDbPrefix: letters, digits and _ only" };
-  if (out.dockerImageTagTemplate && !out.dockerImageTagTemplate.includes("{slug}")) return { error: "dockerImageTagTemplate: must contain {slug}" };
+  if (out.dockerImageTagTemplate) { const t = checkTagTemplate(out.dockerImageTagTemplate); if (!t.ok) return { error: `dockerImageTagTemplate: ${t.error}` }; }
+  for (const p of out.orphanVolumePatterns) if (!volumePatternRegex(p) || !/^[A-Za-z0-9_.{}-]+$/.test(p)) return { error: `orphanVolumePatterns: ${p} must hold {slug} once and only letters, digits and _ . -` };
+  for (const g of out.orphanKeep) if (!/^[A-Za-z0-9_.*?-]+$/.test(g)) return { error: `orphanKeep: ${g} is a volume name or a glob of letters, digits and _ . - with * or ?` };
   if (out.transientMarkers.some((m) => m.includes("/"))) return { error: "transientMarkers: no slashes" };
+  const ts = out.teardownScript;
+  if (ts && (ts.length > 256 || isAbsolute(ts) || ts.startsWith("~") || ts.split("/").includes(".."))) return { error: "teardownScript: a path inside the repository (no leading / or ~, no .. segment, at most 256 characters)" };
+  const sf = out.teardownStateFile;
+  if (sf && (sf.length > 128 || isAbsolute(sf) || sf.startsWith("~") || sf.split("/").includes(".."))) return { error: "teardownStateFile: a path inside the checkout (no leading / or ~, no .. segment, at most 128 characters)" };
   return { value: out };
 }
 
@@ -160,11 +190,11 @@ export function parseCleanupConfig(raw: unknown): { value: CleanupConfigBody } |
 
 export type CleanupKind =
   | "tab" | "docker-container" | "docker-volume" | "docker-image" | "test-db" | "worktree" | "branch" | "fetch-prune"
-  | "stash" | "evidence" | "note" | "brief" | "own-state" | "worklog" | "agent-scratch" | "agent-history" | "other-folder";
+  | "stash" | "evidence" | "note" | "brief" | "own-state" | "worklog" | "agent-scratch" | "agent-history" | "other-folder" | "teardown-script" | "card-move";
 
 export interface CleanupItem { id: string; kind: CleanupKind; target: string; detail: string; bytes?: number }
 export type BlockKind =
-  | "pr-open" | "dirty" | "unpushed" | "open-pr-on-branch" | "stacked-pr" | "live-session" | "main-checkout" | "default-branch" | "unreadable";
+  | "pr-open" | "dirty" | "unpushed" | "open-pr-on-branch" | "stacked-pr" | "live-session" | "main-checkout" | "default-branch" | "unreadable" | "teardown-refused";
 export interface CleanupBlock { kind: BlockKind; why: string; files?: string[] }
 
 export interface CleanupPlan {
@@ -216,6 +246,8 @@ export interface CleanupCtx {
   tmuxSockets?: DiskCtx["tmuxSockets"];
   /** Forget what agentglass keeps about the pull request and its checkout; returns the rows removed. */
   forgetOwnState?: (a: { repo: string; pr: number; worktree: string | null }) => number;
+  /** Move the tracker card to a named status, through the same move door session-start uses. Absent: no tracker is wired to this engine's run, so the `card-move` item always fails rather than silently doing nothing. */
+  moveCard?: (key: string, status: string) => Promise<{ ok: boolean; detail: string }>;
 }
 
 export function defaultCleanupCtx(over: Partial<CleanupCtx> = {}): CleanupCtx {
@@ -237,6 +269,11 @@ export function matchesSlug(name: string, slug: string): boolean {
 }
 const expand = (p: string, home: string) => (p.startsWith("~/") ? join(home, p.slice(2)) : p);
 const lines = (s: string) => s.split("\n").map((l) => l.trim()).filter(Boolean);
+/** gh's first stderr line, one line, with anything shaped like a token removed. */
+export function ghWhy(stderr: string): string {
+  const l = lines(stderr)[0] ?? "no message";
+  return l.replace(/\b(?:gh[pousr]_|github_pat_)\w+/g, "[token]").replace(/\b(Bearer|token)\s+\S+/gi, "$1 [token]").slice(0, 200);
+}
 const git = (c: CleanupCtx, dir: string, args: string[]) => c.run("git", ["-C", dir, ...args], { timeoutMs: 60_000 });
 const inside = (parent: string, p: string) => p !== parent && p.startsWith(parent.endsWith("/") ? parent : `${parent}/`);
 
@@ -311,7 +348,7 @@ async function safetyBlocks(c: CleanupCtx, main: string, wt: string | null, head
     }
   }
   const open = await c.gh(["pr", "list", "--state", "open", "--json", "number,headRefName,baseRefName", "--limit", "200"], main);
-  if (open.code !== 0) blocks.push({ kind: "unreadable", why: "gh could not list the open pull requests, so it is not known whether another one uses this branch" });
+  if (open.code !== 0) blocks.push({ kind: "unreadable", why: `gh could not list the open pull requests (${ghWhy(open.stderr)}), so it is not known whether another one uses this branch` });
   else {
     let rows: { number: number; headRefName: string; baseRefName: string }[] = [];
     try { rows = JSON.parse(open.stdout); } catch { blocks.push({ kind: "unreadable", why: "gh answered the open pull request list in a shape this build cannot read" }); }
@@ -409,6 +446,8 @@ async function dockerItems(c: CleanupCtx, cfg: CleanupConfig, slug: string, wt: 
   for (const v of vols.code === 0 ? lines(vols.stdout) : []) if (matchesSlug(v, slug) && !shared.has(v)) out.push(item("docker-volume", v, "remove (Docker refuses while a container still uses it)"));
 
   const img = await c.run("docker", ["images", "--format", "{{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}"], { timeoutMs: 20_000 });
+  // A template with {sha} is matched by shaImageItems alone: the contains-slug match does not apply to it.
+  if (templateHasSha(cfg.dockerImageTagTemplate)) return out;
   const tmpl = cfg.dockerImageTagTemplate ? cfg.dockerImageTagTemplate.replaceAll("{slug}", slug).toLowerCase() : "";
   // Running containers that STAY: the ones this plan removes free their image.
   const staying = cons.filter((k) => k.running && !mine.has(k.name)).map((k) => k.image);
@@ -419,6 +458,54 @@ async function dockerItems(c: CleanupCtx, cfg: CleanupConfig, slug: string, wt: 
     if (!matchesSlug(ref, slug) && ref.toLowerCase() !== tmpl) continue;
     if (staying.some((s) => s === ref || s === id || (s.length >= 12 && id.startsWith(s)))) { notes.push(`kept image ${ref}: a running container still uses it`); continue; }
     out.push(item("docker-image", ref, "remove the image tag", parseDockerSize(size)));
+  }
+  return out;
+}
+
+/**
+ * Images the repository's build tagged with a commit's sha (`app:<sha>`), for each commit of this PR's branch. The commits are
+ * `merge-base(origin/<base>, head)..head`, read from the local refs with no fetch: a base that is not there leaves the images
+ * (a stale base can only leave images behind, never remove a wrong one). Kept, with a note: an image a container (running or
+ * stopped) uses, and an image built at the HEAD of any other live checkout or of the main checkout.
+ */
+async function shaImageItems(c: CleanupCtx, cfg: CleanupConfig, o: { main: string; wt: string | null; branch: string; base: string; mergeOid: string; slug: string | null; removing: Set<string>; notes: string[] }): Promise<CleanupItem[]> {
+  const { main, wt, branch, mergeOid, slug, removing, notes } = o;
+  const tmpl = cfg.dockerImageTagTemplate;
+  let base = o.base;
+  if (!base) { const d = await git(c, main, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]); base = d.code === 0 ? d.stdout.trim().replace(/^origin\//, "") : ""; }
+  const bref = base ? await git(c, main, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${base}`]) : null;
+  if (!bref || bref.code !== 0) { notes.push(`sha-tagged images left: base branch ${base || "(unknown)"} not fetched`); return []; }
+  let head = "";
+  for (const r of [`refs/heads/${branch}`, `refs/remotes/origin/${branch}`]) { const h = await git(c, main, ["rev-parse", "--verify", "--quiet", r]); if (h.code === 0) { head = h.stdout.trim(); break; } }
+  if (!head) { notes.push(`sha-tagged images left: branch ${branch} is not in this repository any more`); return []; }
+  let mb = await git(c, main, ["merge-base", `origin/${base}`, head]);
+  // a branch merged with a merge commit is already part of the base: its commits are the merge commit's second parent side
+  if (mb.code === 0 && mb.stdout.trim() === head && mergeOid) mb = await git(c, main, ["merge-base", `${mergeOid}^1`, head]);
+  if (mb.code !== 0) { notes.push("sha-tagged images left: no common commit with the base branch"); return []; }
+  const rl = await c.run("git", ["-C", main, "rev-list", "--max-count=500", `${mb.stdout.trim()}..${head}`], { timeoutMs: 20_000 });
+  const commits = rl.code === 0 ? lines(rl.stdout).map((x) => x.toLowerCase()) : [];
+  if (!commits.length) return [];
+  const wl = await git(c, main, ["worktree", "list", "--porcelain"]);
+  const live = (wl.code === 0 ? parseLiveCheckouts(wl.stdout, wt) : null)?.heads;
+  if (!live) { notes.push("sha-tagged images left: the live checkouts could not be read"); return []; }
+  const ps = await c.run("docker", ["ps", "-a", "--format", "{{.Names}}\t{{.State}}\t{{.Image}}\t{{.Labels}}"], { timeoutMs: 20_000 });
+  const img = await c.run("docker", ["images", "--format", "{{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}"], { timeoutMs: 20_000 });
+  if (ps.code !== 0 || img.code !== 0) {
+    notes.push(`could not list sha-tagged images: ${firstLine((ps.code !== 0 ? ps : img).stderr) || "docker did not answer"}`);
+    return [];
+  }
+  const used = lines(ps.stdout).map((l) => l.split("\t")).filter(([n]) => !removing.has((n ?? "").split(",")[0]!)).map(([, , i]) => i ?? "");
+  const mine = new Set([slug, branch].filter((x): x is string => !!x).map(slugForTag));
+  const out: CleanupItem[] = [];
+  for (const l of lines(img.stdout)) {
+    const [repo = "", tag = "", id = "", size = ""] = l.split("\t");
+    if (!repo || repo === "<none>" || !tag || tag === "<none>") continue;
+    const ref = `${repo}:${tag}`;
+    const parts = matchTagTemplate(tmpl, ref);
+    if (!parts?.sha || (parts.slug && !mine.has(slugForTag(parts.slug))) || !shaInAny(parts.sha, commits)) continue;
+    if (shaInAny(parts.sha, live)) { notes.push(`kept image ${ref}: built at the HEAD of a live checkout`); continue; }
+    if (used.some((u) => u === ref || u === id || (u.length >= 12 && id.startsWith(u)))) { notes.push(`kept image ${ref}: a container still uses it`); continue; }
+    out.push(item("docker-image", ref, "remove the image tag (built at a commit of this pull request)", parseDockerSize(size)));
   }
   return out;
 }
@@ -619,14 +706,35 @@ export async function mainCheckout(repo: string, c: CleanupCtx): Promise<string>
   return first.path;
 }
 
+/**
+ * The teardown script as it is at `main` right now: its real path, or why it may not run. Read from the main checkout, never from the
+ * worktree about to be removed, so what runs is what the default branch holds.
+ */
+function teardownTarget(main: string, rel: string): { path: string } | { why: string } {
+  let root: string, real: string;
+  try { root = realpathSync(main); } catch { return { why: `${main} cannot be read` }; }
+  try { real = realpathSync(join(root, rel)); } catch { return { why: `${rel} does not exist in the main checkout` }; }
+  if (!inside(root, real)) return { why: `${rel} resolves outside the main checkout` };
+  try {
+    const st = statSync(real);
+    if (!st.isFile()) return { why: `${rel} is not a regular file` };
+    if (!(st.mode & 0o100)) return { why: `${rel} is not executable by its owner` };
+  } catch { return { why: `${rel} cannot be read` }; }
+  return { path: real };
+}
+
 /** What a finished PR left on this machine that the local state alone can name: no gh, no tabs, no safety checks. The plan and the inventory share it. */
-async function localItems(c: CleanupCtx, cfg: CleanupConfig, o: { main: string; wt: { path: string } | null; branch: string; slug: string | null; defaults: Set<string>; inc: Set<CleanupGroup>; notes: string[] }): Promise<CleanupItem[]> {
+async function localItems(c: CleanupCtx, cfg: CleanupConfig, o: { main: string; wt: { path: string } | null; branch: string; slug: string | null; defaults: Set<string>; inc: Set<CleanupGroup>; notes: string[]; base?: string; mergeOid?: string }): Promise<CleanupItem[]> {
   const { main, wt, branch, slug, defaults, inc, notes } = o;
   const items: CleanupItem[] = [];
   if (!slug) notes.push(`branch ${branch} has no card id prefix: docker, test database, notes and briefs steps are skipped (evidence is still looked for by the branch name)`);
   else if (inc.has("docker")) {
     items.push(...(await dockerItems(c, cfg, slug, wt?.path ?? null, notes)));
     items.push(...(await testDbItems(c, cfg, slug, notes)));
+  }
+  if (inc.has("docker") && templateHasSha(cfg.dockerImageTagTemplate)) {
+    const removing = new Set(items.filter((i) => i.kind === "docker-container").map((i) => i.target));
+    items.push(...(await shaImageItems(c, cfg, { main, wt: wt?.path ?? null, branch, base: o.base ?? "", mergeOid: o.mergeOid ?? "", slug, removing, notes })));
   }
   if (wt && wt.path !== main && inc.has("worktree")) {
     const sz = await sizeOf(c, [wt.path]);
@@ -676,7 +784,12 @@ export async function planCleanup(repoIn: string, pr: number, cfg: CleanupConfig
   const lv = await liveSessions(c, wtPath, slug, inc.has("tab"));
   blocks.push(...lv.blocks);
 
-  const items: CleanupItem[] = [...lv.tabs, ...(await localItems(c, cfg, { main, wt, branch, slug, defaults, inc, notes }))];
+  const items: CleanupItem[] = [...lv.tabs, ...(await localItems(c, cfg, { main, wt, branch, slug, defaults, inc, notes, base: p.baseRefName, mergeOid: p.mergeOid }))];
+  if (cfg.teardownScript && wt && wt.path !== main && inc.has("worktree")) {
+    const t = teardownTarget(main, cfg.teardownScript);
+    if ("why" in t) blocks.push({ kind: "teardown-refused", why: `teardown script refused: ${t.why}; worktree kept` });
+    else items.unshift(item("teardown-script", t.path, `${cfg.teardownScript} ${wt.path}, run from the main checkout before the worktree is removed`));
+  }
   if (inc.has("worktree")) {
     const other = await otherFolderItems(c, cfg, { main, slug, worktrees: list.map((w) => w.path), known: new Set(items.map((i) => i.target)), notes });
     items.push(...other.items);
@@ -689,6 +802,7 @@ export async function planCleanup(repoIn: string, pr: number, cfg: CleanupConfig
     try { seen = !!p.url && readFileSync(f, "utf8").includes(p.url); } catch { /* no file yet */ }
     if (!seen) items.push(item("worklog", f, `append: PR merged: ${p.title} ${p.url}`));
   }
+  if (cfg.moveCard && cfg.moveCardStatus.trim() && slug && p.state === "MERGED") items.push(item("card-move", slug, `move ${slug} to ${cfg.moveCardStatus.trim()}`));
 
   // evidence, notes and briefs are two ticks: drop the unticked ones here, where every item has its kind
   const kept = items.filter((i) => { const g = GROUP_OF[i.kind]; return !g || inc.has(g); });
@@ -722,6 +836,36 @@ async function removeWorktree(c: CleanupCtx, main: string, path: string): Promis
   await git(c, main, ["worktree", "prune"]);
   if (d.code !== 0) return bad(`git was refused (${firstLine(r.stderr)}) and the container fallback failed: ${firstLine(d.stderr)}`);
   return existsSync(path) ? bad("the directory is still there after the container fallback") : ok("worktree removed by a container (its files belonged to root)");
+}
+
+const lastLine = (s: string) => s.trim().split("\n").pop()?.trim() ?? "";
+const TEARDOWN_MS = 120_000, TEARDOWN_LINES = 20;
+/** Runs the repo's own teardown. The target is checked again: it must still be the default branch's script, not what a plan carried. */
+async function runTeardown(c: CleanupCtx, cfg: CleanupConfig, plan: CleanupPlan, target: string): Promise<Outcome> {
+  const main = plan.repo;
+  const now = cfg.teardownScript ? teardownTarget(main, cfg.teardownScript) : { why: "no teardown script is set" };
+  if ("why" in now || now.path !== target || !plan.worktree) return bad(`teardown script refused: ${"why" in now ? now.why : "it is not the configured script"}; worktree kept`);
+  const r = await c.run(target, [plan.worktree], { cwd: main, timeoutMs: TEARDOWN_MS, isolated: true });
+  if (r.timedOut) return bad(`teardown timed out after ${TEARDOWN_MS / 1000} s; worktree kept`);
+  if (r.missing || r.notStarted) return bad(`teardown could not start: ${firstLine(r.stderr) || "unknown error"}; worktree kept`);
+  /* A script that ran and said no keeps the worktree, so it can be run again — unless the project names the state file
+     the script reads (`teardownStateFile`, e.g. worktree.env) and this checkout never had it. Then there is nothing a
+     second run could find either, and keeping the folder only left a clean, merged checkout behind on every merge. The
+     plan has already refused a dirty or unpushed worktree. Any other failure, a half-done one included, still keeps
+     it. Ceiling: the file's absence is the whole test; a script that fails for another reason in a checkout without
+     the file is treated the same way. */
+  if (r.code !== 0) {
+    // The LAST line it said, stderr before stdout: a script prints what it did on the way and why it stopped at the end.
+    const why = lastLine(r.stderr) || lastLine(r.stdout) || "no output";
+    const sf = cfg.teardownStateFile;
+    if (sf && !existsSync(join(plan.worktree, sf))) return { status: "warn", detail: `teardown said no (exit ${r.code}): ${why}; this checkout has no ${sf}, so nothing could tear it down later: it is removed, and what the teardown would have removed may be left behind` };
+    return bad(`teardown failed (exit ${r.code}): ${why}; worktree kept`);
+  }
+  if (!r.stdout.trim()) return ok("teardown ran (no output)");
+  // the cap counts the lines the script printed, so "+N more" is the number actually cut
+  const raw = r.stdout.replace(/\n$/, "").split("\n"), more = raw.length - TEARDOWN_LINES;
+  const shown = raw.slice(0, TEARDOWN_LINES).map((l) => l.trimEnd()).filter((l) => l.trim());
+  return ok(`teardown ran: ${[...shown, ...(more > 0 ? [`+${more} more`] : [])].join(" | ")}`);
 }
 
 async function archiveAndDropStash(c: CleanupCtx, cfg: CleanupConfig, main: string, branch: string, sha: string): Promise<Outcome> {
@@ -760,13 +904,16 @@ export async function runItem(it: CleanupItem, plan: CleanupPlan, cfg: CleanupCo
       if (s.code !== 0 && !/is not running|No such container/i.test(s.stderr)) return bad(`docker stop: ${firstLine(s.stderr)}`);
       return res(await dk(["rm", t]), "stopped and removed");
     }
-    case "docker-volume": return res(await dk(["volume", "rm", t]), "removed");
-    case "docker-image": return res(await dk(["rmi", t]), "removed");
+    // The repo's teardown script runs first and often removes these itself; docker then answers "no such": the goal is
+    // met, so it is not a failure (measured: two merged PRs marked "Cleaning failed" for exactly this).
+    case "docker-volume": { const r = await dk(["volume", "rm", t]); return r.code !== 0 && /no such volume/i.test(r.stderr) ? ok("already gone") : res(r, "removed"); }
+    case "docker-image": { const r = await dk(["rmi", t]); return r.code !== 0 && /no such image/i.test(r.stderr) ? ok("already gone") : res(r, "removed"); }
     case "test-db": {
       const [cmd, ...pre] = cfg.testDbCommand.trim().split(/\s+/);
       if (!SAFE_DB.test(t) || !t.startsWith(cfg.testDbPrefix) || !plan.slug || !matchesSlug(t, plan.slug)) return bad(`refusing to drop ${t}`);
       return res(await c.run(cmd!, [...pre, "-At", "-c", `DROP DATABASE "${t}"`], { timeoutMs: 60_000 }), "dropped");
     }
+    case "teardown-script": return runTeardown(c, cfg, plan, t);
     case "worktree": return removeWorktree(c, main, t);
     case "branch": {
       if (plan.worktree && existsSync(plan.worktree)) return bad("the worktree is still there, so the branch is kept");
@@ -820,8 +967,65 @@ export async function runItem(it: CleanupItem, plan: CleanupPlan, cfg: CleanupCo
         return ok(`appended to ${t}`);
       } catch (e) { return bad((e as Error).message); }
     }
+    case "card-move": {
+      if (t !== plan.slug || !cfg.moveCard || !cfg.moveCardStatus.trim()) return bad("refusing to move the card: not what this plan asked for");
+      if (!c.moveCard) return bad("no tracker is wired to move cards");
+      const r = await c.moveCard(t, cfg.moveCardStatus.trim());
+      return r.ok ? ok(r.detail) : bad(r.detail);
+    }
   }
 }
+
+/**
+ * Puts back the briefs a run moved to `archive/`: the one part of a run the
+ * filesystem can undo. The stored report says where each one went; a target
+ * that is occupied again, or a destination that is not that brief's own
+ * `archive/`, is refused rather than overwritten.
+ */
+export function undoArchivedBriefs(items: readonly CleanupItemResult[]): { restored: string[]; refused: string[] } {
+  const restored: string[] = [], refused: string[] = [];
+  for (const i of items) {
+    if (i.kind !== "brief" || i.status !== "done") continue;
+    const to = /^moved to (.+)$/.exec(i.detail)?.[1];
+    if (!to || dirname(to) !== join(dirname(i.target), "archive") || existsSync(i.target)) { refused.push(i.target); continue; }
+    try { renameSync(to, i.target); restored.push(i.target); } catch { refused.push(i.target); }
+  }
+  return { restored, refused };
+}
+
+/**
+ * What stays when the teardown script did not finish: the checkout and what lives in or on it.
+ *
+ * A script that fails has refused to release that worktree. It may be guarding containers that still run or
+ * work that is not saved, so the directory, its branch, its stashes, its docker resources and test database,
+ * its tab and the agent folders and status rows of that checkout are kept, each saying why.
+ *
+ * Everything else in the plan does not depend on the checkout and goes on: the card's evidence, notes and
+ * briefs, other folders, the fetch, the worklog line, the card move. The rule used to be "a failed teardown
+ * keeps everything after it". Seen on three merged pull requests in a row: the script exited 1 on a worktree
+ * it had not made itself, every later item was skipped, and the run freed 0 bytes with nothing wrong in any
+ * of those items.
+ *
+ * The ceiling: the kept checkout is not cleaned by this run at all. The teardown item can be unticked, and a
+ * run without it removes the worktree with git alone.
+ */
+const HELD_BY_WORKTREE: ReadonlySet<CleanupKind> = new Set<CleanupKind>([
+  "worktree", "branch", "stash", "tab", "docker-container", "docker-volume", "docker-image", "test-db", "agent-scratch", "agent-history", "own-state",
+]);
+/** Whether a failed teardown keeps this item with the worktree. */
+export const heldByWorktree = (kind: CleanupKind): boolean => HELD_BY_WORKTREE.has(kind);
+export const TEARDOWN_KEPT = "kept with the worktree: its teardown script did not finish";
+
+/**
+ * The HTTP status of a run that produced a report, clean or not.
+ *
+ * A report with a failed or kept item used to answer 500. An item the run could not remove (a teardown script
+ * that stopped, a branch git kept, an image in use, a folder already gone) is an outcome with its reason on
+ * the item, not a server error: five of six runs of one "Clean up all" answered 500 that way, and the window's
+ * console showed server errors where the report held the reasons. `ok: false` and `failed` in the body say
+ * the run was not clean; 5xx stays for a run that threw.
+ */
+export const CLEANUP_REPORT_STATUS = 200;
 
 export interface CleanupRunOpts {
   planId: string; exclude?: string[]; confirmNotMerged?: boolean;
@@ -838,11 +1042,15 @@ export async function runCleanup(repo: string, pr: number, cfg: CleanupConfig, c
   const unknown = [...exclude].filter((x) => !plan.items.some((i) => i.id === x));
   if (unknown.length) throw new CleanupError(`no such plan item to exclude: ${unknown.join(", ")}`);
   const items: CleanupItemResult[] = [];
+  let teardownKept = false;
   for (const it of plan.items) {
     const base = { id: it.id, kind: it.kind, target: it.target };
+    // a failed teardown keeps the worktree and what lives on it; the rest of the plan goes on (see HELD_BY_WORKTREE)
+    if (teardownKept && heldByWorktree(it.kind)) { items.push({ ...base, status: "skipped", detail: TEARDOWN_KEPT }); continue; }
     if (exclude.has(it.id)) { items.push({ ...base, status: "skipped", detail: "left alone: unticked" }); continue; }
     let out: Outcome;
     try { out = await runItem(it, plan, cfg, c); } catch (e) { out = bad((e as Error).message); }
+    if (it.kind === "teardown-script" && out.status === "failed") teardownKept = true;
     items.push({ ...base, ...out, ...(out.status === "done" && it.bytes ? { bytes: it.bytes } : {}) });
     o.onItem?.({ done: items.length, total: plan.items.length, bytes: items.reduce((n, i) => n + (i.bytes ?? 0), 0) });
   }

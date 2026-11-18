@@ -14,6 +14,7 @@ const walk = (d: string, base = d): { path: string; mode: number }[] =>
     return st.isDirectory() ? walk(p, base) : [{ path: p.slice(base.length + 1), mode: st.mode & 0o777 }];
   });
 
+if (process.env.STUB_SLEEP_MS) await Bun.sleep(Number(process.env.STUB_SLEEP_MS)); // a review that is still running
 const cwd = process.cwd();
 if (process.env.STUB_RECORD) {
   writeFileSync(process.env.STUB_RECORD, JSON.stringify({

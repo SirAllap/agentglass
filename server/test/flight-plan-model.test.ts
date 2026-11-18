@@ -40,3 +40,13 @@ test("a stronger model than the plan's pick is the person's, and a weaker one is
   expect(overrideVerdict(pick, "haiku", false)).toBeNull();
   expect(overrideVerdict(pick, "gpt-5", true)).toBe("model: a launch takes haiku, sonnet, opus");
 });
+
+test("the Go card of a project whose builder chain is on OpenCode names that engine, not a Claude model", async () => {
+  const { builderLaunch } = await import("../src/flightPlan.ts");
+  const p = { size: "L" as const, planMd: "# Thing\n" };
+  const oc = builderLaunch(p, role, "auto", "opus", "opencode");
+  expect(oc.engine).toBe("opencode");
+  expect(oc.why).toContain("opencode");
+  expect(builderLaunch(p, role, "auto", "opus").engine).toBeUndefined();
+  expect(builderLaunch(p, role, "auto", "opus").model).toBe("opus");
+});

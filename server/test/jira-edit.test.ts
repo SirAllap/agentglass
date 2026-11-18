@@ -140,6 +140,15 @@ describe("what a comment row says about itself", () => {
     expect(row({ visibility: { type: "role", value: "Developers" } }).restricted).toBe("Developers");
     expect(row({ visibility: { type: "group", identifier: "g-1" } }).restricted).toBe("g-1");
   });
+  test("an edited row carries when it changed and who changed it, the author when Jira names nobody", () => {
+    const at = Date.parse("2026-01-14T09:05:00.000+0000");
+    const r = row({ updated: "2026-01-14T09:05:00.000+0000", updateAuthor: { displayName: "Lin Acme", accountId: "acc-0002" } });
+    expect(r.editedAt).toBe(at);
+    expect(r.editedBy).toBe("Lin Acme");
+    expect(row({ updated: "2026-01-14T09:05:00.000+0000" }).editedBy).toBe("Ada Example");
+    expect(row({}).editedAt).toBeUndefined();
+    expect(row({}).editedBy).toBeUndefined();
+  });
 });
 
 describe("the door's edit body", () => {

@@ -111,10 +111,22 @@ describe("electron fuses", () => {
  * two drifting apart in a merge.
  */
 describe("what gets packed into app.asar", () => {
-  it("lists every file main.js requires from its own directory", () => {
-    const main = readFileSync(resolve(ELECTRON_DIR, "main.js"), "utf8");
-    const local = [...main.matchAll(/require\("\.\/([^"]+)"\)/g)].map((m) => m[1]);
-    expect(local.length).toBeGreaterThan(0);
+  // Followed transitively from main.js: power.js requiring power-rules.js was
+  // missed by a check of main.js alone, and the installed app hung at startup
+  // with "Cannot find module './power-rules.js'" and no window.
+  it("lists every file main.js requires from its own directory, transitively", () => {
+    const seen = new Set<string>();
+    const queue = ["main.js"];
+    while (queue.length) {
+      const src = readFileSync(resolve(ELECTRON_DIR, queue.shift()!), "utf8");
+      for (const m of src.matchAll(/require\("\.\/([^"]+)"\)/g)) {
+        if (seen.has(m[1]) || !existsSync(resolve(ELECTRON_DIR, m[1]))) { seen.add(m[1]); continue; }
+        seen.add(m[1]);
+        queue.push(m[1]);
+      }
+    }
+    const local = [...seen];
+    expect(local).toContain("power-rules.js");
     for (const f of local) {
       expect(existsSync(resolve(ELECTRON_DIR, f)), f).toBe(true);
       expect(pkg.build.files, f).toContain(f);
@@ -135,7 +147,7 @@ describe("what gets packed into app.asar", () => {
     // Every file main.js `require`s has to be named here — left out of the
     // asar the app does not start, and the lock is what turns that from a
     // discovery at launch into a red test.
-    expect(new Set(pkg.build.files)).toEqual(new Set(["main.js", "guest-guard.js", "identify-header.js", "guest-scrollbar.js", "show-log.js", "egress-guard.js", "trusted-input.js", "browser-menu.js", "power.js", "notify-mac.js", "server-probe.js", "preload.js", "icons/**"]));
+    expect(new Set(pkg.build.files)).toEqual(new Set(["main.js", "guest-guard.js", "identify-header.js", "guest-scrollbar.js", "guide-observer.js", "show-log.js", "egress-guard.js", "trusted-input.js", "browser-menu.js", "power.js", "power-rules.js", "memlow.js", "respawn.js", "lane-paint.js", "lane-watch.js", "vault-pull.js", "notify-mac.js", "server-probe.js", "stallProbe.js", "preload.js", "icons/**"]));
   });
 });
 

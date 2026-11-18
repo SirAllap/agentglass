@@ -337,3 +337,17 @@ describe("every understudy table has a window, enumerated", () => {
     expect(src).toContain("WHERE at < ?");
   });
 });
+
+describe("the stub sweep is taken a slice at a time", () => {
+  test("a chunk removes at most its limit and leaves the rest and every decision", () => {
+    for (let i = 0; i < 7; i++) ledger("stub", daysAgo(100));
+    ledger("stub", daysAgo(2));
+    ledger("decision", daysAgo(100));
+    const cut = daysAgo(90);
+    expect(DB.pruneStubsChunk(cut, 3)).toBe(3);
+    expect(DB.pruneStubsChunk(cut, 3)).toBe(3);
+    expect(DB.pruneStubsChunk(cut, 3), "a short chunk says the sweep is done").toBe(1);
+    expect(DB.pruneStubsChunk(cut, 3)).toBe(0);
+    expect(kinds()).toEqual(["decision", "stub"]);
+  });
+});

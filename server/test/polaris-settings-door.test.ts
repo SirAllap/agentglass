@@ -34,10 +34,10 @@ const set = (r: ReturnType<typeof rig>, id: string, v: unknown, who = r.agent) =
 const doorOf = (id: string) => readPolaris(ROOT).settings.doors[id as keyof ReturnType<typeof readPolaris>["settings"]["doors"]]!;
 
 describe("the settings Polaris exposes", () => {
-  test("eighteen ids: enabled and one per door, each with its own class", () => {
+  test("nineteen ids: enabled, the bot reviewers and one per door, each with its own class", () => {
     const ids = serverSettingDefs({ terminalEnabled: false, budgetWrites: false, policyChanged: () => {} }).map((d) => d.id).filter((i) => i.startsWith("polaris."));
-    expect(ids.sort()).toEqual(["polaris.enabled", ...DOOR_IDS.map((d) => `polaris.door.${d}`)].sort());
-    expect(ids).toHaveLength(18);
+    expect(ids.sort()).toEqual(["polaris.enabled", "polaris.botReviewers", ...DOOR_IDS.map((d) => `polaris.door.${d}`)].sort());
+    expect(ids).toHaveLength(19);
     expect(ids.filter((i) => !classOf(i))).toEqual([]);
     expect(ids).not.toContain("polaris.preset");
   });

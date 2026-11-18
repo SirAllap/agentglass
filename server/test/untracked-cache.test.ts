@@ -62,7 +62,7 @@ describe("untracked file listing", () => {
     expect(stillCached.unstaged.find((c) => c.file_path.endsWith("third.txt"))).toBeFalsy();
 
     // But a mutation this app performs itself invalidates the cache right away.
-    gw.stage(repo, ["second.txt"]);
+    await gw.stage(repo, ["second.txt"]);
     const afterStage = await gw.workingTree(repo);
     expect(afterStage.staged.find((c) => c.file_path.endsWith("second.txt"))).toBeTruthy();
     expect(afterStage.unstaged.find((c) => c.file_path.endsWith("third.txt"))).toBeTruthy();

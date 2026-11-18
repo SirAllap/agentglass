@@ -110,6 +110,14 @@ describe("usage: on at N, off at N+5, and a new window", () => {
   });
 });
 
+describe("a rule on an account that no longer exists", () => {
+  test("says the account is missing instead of waiting for a reading", async () => {
+    const s = scope(rule("a", [{ kind: "usage", provider: "anthropic", window: "5h", remainingAtMost: 15, account: "work" }]));
+    await evaluate(deps(T0, null, s, { accountKnown: () => false }));
+    expect(ruleStates(s)[0]!.holding).toContain("account missing");
+  });
+});
+
 describe("a reading that is not evidence changes nothing", () => {
   const cases: [string, (now: number) => UsageRead | null, string][] = [
     ["a reading marked unavailable", (now) => read(5, { at: now, available: false }), "no usage reading"],

@@ -22,14 +22,14 @@ git(repo, "commit", "-q", "--allow-empty", "-m", "one");
 git(repo, "push", "-q", "origin", "main");
 
 describe("localBase", () => {
-  test("level with the remote is the same commit either way, and the local ref follows later merges", () => {
-    expect(localBase(repo, "origin/main")).toBe("main");
+  test("level with the remote is the same commit either way, and the local ref follows later merges", async () => {
+    expect(await localBase(repo, "origin/main")).toBe("main");
   });
-  test("local trunk ahead of the remote is the base", () => {
+  test("local trunk ahead of the remote is the base", async () => {
     git(repo, "commit", "-q", "--allow-empty", "-m", "two, never pushed");
-    expect(localBase(repo, "origin/main")).toBe("main");
+    expect(await localBase(repo, "origin/main")).toBe("main");
   });
-  test("a diverged local trunk keeps the remote ref", () => {
+  test("a diverged local trunk keeps the remote ref", async () => {
     git(repo, "reset", "-q", "--hard", "origin/main");
     git(repo, "commit", "-q", "--allow-empty", "-m", "local only");
     const other = join(dir, "other");
@@ -37,9 +37,9 @@ describe("localBase", () => {
     git(other, "commit", "-q", "--allow-empty", "-m", "remote only");
     git(other, "push", "-q", "origin", "main");
     git(repo, "fetch", "-q", "origin");
-    expect(localBase(repo, "origin/main")).toBe("origin/main");
+    expect(await localBase(repo, "origin/main")).toBe("origin/main");
   });
-  test("a base that is not an origin ref passes through", () => {
-    expect(localBase(repo, "main")).toBe("main");
+  test("a base that is not an origin ref passes through", async () => {
+    expect(await localBase(repo, "main")).toBe("main");
   });
 });

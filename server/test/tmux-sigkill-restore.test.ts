@@ -37,6 +37,7 @@ import { join } from "node:path";
 import { TEST_TERM } from "./tmuxTerm.ts";
 import { freePort } from "./freePort.ts";
 import { story } from "./story.ts";
+import { agxTestBase } from "./tmuxTmp.ts";
 
 /*
  * Short, for the 108-byte unix socket path limit — a pid is five or six of
@@ -56,7 +57,7 @@ import { story } from "./story.ts";
  * reaped; `afterAll` removes the whole directory instead, so a crash leaves one
  * empty directory. That is the price of not colliding.
  */
-const TMPDIR = `/tmp/agx-tmux-kill-${process.pid}`;
+const TMPDIR = agxTestBase("agx-tmux-kill");
 const SOCK = "agx-kill";
 const REAL_TMPDIR = process.env.TMUX_TMPDIR;
 const HAVE_TMUX = !!Bun.which("tmux") && !!Bun.which("python3") && process.platform === "linux";

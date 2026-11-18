@@ -61,6 +61,8 @@ const MUTATING = [
   `pathname === "/machine/unlock"`,
   `pathname === "/machine/kill"`,
   `pathname === "/machine/disk-clean/run"`,
+  // Asks for the person's password to change systemd units: never a page's request.
+  `pathname === "/machine/memory-reserve" && req.method === "POST"`,
   // A higher spending cap until the day or the week turns over.
   `pathname === "/flight-plan/budget/raise"`,
   `pathname === "/terminal/panes/focus"`,
@@ -80,7 +82,7 @@ const MUTATING = [
    */
   `pathname.startsWith("/providers/")`,
   `pathname.startsWith("/recipes/")`,
-  `pathname.startsWith("/clickup/")`,
+  `pathname.startsWith("/clickup/") && req.method === "POST"`, // the read block above it has the same prefix
   // Jira: connect stores a credential, writes flips the switch every later write asks.
   `pathname === "/jira/connect"`,
   `pathname === "/jira/writes"`,

@@ -30,9 +30,17 @@ const OPENCODE_FRAMES = [
 
 export interface Harness {
   dir: string; base: string; wt: string; logs: string; state: string; seatToken: string;
+  /** The key a test holds the desk with, as the app does on /desk/claim. */
+  deskKey: string;
+  /** Take the desk the way the app does on a server it did not start: the key
+   *  comes back down a claim held open, and lasts until the release is called. */
+  holdDesk(): Promise<() => void>;
   post(path: string, body: unknown, token: string, extra?: Record<string, string>): Promise<Ans & { status: number }>;
   asSeat(path: string, body: unknown, extra?: Record<string, string>): Promise<Ans & { status: number }>;
   asPerson(path: string, body: unknown, extra?: Record<string, string>): Promise<Ans & { status: number }>;
+  /** The person's adoption through the card: ask, approve it, then take the
+   *  credential, the same three steps `agentglass-agent adopt` waits through. */
+  adoptAsPerson(body: { root: string; pane: string; session?: string; powers?: string }): Promise<Ans & { status: number }>;
   /** A GET with the given token: status and the JSON body when there is one. */
   read(path: string, token: string): Promise<{ status: number; body: Record<string, any> }>;
   listed(): Promise<Record<string, any>[]>;
@@ -108,6 +116,12 @@ echo x >> "${logs}/ran-claude"
   work) sleep 1; printf '%s\\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_fake0001","name":"Edit","input":{"file_path":"notes.txt"}}]},"session_id":"00000000-0000-4000-8000-000000000001"}'; printf '%s\\n' 'Error: rate limit reached, try again later' >&2; exit 1 ;;
 esac
 exec "${join(engines, "claude")}" "$@";; --version|--help|auth) exec "${join(engines, "claude")}" "$@";; esac; done
+# The TUI form below never matches a case above (no -p/--version/--help/auth
+# in a worker's or a seat's real argv), so it was never recorded for a test to
+# read back: this records it the same way the generic stub does, without
+# taking over the process (the python3 transcript write and the keep-alive
+# below still need to run).
+"${join(engines, "claude")}" "$@" >/dev/null 2>&1 || true
 if [ "$1" = --dialog ]; then
 printf '\\033[2J\\033[H'
 printf '%s\\n' 'Edit file' ' notes.txt' '' 'Do you want to make this edit to notes.txt?' '❯ 1. Yes' '  2. No' '' 'Esc to cancel'
@@ -116,6 +130,34 @@ read answer
 echo x > "${logs}/answered-$(echo "$TMUX_PANE" | tr -d %)"
 sleep 300
 fi
+# A turn in the interactive form is still a turn this machine ran: counted the
+# same way, and failing the same ways.
+echo x >> "${logs}/ran-claude"
+[ -e "${logs}/mode-claude" ] && case "$(cat "${logs}/mode-claude")" in
+  limit) sleep 1; printf '%s\\n' 'Error: rate limit reached, try again later' >&2; exit 1 ;;
+esac
+# The TUI writes the CLI's own transcript, and its own end-of-turn marker with
+# it: a worker's turn is read from there, not from an exit (agents/tuiturn.ts).
+python3 -c 'import json,os,re,sys
+a=sys.argv[1:]
+sid=""
+for i,x in enumerate(a):
+    if x in ("--session-id","--resume") and i+1<len(a): sid=a[i+1]
+cwd=os.environ.get("PWD","")
+home=os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.environ.get("HOME",""),".claude")
+pos=[x for x in a if not x.startswith("-")]
+prompt=pos[-1] if pos else ""
+try: answer=open("${logs}/tui-answer").read().strip()
+except Exception: answer="ok"
+if sid:
+    p=os.path.join(home,"projects",re.sub(r"[^A-Za-z0-9]","-",cwd),sid+".jsonl")
+    os.makedirs(os.path.dirname(p),exist_ok=True)
+    rows=[{"type":"user","message":{"role":"user","content":[{"type":"text","text":prompt}]}},
+          {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":answer}]}},
+          {"type":"system","subtype":"turn_duration","durationMs":1200}]
+    with open(p,"a") as f:
+        for r in rows: f.write(json.dumps(r)+"\\n")
+' "$@"
 printf '%s\\0' "$@" > "${logs}/tui-$$.argv"
 env | sed -e 's/=.*//' > "${logs}/tui-$$.envnames"
 [ -n "$AGENTGLASS_SEAT" ] && printf '%s' "$AGENTGLASS_TOKEN" > "${logs}/seat.token"
@@ -167,13 +209,49 @@ sleep 300
   }
   const opened = await post("/seat/open", { root: dir, powers: "assign" }, MACHINE);
   if (!opened.ok) throw new Error(`the seat did not open: ${JSON.stringify(opened)}`);
+  /* A container with no user namespaces cannot run bubblewrap, and OpenCode and a walled Claude are refused as workers without it. The person accepts that here, as Settings would; where bubblewrap works the wall stays on. */
+  if (!Bun.which("bwrap") || Bun.spawnSync(["bwrap", "--dev-bind", "/", "/", "true"], { stdout: "ignore", stderr: "ignore" }).exitCode !== 0) {
+    const lifted = await post("/settings/door", { id: "workers.unwalledEngines", value: true }, MACHINE);
+    if (!lifted.ok) throw new Error(`could not accept unwalled engines: ${JSON.stringify(lifted)}`);
+  }
   for (let i = 0; i < 100 && !existsSync(join(logs, "seat.token")); i++) await Bun.sleep(100);
   const seatToken = readFileSync(join(logs, "seat.token"), "utf8");
+  /* The app's own signal on a server it did not start: the key comes down a
+     claim held open, and the server reads it only from there. */
+  const DESK = "desk-key-the-harness-app-claimed-0123456789abcdef";
+  const holdDesk: Harness["holdDesk"] = async () => {
+    for (let i = 0; i < 40; i++) {
+      const ac = new AbortController();
+      const r = await fetch(base + "/desk/claim", {
+        method: "POST", headers: { Authorization: `Bearer ${MACHINE}`, "x-agentglass-desk": DESK }, signal: ac.signal,
+      });
+      if (r.status === 200) {
+        /* The claim lives while this response does; keeping the reader is what
+           keeps it. */
+        const body = r.body!.getReader();
+        await body.read();
+        return () => { void body.cancel().catch(() => {}); ac.abort(); };
+      }
+      await r.text();
+      ac.abort();
+      // A claim freed a beat ago can still be held when the next one arrives.
+      await Bun.sleep(50);
+    }
+    throw new Error("the desk could not be claimed");
+  };
 
   const h: Harness = {
-    dir, base, wt, logs, state: `${dir}/state`, seatToken, post, until,
+    dir, base, wt, logs, state: `${dir}/state`, seatToken, deskKey: DESK, holdDesk, post, until,
     asSeat: (p, b, x) => post(p, b, seatToken, x),
     asPerson: (p, b, x) => post(p, b, MACHINE, x),
+    adoptAsPerson: async (body) => {
+      /* The person's own window, which is the desk key: an Origin is a header
+         the agent that asks can write, and an adoption card is not its to
+         answer. */
+      const release = await holdDesk();
+      try { return await post("/seat/adopt", body, MACHINE, { "x-agentglass-desk": DESK }); }
+      finally { release(); }
+    },
     read: async (p, token) => {
       const res = await fetch(base + p, { headers: { Authorization: `Bearer ${token}` } });
       return { status: res.status, body: await res.json().catch(() => ({})) as Record<string, any> };
@@ -181,12 +259,14 @@ sleep 300
     listed: async () => (await get<{ result: { agents: Record<string, any>[] } }>("/agents/named?all=1")).result.agents,
     row: async (name) => (await h.listed()).find((a) => a.name === name),
     actions: async () => (await get<{ actions: { actor: string; action: string; ok: boolean; detail: string | null }[] }>("/actions?limit=200")).actions,
-    callsOf: (engine) => readCalls(engines, engine).filter((c) => !["--version", "version", "providers", "debug", "auth", "status"].includes(c.argv[0] ?? "")),
+    callsOf: (engine) => readCalls(engines, engine).filter((c) => !["--version", "version", "providers", "debug", "auth", "status", "--help"].includes(c.argv[0] ?? "")),
     usePolicy: async (o) => {
       const cur = await get<{ policy: Policy }>("/orchestration");
       cur.policy.rules = (o.rules ?? []) as Policy["rules"];
       cur.policy.limits = { maxWorkers: 3, turnMinutes: 30, maxRetries: 1, ...o.limits };
-      cur.policy.ceiling = { write: "worktree", network: false, commit: true, docker: false, deny: [], ...o.ceiling };
+      cur.policy.ceiling = { write: "worktree", network: false, commit: true, docker: false, worktreeOps: true, deny: [], ...o.ceiling };
+      // A default wider than the ceiling is refused; a test that narrows the ceiling narrows the default with it.
+      for (const k of ["network", "commit", "docker", "worktreeOps"] as const) cur.policy.workerDefault[k] = !!cur.policy.workerDefault[k] && !!cur.policy.ceiling[k];
       const r = await post("/orchestration", { policy: cur.policy }, MACHINE);
       if (!r.ok) throw new Error(`policy refused: ${r.error}`);
     },

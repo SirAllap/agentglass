@@ -22,8 +22,10 @@ const R = await import("../src/retention.ts");
 const { classOf } = await import("../../shared/settingClass.ts");
 
 afterAll(() => {
-  // RETENTION_DAYS is module state the files after this one read: hand it back at the default.
+  // These are module state the files after this one read: hand them back at the default.
   R.setRetentionDays(8);
+  R.setClickupCardDays(30);
+  R.setLedgerStubDays(90);
   rmSync(HOME, { recursive: true, force: true });
   if (REAL_XDG === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = REAL_XDG;
   if (REAL_ENV !== undefined) process.env.AGENTGLASS_RETENTION_DAYS = REAL_ENV;
@@ -50,6 +52,25 @@ describe("retention", () => {
 
   test("an agent never shortens it: the class is the person's alone", () => {
     expect(classOf("privacy.retentionDays")?.class).toBe("personOnly");
+  });
+
+  test("the ClickUp card index and the understudy ledger have their own windows, not this one's", () => {
+    expect(R.CLICKUP_CARD_DAYS).toBe(30);
+    expect(R.UNDERSTUDY_STUB_DAYS).toBe(90);
+    expect(R.setClickupCardDays(5)).toEqual({ ok: true });
+    expect(R.CLICKUP_CARD_DAYS).toBe(5);
+    expect(R.setLedgerStubDays(14)).toEqual({ ok: true });
+    expect(R.UNDERSTUDY_STUB_DAYS).toBe(14);
+    // Setting one does not move the other two.
+    expect(R.RETENTION_DAYS).not.toBe(5);
+    for (const bad of [-1, 1.5, 4000, Number.NaN]) {
+      expect(R.setClickupCardDays(bad).ok).toBe(false);
+      expect(R.setLedgerStubDays(bad).ok).toBe(false);
+    }
+    expect(R.CLICKUP_CARD_DAYS).toBe(5);
+    expect(R.UNDERSTUDY_STUB_DAYS).toBe(14);
+    expect(classOf("privacy.clickupCardDays")?.class).toBe("personOnly");
+    expect(classOf("privacy.ledgerStubDays")?.class).toBe("personOnly");
   });
 
   test("the environment variable wins, and says so instead of pretending to save", () => {

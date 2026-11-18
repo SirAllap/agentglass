@@ -20,12 +20,13 @@ import { type Dirent, lstatSync, mkdtempSync, readdirSync, readFileSync, realpat
 import { failed } from "./refused.ts";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve, relative, sep } from "node:path";
-import { git, safeAbs } from "./git.ts";
+import { gitAsync, safeAbs } from "./git.ts";
 import { inScopeReal, realish, workspaceRoots } from "./config.ts";
 import type { Caller } from "./auth.ts";
 import { diskAllows, fdPathArgs } from "./disk.ts";
 import { isViewTemp, makeViewTempDir } from "./viewtemp.ts";
-import { FS_BROWSE_ENABLED } from "./fsbrowse.ts";
+import { fsBrowseEnabled } from "./fsbrowse.ts";
+import { spawnOut } from "./spawnOut.ts";
 
 export interface FileEntry {
   name: string;
@@ -221,7 +222,7 @@ export function gitReadRefusal(caller: Caller | null, method: string, pathname: 
   const root = q.get("root") || "";
   if (!root) return null;
   const reach = [root, ...q.getAll("path").filter(Boolean).map((p) => resolve(root, p))];
-  if (!FS_BROWSE_ENABLED && method !== "POST") return { error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" };
+  if (!fsBrowseEnabled() && method !== "POST") return { error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" };
   if (heldBackFrom(caller, reach)) return HELD_BACK;
   if (!reach.every((p) => inScopeReal(p))) return { error: "outside the open project — open the parent folder to work across repos" };
   return null;
@@ -245,14 +246,14 @@ export function gitReadTest(caller: Caller | null): (path: string) => boolean {
  * this folder. The client asks again when a directory is opened, which is also
  * what makes a big tree cheap to navigate.
  */
-export function fileTree(rootIn: unknown, relIn: unknown): TreeReport {
+export async function fileTree(rootIn: unknown, relIn: unknown): Promise<TreeReport> {
   const at = inside(rootIn, relIn);
   if ("error" in at) return { ok: false, root: "", rel: "", entries: [], error: at.error };
 
   let names: Dirent[];
   try { names = readdirSync(at.abs, { withFileTypes: true }); } catch (e) { return { ok: false, root: at.root, rel: at.rel, entries: [], error: failed("files/tree", e, "that directory could not be read") }; }
 
-  const marks = statusMarks(at.root);
+  const marks = await statusMarks(at.root);
   const entries: FileEntry[] = [];
   for (const de of names) {
     const name = de.name;
@@ -308,13 +309,14 @@ export function fileTree(rootIn: unknown, relIn: unknown): TreeReport {
  * `--verify --quiet` so an unknown name is an empty answer instead of noise on
  * stderr.
  */
-export function resolveRef(root: string, refIn: unknown): string | null {
+export async function resolveRef(root: string, refIn: unknown): Promise<string | null> {
   const ref = typeof refIn === "string" ? refIn.trim() : "";
   if (!ref) return null;
   // Nothing that could be read as an option, and nothing with whitespace: git
   // takes `--upload-pack=...` as a flag wherever it appears.
   if (ref.startsWith("-") || /\s/.test(ref)) return null;
-  const r = git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
+  // Awaited: every find, grep and read at a ref asks this first, on a request.
+  const r = await gitAsync(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
   return r.code === 0 && r.stdout.trim() ? ref : null;
 }
 
@@ -327,8 +329,8 @@ export function resolveRef(root: string, refIn: unknown): string | null {
  * migrations are on origin/master" is a question about a branch you are not on
  * and must not switch to.
  */
-function pathsAt(root: string, ref: string): string[] {
-  const r = git(root, ["ls-tree", "-r", "--name-only", ref]);
+async function pathsAt(root: string, ref: string): Promise<string[]> {
+  const r = await gitAsync(root, ["ls-tree", "-r", "--name-only", ref]);
   return r.code === 0 ? r.stdout.split("\n").filter(Boolean) : [];
 }
 
@@ -352,7 +354,7 @@ function matchPaths(paths: string[], needle: string, limit: number): { files: st
   };
 }
 
-export function findFiles(rootIn: unknown, queryIn: unknown, limit = MAX_FILES, refIn?: unknown): FindReport {
+export async function findFiles(rootIn: unknown, queryIn: unknown, limit = MAX_FILES, refIn?: unknown): Promise<FindReport> {
   const at = inside(rootIn, "");
   if ("error" in at) return { ok: false, files: [], dirs: [], truncated: false, via: "", error: at.error };
   const q = typeof queryIn === "string" ? queryIn.trim() : "";
@@ -368,12 +370,12 @@ export function findFiles(rootIn: unknown, queryIn: unknown, limit = MAX_FILES, 
    * of the object store this repository already has.
    */
   if (refIn !== undefined && refIn !== null && refIn !== "") {
-    const ref = resolveRef(at.root, refIn);
+    const ref = await resolveRef(at.root, refIn);
     if (!ref) {
       return { ok: false, files: [], dirs: [], truncated: false, via: "",
         error: `No such branch or ref here: ${String(refIn)}. Fetch it first if it is new.` };
     }
-    const m = matchPaths(pathsAt(at.root, ref), q.toLowerCase(), limit);
+    const m = matchPaths(await pathsAt(at.root, ref), q.toLowerCase(), limit);
     return { ok: true, ...m, via: `git ls-tree ${ref}` };
   }
 
@@ -391,15 +393,22 @@ export function findFiles(rootIn: unknown, queryIn: unknown, limit = MAX_FILES, 
     // fallback below has always matched the whole path, so the two backends
     // were also giving different answers to the same question depending on
     // what was installed.
-    const r = Bun.spawnSync([fd, "--hidden", "--exclude", ".git", "--full-path", ...fdPathArgs(at.root, q)],
-      { cwd: at.root, stdout: "pipe", stderr: "pipe", timeout: 10_000 });
-    const all = lines(r.stdout);
+    //
+    // Beside the loop, and the latest search of a checkout ends the one before
+    // it (spawnOut). This was a blocking spawn with a 10 s limit on the
+    // server's only thread, once per pause in typing: on a checkout with a
+    // large untracked tree every keystroke's walk held every panel. The
+    // machine-wide content search was measured doing that for 20 s at a time.
+    const r = await spawnOut([fd, "--hidden", "--exclude", ".git", "--full-path", ...fdPathArgs(at.root, q)],
+      { cwd: at.root, timeoutMs: 10_000, latest: `files-find:${at.root}` });
+    const all = r.stdout.split("\n").filter(Boolean);
     const dirs = all.filter((p) => p.endsWith("/")).map((p) => p.replace(/\/$/, "")).slice(0, limit);
     const files = all.filter((p) => !p.endsWith("/")).slice(0, limit);
     return { ok: true, files, dirs, truncated: all.length > limit * 2, via: "fd" };
   }
 
-  const r = git(at.root, ["ls-files", "--cached", "--others", "--exclude-standard"]);
+  // The fd-less fallback lists a whole checkout: awaited, like the fd branch above.
+  const r = await gitAsync(at.root, ["ls-files", "--cached", "--others", "--exclude-standard"]);
   const needle = q.toLowerCase();
   const tracked = r.stdout.split("\n").filter(Boolean);
   const all = tracked.filter((p) => p.toLowerCase().includes(needle));
@@ -428,7 +437,7 @@ export function findFiles(rootIn: unknown, queryIn: unknown, limit = MAX_FILES, 
  * the same reason as above: nobody typing `useState(` into a search box means
  * "an unclosed group".
  */
-export function grepFiles(rootIn: unknown, queryIn: unknown, limit = MAX_HITS, refIn?: unknown): GrepReport {
+export async function grepFiles(rootIn: unknown, queryIn: unknown, limit = MAX_HITS, refIn?: unknown): Promise<GrepReport> {
   const at = inside(rootIn, "");
   if ("error" in at) return { ok: false, hits: [], files: 0, truncated: false, via: "", error: at.error };
   const q = typeof queryIn === "string" ? queryIn.trim() : "";
@@ -444,7 +453,12 @@ export function grepFiles(rootIn: unknown, queryIn: unknown, limit = MAX_HITS, r
    * Its output gains a `ref:` prefix on every line, which is stripped below so
    * a hit on a branch and a hit here look the same to the caller.
    */
-  const atRef = refIn !== undefined && refIn !== null && refIn !== "" ? resolveRef(at.root, refIn) : null;
+  /* Beside the loop, and the latest content search of a checkout ends the one
+     before it (spawnOut). All three children below were blocking spawns with a
+     15 s limit on the server's only thread; the machine-wide twin of this
+     search was measured holding the installed app for 20 s at a time. */
+  const grepKey = `files-grep:${at.root}`;
+  const atRef = refIn !== undefined && refIn !== null && refIn !== "" ? await resolveRef(at.root, refIn) : null;
   if (refIn !== undefined && refIn !== null && refIn !== "" && !atRef) {
     return { ok: false, hits: [], files: 0, truncated: false, via: "",
       error: `No such branch or ref here: ${String(refIn)}. Fetch it first if it is new.` };
@@ -460,13 +474,13 @@ export function grepFiles(rootIn: unknown, queryIn: unknown, limit = MAX_HITS, r
      * about to trust. `-e` names the pattern explicitly, which also keeps a
      * query starting with a dash from being read as a flag.
      */
-    const r = Bun.spawnSync(["git", "-C", at.root, "grep", "--fixed-strings", "--ignore-case",
+    const r = await spawnOut(["git", "-C", at.root, "grep", "--fixed-strings", "--ignore-case",
       "--line-number", "-I", "-e", q, atRef],
-      { stdout: "pipe", stderr: "pipe", timeout: 15_000 });
+      { timeoutMs: 15_000, latest: grepKey });
     const hits: GrepHit[] = [];
     const files = new Set<string>();
     const needle = q.toLowerCase();
-    const all = lines(r.stdout);
+    const all = r.stdout.split("\n").filter(Boolean);
     for (const line of all.slice(0, limit)) {
       // `ref:path:line:text` — the ref is stripped, the rest is the ordinary
       // shape. Split from the left only as far as needed: a path may contain a
@@ -488,19 +502,19 @@ export function grepFiles(rootIn: unknown, queryIn: unknown, limit = MAX_HITS, r
 
   const rg = Bun.which("rg");
   const out = rg
-    ? Bun.spawnSync([rg, "--fixed-strings", "--ignore-case", "--line-number", "--no-heading", "--color", "never",
+    ? await spawnOut([rg, "--fixed-strings", "--ignore-case", "--line-number", "--no-heading", "--color", "never",
         // --max-columns alone REPLACES a long line with "[Omitted long matching
         // line]", which is not an excerpt of anything. The preview flag makes it
         // truncate instead, which is what a search result wants.
         "--max-columns", String(MAX_LINE), "--max-columns-preview", "--max-count", "20", "--", q],
-        { cwd: at.root, stdout: "pipe", stderr: "pipe", timeout: 15_000 })
-    : Bun.spawnSync(["git", "grep", "--fixed-strings", "--ignore-case", "--line-number", "--untracked", "-I", "--", q],
-        { cwd: at.root, stdout: "pipe", stderr: "pipe", timeout: 15_000 });
+        { cwd: at.root, timeoutMs: 15_000, latest: grepKey })
+    : await spawnOut(["git", "grep", "--fixed-strings", "--ignore-case", "--line-number", "--untracked", "-I", "--", q],
+        { cwd: at.root, timeoutMs: 15_000, latest: grepKey });
 
   const hits: GrepHit[] = [];
   const files = new Set<string>();
   const needle = q.toLowerCase();
-  const all = lines(out.stdout);
+  const all = out.stdout.split("\n").filter(Boolean);
   for (const line of all) {
     // `path:line:text` — and a path can contain a colon, so the split is on the
     // FIRST two only and the rest is the text verbatim.
@@ -523,9 +537,9 @@ export function grepFiles(rootIn: unknown, queryIn: unknown, limit = MAX_HITS, r
 /** Every changed path in this checkout, as a single porcelain read. One spawn
  *  per listing rather than one per row, which is the difference between a
  *  folder opening instantly and a folder of 200 files taking a second. */
-function statusMarks(root: string): Map<string, string> {
+async function statusMarks(root: string): Promise<Map<string, string>> {
   const out = new Map<string, string>();
-  const r = git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=normal"]);
+  const r = await gitAsync(root, ["status", "--porcelain=v1", "-z", "--untracked-files=normal"]);
   if (r.code !== 0) return out;
   // NUL-separated so a filename with a space or a newline in it survives. A
   // rename entry carries two paths; the second one is the name it has now.
@@ -548,10 +562,6 @@ function statusMarks(root: string): Map<string, string> {
     }
   }
   return out;
-}
-
-function lines(buf: Uint8Array): string[] {
-  return new TextDecoder().decode(buf).split("\n").filter(Boolean);
 }
 
 /* ------------------------------------------------------ one file, as text */
@@ -599,7 +609,7 @@ function viewTempCopy(relIn: unknown): { root: string; abs: string; rel: string 
  * same reason: a viewer that decodes a PNG as UTF-8 produces a screen of
  * replacement characters and no explanation.
  */
-export function fileText(rootIn: unknown, relIn: unknown, refIn?: unknown): FileText {
+export async function fileText(rootIn: unknown, relIn: unknown, refIn?: unknown): Promise<FileText> {
   /*
    * A pull request's copy, which this server wrote under the system temp
    * directory. It is not inside any checkout, and for a repository that is only
@@ -622,9 +632,9 @@ export function fileText(rootIn: unknown, relIn: unknown, refIn?: unknown): File
    * answer: it looks like it worked.
    */
   if (!temp && refIn !== undefined && refIn !== null && refIn !== "") {
-    const ref = resolveRef(at.root, refIn);
+    const ref = await resolveRef(at.root, refIn);
     if (!ref) return { ok: false, rel: at.rel, text: "", bytes: 0, error: `No such branch or ref here: ${String(refIn)}` };
-    const r = git(at.root, ["show", `${ref}:${at.rel}`]);
+    const r = await gitAsync(at.root, ["show", `${ref}:${at.rel}`]);
     if (r.code !== 0) return { ok: false, rel: at.rel, text: "", bytes: 0, error: `${at.rel} is not on ${ref}` };
     const full = r.stdout;
     // Same ceiling and the same binary refusal as a file on disk: a ref is not
@@ -667,10 +677,10 @@ export function fileText(rootIn: unknown, relIn: unknown, refIn?: unknown): File
  * Written outside the checkout: a temp file inside one turns up in somebody's
  * `git status` an hour later, wearing a name that looks like theirs.
  */
-export function fileToTemp(rootIn: unknown, relIn: unknown, refIn: unknown): { ok: true; file: string; ref: string } | { ok: false; error: string } {
+export async function fileToTemp(rootIn: unknown, relIn: unknown, refIn: unknown): Promise<{ ok: true; file: string; ref: string } | { ok: false; error: string }> {
   const ref = typeof refIn === "string" ? refIn.trim() : "";
   if (!ref) return { ok: false, error: "no ref given" };
-  const read = fileText(rootIn, relIn, ref);
+  const read = await fileText(rootIn, relIn, ref);
   if (!read.ok) return { ok: false, error: read.error ?? "could not read that file" };
   const dir = makeViewTempDir("ref");
   // The ref in the name, because two of these open at once is the ordinary case
@@ -695,18 +705,18 @@ export function fileToTemp(rootIn: unknown, relIn: unknown, refIn: unknown): { o
  * touched and HEAD does not move. That is the whole reason this can offer a
  * branch list at all without being dangerous.
  */
-export function listRefs(rootIn: unknown): { ok: boolean; local: string[]; remote: string[]; head?: string; error?: string } {
+export async function listRefs(rootIn: unknown): Promise<{ ok: boolean; local: string[]; remote: string[]; head?: string; error?: string }> {
   const at = inside(rootIn, "");
   if ("error" in at) return { ok: false, local: [], remote: [], error: at.error };
 
-  const read = (glob: string) => {
-    const r = git(at.root, ["for-each-ref", "--format=%(refname:short)", glob]);
+  const read = async (glob: string) => {
+    const r = await gitAsync(at.root, ["for-each-ref", "--format=%(refname:short)", glob]);
     return r.code === 0 ? r.stdout.split("\n").map((x) => x.trim()).filter(Boolean) : [];
   };
 
   // The branch this worktree is on, so the list can say which one you are
   // already looking at rather than offering it as somewhere else to go.
-  const h = git(at.root, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  const h = await gitAsync(at.root, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
   const head = h.code === 0 ? h.stdout.trim() : undefined;
 
   /* main and master first — "does my migration collide with what is already
@@ -714,12 +724,13 @@ export function listRefs(rootIn: unknown): { ok: boolean; local: string[]; remot
   const rank = (x: string) => (/(^|\/)(main|master)$/.test(x) ? 0 : /(^|\/)(develop|dev|staging)$/.test(x) ? 1 : 2);
   const order = (xs: string[]) => xs.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
 
+  const [localRaw, remoteRaw] = await Promise.all([read("refs/heads"), read("refs/remotes")]);
   return {
     ok: true,
-    local: order(read("refs/heads")),
+    local: order(localRaw),
     // origin/HEAD is an alias for a branch already in the list, and offering
     // both invites "why do these two give the same answer".
-    remote: order(read("refs/remotes").filter((x) => !x.endsWith("/HEAD"))),
+    remote: order(remoteRaw.filter((x) => !x.endsWith("/HEAD"))),
     ...(head ? { head } : {}),
   };
 }

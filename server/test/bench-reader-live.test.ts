@@ -25,9 +25,10 @@ import { join } from "node:path";
 import { freePort } from "./freePort.ts";
 import { SERVER_BOOT_MS } from "./serverBoot.ts";
 import { story } from "./story.ts";
+import { agxTestBase } from "./tmuxTmp.ts";
 
 /* Short, because a unix socket path is 108 bytes — see tmux-shutdown-restore. */
-const TMPDIR = `/tmp/agx-rdr-${process.pid}`;
+const TMPDIR = agxTestBase("agx-rdr");
 const SOCK = "agx-rdr";
 const HAVE = !!Bun.which("tmux") && !!Bun.which("nvim") && !!Bun.which("git") && process.platform === "linux";
 const uid = typeof process.getuid === "function" ? process.getuid() : 0;

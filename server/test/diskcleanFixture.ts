@@ -70,6 +70,7 @@ export const SHIMS: Record<string, string> = {
     '    *) exit 2;;',
     "  esac;;",
     '  status) case "$*" in *--ignored*) [ -f "$AGX_GIT_DIR/$n.ignored" ] && cat "$AGX_GIT_DIR/$n.ignored";; *) [ -f "$AGX_GIT_DIR/$n.status" ] && cat "$AGX_GIT_DIR/$n.status";; esac; exit 0;;',
+    '  remote) if [ -f "$AGX_GIT_DIR/$n.remote" ]; then cat "$AGX_GIT_DIR/$n.remote"; else echo "error: no such remote origin" >&2; exit 2; fi;;',
     '  rev-list) if [ -f "$AGX_GIT_DIR/$n.unpushed" ]; then cat "$AGX_GIT_DIR/$n.unpushed"; else echo 0; fi;;',
     '  rev-parse) if [ "$2" = "--show-toplevel" ]; then echo "$d"; else echo "headof-$n"; fi;;',
     "  *) exit 2;;",
@@ -77,9 +78,11 @@ export const SHIMS: Record<string, string> = {
   ]),
   gh: SH("gh", [
     'if [ -n "$AGX_GH_FAIL" ]; then echo "gh: not signed in" >&2; exit 1; fi',
-    // one branch: `pr list --head <branch> ...`
-    'if [ "$3" = "--head" ]; then',
-    '  b=$(printf "%s" "$4" | tr "/" "_")',
+    // a directory with no remote is what real gh refuses: it must be told the repository with -R
+    'if [ "$3" != "-R" ]; then echo "no git remotes found" >&2; exit 1; fi',
+    // one branch: `pr list -R <slug> --head <branch> ...`
+    'if [ "$5" = "--head" ]; then',
+    '  b=$(printf "%s" "$6" | tr "/" "_")',
     '  if [ -f "$AGX_GH_DIR/$b.json" ]; then cat "$AGX_GH_DIR/$b.json"; else echo "[]"; fi; exit 0',
     "fi",
     // the whole repository: every pull request in the directory, or 200 other people's when AGX_GH_FULL says the batch is full
@@ -167,6 +170,7 @@ export function populateHome(fx: Fixture): { repo: string; wt: Record<string, st
   const pr = (n: string, number: number, state: string) =>
     put(`gh/feat_${n.toLowerCase()}.json`, JSON.stringify([{ number, state, headRefOid: "ffff", headRefName: `feat/${n.toLowerCase()}`, isCrossRepository: false, updatedAt: "2026-10-01T00:00:00Z" }]));
   pr("ORBIT-1042", 1042, "MERGED"); pr("ORBIT-1050", 1050, "MERGED"); pr("ORBIT-1060", 1060, "OPEN"); pr("ORBIT-1070", 1070, "MERGED"); pr("ORBIT-1080", 1080, "MERGED"); pr("ORBIT-1090", 1090, "MERGED");
+  put("git/orbit.remote", "git@github.com:acme/orbit.git\n");
   put("git/orbit-ORBIT-1050.status", " M a.ts\n?? b.ts\n M c.ts\n");
   put("git/orbit-ORBIT-1070.rootowned", "");
   // merged and clean, but it holds the only copy of an ignored file, which `worktree remove` would delete without a word

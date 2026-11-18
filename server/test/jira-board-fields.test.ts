@@ -229,8 +229,8 @@ for (const flavor of ["cloud", "datacenter"] as const) {
         const prior = (f: FakeJira) => f.requests.filter((r) => r.path.startsWith("/priority")).length;
         // Before this: the filter, two search pages and the priorities (the board's configuration was read when it was added). Now the field list as well.
         expect(count("/field")).toBe(1);
-        expect(count(/\/statuses$/)).toBe(0);
-        expect(fake.requests.length).toBe(1 /* filter */ + 2 /* search */ + prior(fake) + 1 /* /field */ + 1 /* the active sprint, kept ten minutes and shared with the header */);
+        expect(count(/\/statuses$/)).toBe(1); // the project's workflow: every status is a column, a card on it or not
+        expect(fake.requests.length).toBe(1 /* filter */ + 2 /* search */ + prior(fake) + 1 /* /field */ + 1 /* the active sprint, kept ten minutes and shared with the header */ + 1 /* the workflow */ + 1 /* the issue types list: hierarchy level per type, once per site, remembered */);
 
         fake.requests.length = 0;
         await B.viewRead("board:1");
@@ -256,13 +256,13 @@ for (const flavor of ["cloud", "datacenter"] as const) {
         expect(count("/field")).toBe(1);
       });
 
-      test("a filter lists the statuses its cards wear by category, then name, and asks nobody about boards", async () => {
+      test("a filter lists the statuses its cards wear in its project's own board order, found once since it is not a saved folder", async () => {
         const a = await B.addViewByUrl(`https://${site}/issues/?jql=${encodeURIComponent("project = ORBIT ORDER BY key")}`);
         fake.requests.length = 0;
         const r = await B.viewRead((a.data as { view: { id: string } }).view.id);
         expect(names(r)).toEqual(["To Do", "In Progress", "In Review", "QA", "Done"]);
-        expect(count(/agile/)).toBe(0);
-        expect(count(/\/statuses$/)).toBe(0);
+        expect(count(/agile/)).toBe(2); // the project's board list, then its configuration
+        expect(count(/\/statuses$/)).toBe(1);
       });
 
       test("where the project is a saved folder, its first board's column order comes first", async () => {

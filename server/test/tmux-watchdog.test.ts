@@ -33,12 +33,13 @@ import { readFrame, setStatusLine, remountPhoneClient, isPhoneSession } from "..
 import type { TmuxClient, TmuxTarget } from "../src/tmuxctl.ts";
 import { TEST_TERM } from "./tmuxTerm.ts";
 import { story } from "./story.ts";
+import { agxTestBase } from "./tmuxTmp.ts";
 
 // Own socket AND an empty config — see tmux-attach.test.ts for what each half
 // is for. Unique per run, or a leftover server from a previous one is what
 // this talks to.
 const SOCK = ["-L", `agx-watchdog-${process.pid}`];
-const TMPDIR = `/tmp/agx-tmux-watchdog-${process.pid}`;
+const TMPDIR = agxTestBase("agx-tmux-watchdog");
 const REAL_TMPDIR = process.env.TMUX_TMPDIR;
 const has = !!Bun.which("tmux") && !!Bun.which("python3") && process.platform === "linux";
 
@@ -198,11 +199,11 @@ describe("the bar the panel repaints, kept off", () => {
     expect(out(["list-sessions", "-F", "#{session_name}"]).split("\n")).not.toContain("agx-phone-1-abc");
   });
 
-  step("remounting puts the client back on a mirror, and never touches the desk's bar", () => {
+  step("remounting puts the client back on a mirror, and never touches the desk's bar", async () => {
     // The moved-to session is the user's: hiding its bar would hide the
     // desk's too. The remount makes a fresh mirror of it and switches our
     // client back — the user session's options are read, not written.
-    expect(remountPhoneClient(client(), real())).toBe(true);
+    expect(await remountPhoneClient(client(), real())).toBe(true);
     const f = readFrame(client())!;
     expect(isPhoneSession(f.target.session)).toBe(true);
     expect(f.target.session).not.toBe("agx-phone-1-abc");
@@ -220,9 +221,9 @@ describe("the bar the panel repaints, kept off", () => {
     expect(out(["show-options", "-t", currentMirror, "-v", "destroy-unattached"])).toBe("on");
   });
 
-  step("remounting refuses a session that is already a mirror", () => {
+  step("remounting refuses a session that is already a mirror", async () => {
     const before = out(["list-sessions", "-F", "#{session_name}"]);
-    expect(remountPhoneClient(client(), mirror())).toBe(false);
+    expect(await remountPhoneClient(client(), mirror())).toBe(false);
     expect(out(["list-sessions", "-F", "#{session_name}"])).toBe(before);
   });
 

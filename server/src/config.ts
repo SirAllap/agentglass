@@ -10,14 +10,15 @@ import type { Budget, GateRule } from "../../shared/types.ts";
 import { agentProvider } from "../../shared/agentKinds.ts";
 import { validateStored, type StoredPolicy } from "../../shared/orchestration.ts";
 import { validateFlow, type Flow } from "../../shared/flow.ts";
-import { resolvePolaris, validateStoredPolaris, type StoredPolaris } from "../../shared/polaris.ts";
+import { enabledInvalid, enabledLayerOf, polarisEnabled, resolvePolaris, validateStoredPolaris, type StoredPolaris } from "../../shared/polaris.ts";
 import { DEFAULT_LAUNCH_DENY, isLaunchMode, parseDenyRules, parseFlagLine, type FlagOverrides, type LaunchMode } from "../../shared/launchModes.ts";
 import { GATE_ANSWERERS, GATE_ON_TIMEOUT, isOneOf, type GateAnswerer, type GateOnTimeout } from "../../shared/agentDefaults.ts";
 import { WORKER_ROLES, MODEL_RE, workerRole, type RoleChoice, type RoleId } from "../../shared/workerRoles.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, realpathSync, readlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, dirname, relative, sep, delimiter } from "node:path";
-import { worktreeFamily, worktreeParent, forgetWorktreeFamily } from "./worktree.ts";
+import { worktreeFamily, worktreeParent, worktreeFamilyFresh } from "./worktree.ts";
+import { spawnSyncAs } from "./loopwatch.ts";
 
 /**
  * Resolved per call, and read per path.
@@ -94,6 +95,21 @@ interface Config {
    *  for a packaged install or a shell-less deployment — exactly the people who
    *  want it off. The env var still wins when set. */
   terminalDisabled?: boolean;
+  /** The memory ceiling for each child this app starts in its own transient
+   *  systemd scope (default: a third of RAM, no swap), so a runaway kills
+   *  itself instead of taking the app's whole cgroup with it. See scopes.ts. */
+  scopeMemoryMax?: string;
+  /** The ceiling every child together gets, as the one worker slice's
+   *  `MemoryMax` (default: RAM less a reserve for the app and the desktop).
+   *  The per-scope ceiling above is the second wall. See scopes.ts. */
+  scopeSliceMemoryMax?: string;
+  /** Hours a leftover app scope's children may live before the sweep stops the
+   *  scope, when its leader is gone. Default 6. */
+  scopeMaxAgeHours?: number;
+  /** Turn the transient scopes off entirely (children then run in the app's
+   *  own cgroup, as before). Off switches are the env var's job at runtime, and
+   *  this key exists for a desktop launch that inherits no environment. */
+  scopes?: boolean;
   /** Spending limits somebody set. See budget.ts. Hand-edited freely like the
    *  rest of this file, so every field is checked on read. */
   budgets?: Budget[];
@@ -148,6 +164,12 @@ interface Config {
   lanternNudgeMinutes?: number;
   /** How long history is kept, in days (0 keeps everything). The environment variable wins. */
   retentionDays?: number;
+  /** How many days a ClickUp card stays in the local index after it was last seen (0 keeps everything). */
+  clickupCardDays?: number;
+  /** How many days the understudy ledger keeps a bare `stub` row (0 keeps everything). */
+  ledgerStubDays?: number;
+  /** Terminals run through the relay process (server/src/relay/). Read once, at boot. Off unless chosen. */
+  terminalRelay?: boolean;
   /** The Lantern's watch: re-read the field every N minutes and notify when
    *  somebody is still stopped on a person, a worker's window vanished, or
    *  work that was claimed has gone quiet. On by default. See lanternwatch.ts. */
@@ -182,6 +204,8 @@ interface Config {
    *  (shared/browserWorkers.ts). Read as every one when absent, and checked
    *  field by field because this file is hand-edited. */
   browserWorkers?: { engines?: unknown; roles?: unknown };
+  /** What a worker's browser may reach (shared/browserLimits.ts): the origin and profile allow lists and the verb groups. Checked on read; this file is hand-edited. */
+  browserLimits?: { origins?: unknown; profiles?: unknown; verbs?: unknown };
   /** Keep the stored tokens and plugin keys in the system keyring instead of
    *  0600 files. Off unless the person turned it on (server/src/keyringSwitch.ts). */
   secretsKeyring?: boolean;
@@ -202,6 +226,9 @@ interface Config {
   /** The flow (shared/flow.ts): one per project root, and nothing global. Kept
    *  beside the policy and never inside it, so a policy write cannot lose it. */
   flow?: { projects?: Record<string, unknown> };
+  /** One step back per project: the flow before its last write and who wrote it.
+   *  Kept apart from `flow` so a write cannot lose the step it is about to make. */
+  flowUndo?: { projects?: Record<string, unknown> };
 }
 
 function load(path: string): Config {
@@ -647,10 +674,7 @@ export function inScope(path: string | null | undefined, scope: Scope = workspac
   // path is a linked worktree at all; only then is git asked again, so a path
   // that is simply elsewhere never costs the subprocess twice.
   if (!worktreeParent(p)) return false;
-  return roots.some((root) => {
-    forgetWorktreeFamily(root);
-    return worktreeFamily(root).some((r) => isWithin(p, r));
-  });
+  return roots.some((root) => worktreeFamilyFresh(root).some((r) => isWithin(p, r)));
 }
 
 /**
@@ -860,7 +884,7 @@ function resolveScope(asked: string): string {
 /** git's own answer for "which repo is this", or null. */
 function repoTop(dir: string): string | null {
   try {
-    const p = Bun.spawnSync(["git", "-C", dir, "rev-parse", "--show-toplevel"], { stdout: "pipe", stderr: "pipe" });
+    const p = spawnSyncAs("git rev-parse toplevel", ["git", "-C", dir, "rev-parse", "--show-toplevel"], { stdout: "pipe", stderr: "pipe" });
     if (p.exitCode !== 0) return null;
     return p.stdout.toString().trim() || null;
   } catch {
@@ -968,7 +992,8 @@ export function setWorkspaceRoot(rootIn: string | null): { ok: boolean; workspac
  * which is launched from an icon and inherits no environment at all.
  */
 export function chatBypassAllowed(): boolean {
-  if (process.env.AGENTGLASS_CHAT_BYPASS !== undefined) return process.env.AGENTGLASS_CHAT_BYPASS === "1";
+  const asked = envLimit("AGENTGLASS_CHAT_BYPASS");
+  if (asked !== undefined) return asked === "1";
   return config().chatBypass === true;
 }
 
@@ -979,10 +1004,26 @@ export function chatBypassAllowed(): boolean {
  * on), and the file makes it reachable from a desktop launcher. `null` means on.
  */
 export function terminalDisabledSource(): "env" | "config" | null {
-  if (process.env.AGENTGLASS_TERMINAL_DISABLED !== undefined) {
-    return process.env.AGENTGLASS_TERMINAL_DISABLED === "1" ? "env" : null;
+  const asked = envLimit("AGENTGLASS_TERMINAL_DISABLED");
+  if (asked !== undefined) {
+    return asked === "1" ? "env" : null;
   }
   return config().terminalDisabled === true ? "config" : null;
+}
+
+/**
+ * The transient-scope settings from the file, for scopes.ts. The environment
+ * still wins there; this is what makes the feature reachable from a desktop
+ * icon that inherits no shell environment at all.
+ */
+export function scopeConfig(): { off?: boolean; memoryMax?: string; sliceMemoryMax?: string; maxAgeHours?: number } {
+  const c = config();
+  return {
+    ...(c.scopes === false ? { off: true } : null),
+    ...(typeof c.scopeMemoryMax === "string" ? { memoryMax: c.scopeMemoryMax } : null),
+    ...(typeof c.scopeSliceMemoryMax === "string" ? { sliceMemoryMax: c.scopeSliceMemoryMax } : null),
+    ...(typeof c.scopeMaxAgeHours === "number" ? { maxAgeHours: c.scopeMaxAgeHours } : null),
+  };
 }
 
 export function configuredRepoDirs(): string[] {
@@ -1289,6 +1330,35 @@ export function writeRetentionDays(days: number): { ok: boolean; persisted: bool
   return mergeConfig({ retentionDays: Math.max(0, Math.floor(days)) }, "retention");
 }
 
+/** How many days a ClickUp card is kept in the local index after it was last seen, or null when none was chosen. */
+export function clickupCardDaysSetting(): number | null {
+  const n = config().clickupCardDays;
+  return typeof n === "number" && Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+}
+
+export function writeClickupCardDays(days: number): { ok: boolean; persisted: boolean; error?: string } {
+  return mergeConfig({ clickupCardDays: Math.max(0, Math.floor(days)) }, "clickupCardDays");
+}
+
+/** How many days the understudy ledger keeps a bare `stub` row, or null when none was chosen. */
+export function ledgerStubDaysSetting(): number | null {
+  const n = config().ledgerStubDays;
+  return typeof n === "number" && Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
+}
+
+export function writeLedgerStubDays(days: number): { ok: boolean; persisted: boolean; error?: string } {
+  return mergeConfig({ ledgerStubDays: Math.max(0, Math.floor(days)) }, "ledgerStubDays");
+}
+
+/** Whether the terminal relay runs: on unless the person turned it off. The server reads this at boot; AGENTGLASS_TERMRELAY wins over it. */
+export function terminalRelaySetting(): boolean {
+  return config().terminalRelay !== false;
+}
+
+export function writeTerminalRelay(on: boolean): { ok: boolean; persisted: boolean; error?: string } {
+  return mergeConfig({ terminalRelay: on === true }, "terminalRelay");
+}
+
 export function lanternNudge(): boolean {
   return config().lanternNudge !== false;
 }
@@ -1353,6 +1423,53 @@ export function writePhoneAlerts(on: boolean): { ok: boolean; persisted: boolean
 /** The stored value for who may drive the browser, unread: `browseraccess.ts` validates it, so a hand-edited file cannot hand a worker a value the page never offered. */
 export function storedBrowserWorkers(): unknown {
   return config().browserWorkers;
+}
+
+/** The stored browser limits, unread: server/src/browserLimits.ts validates them. */
+export function storedBrowserLimits(): { origins?: unknown; profiles?: unknown; verbs?: unknown } {
+  return config().browserLimits ?? {};
+}
+
+export function writeBrowserLimit(key: "origins" | "profiles" | "verbs", v: string[]): { ok: boolean; persisted: boolean; error?: string } {
+  return mergeConfig((existing) => ({ browserLimits: { ...((existing.browserLimits as object | undefined) ?? {}), [key]: v } }), "what a worker's browser may reach");
+}
+
+/** The memory ceiling for one worker's scope; "" is automatic (a share of the RAM, `defaultMemoryMax`). */
+/**
+ * A limit the environment used to hold alone (shared/envLimits.ts). The variable wins when it is set, even empty,
+ * because that is how every one of these has always been read; otherwise the stored value, otherwise undefined,
+ * which is the behaviour a missing variable always had. `env` is a parameter so a test can hand it its own.
+ */
+export function envLimit(name: string, env: Record<string, string | undefined> = process.env): string | undefined {
+  const v = env[name];
+  if (v !== undefined) return v;
+  const stored = (config() as { envLimits?: Record<string, unknown> }).envLimits?.[name];
+  return typeof stored === "string" ? stored : undefined;
+}
+
+/** What the page shows when the environment holds a limit: the variable and its value, or null. */
+export function envLimitHeldBy(name: string, env: Record<string, string | undefined> = process.env): { name: string; value: string } | null {
+  const v = env[name];
+  return v === undefined ? null : { name, value: v };
+}
+
+/** The stored value alone, "" when none: what the row edits. */
+export function storedEnvLimit(name: string): string {
+  const stored = (config() as { envLimits?: Record<string, unknown> }).envLimits?.[name];
+  return typeof stored === "string" ? stored : "";
+}
+
+/** Store one limit; "" removes it, which is the same as never having set it. */
+export function writeEnvLimit(name: string, value: string): { ok: boolean; persisted: boolean; error?: string } {
+  return mergeConfig((existing) => {
+    const cur = { ...((existing.envLimits as Record<string, string> | undefined) ?? {}) };
+    if (value === "") delete cur[name]; else cur[name] = value;
+    return { envLimits: cur };
+  }, "a limit the environment can also hold");
+}
+
+export function writeScopeMemoryMax(v: string): { ok: boolean; persisted: boolean; error?: string } {
+  return mergeConfig({ scopeMemoryMax: v }, "how much memory one worker may hold");
 }
 
 export function writeBrowserWorkers(v: { engines: string[]; roles: string[] }): { ok: boolean; persisted: boolean; error?: string } {
@@ -1538,10 +1655,16 @@ export function writeStoredPolicy(root: string | undefined, stored: StoredPolicy
  * file's is unusable: a hand-edited entry that does not validate reads as
  * absent, and the log says why, rather than as whatever it claims).
  */
+/** Roots with a saved flow, for anything that must look at every project's
+ *  roster rather than one it already knows (browser.workers' flow-role rows). */
+export function flowRoots(): string[] {
+  return Object.keys(config().flow?.projects ?? {});
+}
+
 export function readStoredFlow(root: string): Flow | null {
   const raw = config().flow?.projects?.[root];
   if (raw === undefined) return null;
-  const v = validateFlow(raw);
+  const v = validateFlow(raw, { legacyGate: true });
   if (!v.ok) {
     console.error(`[config] ignoring the flow for ${root}: ${v.error}`);
     return null;
@@ -1557,6 +1680,50 @@ export function writeStoredFlow(root: string, flow: Flow | null): { ok: boolean;
     if (flow) projects[root] = flow; else delete projects[root];
     return { flow: { ...cur, projects } };
   }, "the flow");
+}
+
+/** The flow before a project's last write, and who made that write. */
+export interface FlowSnapshot {
+  /** Null means the project had no saved flow: undo falls back to the template. */
+  flow: Flow | null;
+  actor: string;
+  at: number;
+}
+
+/** One step back for a project, or null when there is nothing to undo. An
+ *  unreadable entry reads as none, like a hand-edited flow. */
+export function readFlowSnapshot(root: string): FlowSnapshot | null {
+  const raw = config().flowUndo?.projects?.[root];
+  if (raw === undefined) return null;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    console.error(`[config] ignoring the flow undo step for ${root}: not an object`);
+    return null;
+  }
+  const o = raw as Record<string, unknown>;
+  if (typeof o.actor !== "string" || !o.actor.trim() || typeof o.at !== "number" || !Number.isFinite(o.at)) {
+    console.error(`[config] ignoring the flow undo step for ${root}: no actor or time`);
+    return null;
+  }
+  let flow: Flow | null = null;
+  if (o.flow !== null && o.flow !== undefined) {
+    const v = validateFlow(o.flow, { legacyGate: true });
+    if (!v.ok) {
+      console.error(`[config] ignoring the flow undo step for ${root}: ${v.error}`);
+      return null;
+    }
+    flow = v.value;
+  }
+  return { flow, actor: o.actor, at: o.at };
+}
+
+/** Keep one step back for a project, or clear it with null. */
+export function writeFlowSnapshot(root: string, snapshot: FlowSnapshot | null): { ok: boolean; persisted: boolean; error?: string } {
+  return mergeConfig((existing) => {
+    const cur = (existing.flowUndo ?? {}) as { projects?: Record<string, unknown> };
+    const projects = { ...(cur.projects ?? {}) };
+    if (snapshot) projects[root] = snapshot; else delete projects[root];
+    return { flowUndo: { ...cur, projects } };
+  }, "the flow undo step");
 }
 
 /** What one scope wrote down for Polaris, or null. An unusable entry reads as absent, like a policy. */
@@ -1578,8 +1745,19 @@ export const polarisRoots = (): string[] =>
 
 /** The settings in force for a project: per door its own value, else the global one, else the safe default. */
 export function readPolaris(root?: string) {
-  return resolvePolaris(readStoredPolaris(), root ? readStoredPolaris(root) : null);
+  const r = resolvePolaris(readStoredPolaris(), root ? readStoredPolaris(root) : null);
+  // The master switch is read from the layers as stored, not only from the parts that validate: a
+  // value that is not a boolean is named, never treated as on and never written back.
+  const raw = { global: rawPolarisLayer(), ...(root ? { project: rawPolarisLayer(root) } : {}) };
+  const enabled = polarisEnabled(raw);
+  const enabledLayer = enabledLayerOf(raw);
+  const invalid = enabledInvalid(raw);
+  if (enabled === r.settings.enabled && enabledLayer === r.enabledLayer && invalid === r.enabledInvalid) return r;
+  return { ...r, enabledLayer, enabledInvalid: invalid, settings: { ...r.settings, enabled } };
 }
+
+/** One scope's Polaris layer as the file holds it, before validation: the master switch is read from this. */
+const rawPolarisLayer = (root?: string): unknown => (root ? config().polaris?.projects?.[root] : config().polaris?.global);
 
 /** Write one scope's Polaris settings, or drop a project's with null. Same writer as the policy. */
 export function writePolaris(root: string | undefined, stored: StoredPolaris | null): { ok: boolean; persisted: boolean; error?: string } {

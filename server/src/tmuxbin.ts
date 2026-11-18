@@ -31,10 +31,11 @@
 // The user's own ~/.tmux.conf is never involved in any of this: the conf the
 // engine runs is agentglass's own (see tmuxconf.ts), whatever binary wins.
 import { createHash } from "node:crypto";
-import { existsSync, accessSync, constants, lstatSync, mkdirSync, realpathSync } from "node:fs";
+import { existsSync, accessSync, constants, lstatSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { tmuxSource, tmuxPathSetting, configDirRedirected } from "./config.ts";
+import { spawnSyncAs } from "./loopwatch.ts";
 
 /** Override that beats everything: AGENTGLASS_TMUX_PATH=/usr/bin/tmux. */
 const ENV_OVERRIDE = "AGENTGLASS_TMUX_PATH";
@@ -228,6 +229,36 @@ export function engineSocketArgs(make = false): string[] {
   return ["-S", file];
 }
 
+/** The marker `bun test` runs carry: test/isolation.ts (a bunfig preload) sets
+ *  it. NODE_ENV=test alone is not enough to refuse — a person whose shell
+ *  exports NODE_ENV=test would otherwise find every tab dead. */
+const TEST_MARKER = "AGX_UNDER_BUN_TEST";
+let refusalLogged = false;
+
+/** Under `bun test` the engine socket must sit inside a private, existing
+ *  TMUX_TMPDIR; anything else is the developer's live engine. Null = allowed.
+ *  Not gated on a model of tmux's fallback: it asks the filesystem. */
+export function engineRefused(): string | null {
+  if (process.env.NODE_ENV !== "test" || process.env[TEST_MARKER] !== "1") return null;
+  const base = process.env.TMUX_TMPDIR?.replace(/\/+$/, "");
+  let ok = false;
+  try {
+    if (base && statSync(base).isDirectory() && socketFile().startsWith(`${base}/`)) {
+      // Real paths, so a symlink or `..` cannot dress the live engine's place up as private.
+      const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+      const real = (p: string): string => { try { return realpathSync(p); } catch { return p; } };
+      const liveDir = real(join("/tmp", `tmux-${uid}`));
+      const ours = real(dirname(socketFile()));
+      const b = real(base);
+      ok = ours !== liveDir && b !== real("/tmp") && b !== liveDir;
+    }
+  } catch { /* refused below */ }
+  if (ok) return null;
+  const why = "tmux refused under test: the engine socket is outside a private TMUX_TMPDIR";
+  if (!refusalLogged) { refusalLogged = true; console.error(`[tmux] ${why} (NODE_ENV=test and ${TEST_MARKER}=1 are both set)`); }
+  return why;
+}
+
 /** Is there a server to be compatible WITH? Just the socket's existence: a
  *  stale file only costs the probe below one refused connection.
  *
@@ -258,7 +289,7 @@ const PROBE_SESSION = "__agentglass_probe__";
  *  two above means the two speak. */
 function speaksToServer(bin: string): boolean {
   try {
-    const r = Bun.spawnSync([bin, ...engineSocketArgs(), "has-session", "-t", PROBE_SESSION], { stdout: "pipe", stderr: "pipe" });
+    const r = spawnSyncAs("tmux has-session probe", [bin, ...engineSocketArgs(), "has-session", "-t", PROBE_SESSION], { stdout: "pipe", stderr: "pipe" });
     return !/protocol version mismatch|server exited unexpectedly/i.test(r.stderr.toString());
   } catch {
     return false; // unaskable binary: wrong arch, missing loader, not a tmux
@@ -341,7 +372,7 @@ export function tmuxVersion(bin: string): string | null {
   if (versionCache && versionCache.bin === bin) return versionCache.version;
   let version: string | null = null;
   try {
-    const r = Bun.spawnSync([bin, "-V"], { stdout: "pipe", stderr: "pipe" });
+    const r = spawnSyncAs("tmux -V", [bin, "-V"], { stdout: "pipe", stderr: "pipe" });
     if (r.exitCode === 0) version = r.stdout.toString().trim() || null;
   } catch { /* unaskable binary */ }
   versionCache = { bin, version };

@@ -101,23 +101,23 @@ const target = (): TmuxTarget => ({ pid: process.pid, socket: SOCKET, session: "
  * this socket explicitly — nothing here goes through `tmuxSockets()`, which
  * would discover socket directories that are none of this suite's business.
  */
-const everyKnownWrite = (t: TmuxTarget, win: string, pane: string) => {
-  runAction(t, "select", win);
-  runAction(t, "new", undefined, undefined, undefined, undefined, undefined, "/tmp");
-  runAction(t, "rename", win, "renamed-by-the-app");
-  runAction(t, "move", win, "1", undefined, undefined, true);
-  runAction(t, "fit", win, undefined, 80, 24);
-  runAction(t, "takeover", win);
+const everyKnownWrite = async (t: TmuxTarget, win: string, pane: string) => {
+  await runAction(t, "select", win);
+  await runAction(t, "new", undefined, undefined, undefined, undefined, undefined, "/tmp");
+  await runAction(t, "rename", win, "renamed-by-the-app");
+  await runAction(t, "move", win, "1", undefined, undefined, true);
+  await runAction(t, "fit", win, undefined, 80, 24);
+  await runAction(t, "takeover", win);
   setStatusLine(t, false);
   clearAsk(t, win);
   fitWindow(t.socket, t.id, win, 80, 24);
   newWindowRunning(t, "/tmp", "spawned-by-the-app", ["sleep", "300"]);
-  focusPane(t.socket, t.id, win, pane);
+  await focusPane(t.socket, t.id, win, pane);
   selectPane(t, pane);
   leaveCopyMode(t.socket, pane);
-  reclaimPinnedWindow(t.socket, t.id, win, true);
+  await reclaimPinnedWindow(t.socket, t.id, win, true);
   restoreWindows(t.socket, t.id, { [win]: "largest" });
-  runAction(t, "kill", win);
+  await runAction(t, "kill", win);
 };
 
 /** The mode's stderr line is half of what it promises, so it is captured rather
@@ -151,9 +151,9 @@ afterAll(() => {
 });
 
 describe.if(has)("what the app can do to a session it did not create", () => {
-  it("mangles it, with the switch off — the control", () => {
+  it("mangles it, with the switch off — the control", async () => {
     const before = snapshot();
-    everyKnownWrite(target(), firstWindow(), firstPane());
+    await everyKnownWrite(target(), firstWindow(), firstPane());
     const after = snapshot();
 
     // Not merely "different": named, so this cannot pass because a window id
@@ -166,17 +166,17 @@ describe.if(has)("what the app can do to a session it did not create", () => {
     expect(after).toContain("@agx-ask");
   });
 
-  it("leaves it byte-identical, with the switch on", () => {
+  it("leaves it byte-identical, with the switch on", async () => {
     process.env.AGENTGLASS_TMUX_OBSERVE_ONLY = "1";
     const before = snapshot();
-    everyKnownWrite(target(), firstWindow(), firstPane());
+    await everyKnownWrite(target(), firstWindow(), firstPane());
 
     expect(snapshot()).toBe(before);
   });
 
-  it("still says what it would have done", () => {
+  it("still says what it would have done", async () => {
     process.env.AGENTGLASS_TMUX_OBSERVE_ONLY = "1";
-    everyKnownWrite(target(), firstWindow(), firstPane());
+    await everyKnownWrite(target(), firstWindow(), firstPane());
     const verbs = new Set(suppressedTmuxWrites().map((c) => c[c.indexOf(SOCK) + 1]));
 
     // The commands this file's own bug history is made of, all of them recorded
@@ -193,7 +193,7 @@ describe.if(has)("what the app can do to a session it did not create", () => {
     expect(warned.some((l) => l.includes("observe-only") && l.includes(SOCK))).toBe(true);
   });
 
-  it("keeps every read working", () => {
+  it("keeps every read working", async () => {
     process.env.AGENTGLASS_TMUX_OBSERVE_ONLY = "1";
     // The two questions the panel asks constantly, both answered from the real
     // server. A mode that blinded the reads too would be indistinguishable from
@@ -203,7 +203,7 @@ describe.if(has)("what the app can do to a session it did not create", () => {
     expect(suppressedTmuxWrites()).toEqual([]);
   });
 
-  it("refuses the command lines it hands back to a shell", () => {
+  it("refuses the command lines it hands back to a shell", async () => {
     // The second kind of write: an argv this module builds and something else
     // runs, so the guard inside `tmux()` never sees it. `attach-session` is
     // what resized a real session to 80x24 in the first place.
@@ -223,26 +223,26 @@ describe.if(has)("what the app can do to a session it did not create", () => {
 /* Unguarded on purpose: this suite only exercises `tmuxWriteCommands`, which is
  * string parsing and never launches anything. */
 describe("what counts as a write", () => {
-  it("lets the whole frame through", () => {
+  it("lets the whole frame through", async () => {
     // The sweep's command list runs twice a second per attached client. If one
     // line of it were classified as a write the tab strip would empty in
     // observe-only mode, and the mode would look broken rather than careful.
     expect(tmuxWriteCommands(FRAME_ARGV)).toEqual([]);
   });
 
-  it("splits a command list and judges each command on its own", () => {
+  it("splits a command list and judges each command on its own", async () => {
     expect(tmuxWriteCommands(["show-options", "-gv", "prefix", ";", "kill-session", "-t", "=x"]))
       .toEqual([["kill-session", "-t", "=x"]]);
   });
 
-  it("reads `display-message -p` and writes `display-message`", () => {
+  it("reads `display-message -p` and writes `display-message`", async () => {
     // Same command, opposite blast radius: with `-p` it prints to our stdout,
     // without it it paints over the top line of somebody's shell.
     expect(tmuxWriteCommands(["display-message", "-p", "-t", "@1", "#{window_width}"])).toEqual([]);
     expect(tmuxWriteCommands(["display-message", "deploying"])).toEqual([["display-message", "deploying"]]);
   });
 
-  it("calls a verb it has never heard of a write", () => {
+  it("calls a verb it has never heard of a write", async () => {
     // Fails closed on purpose. tmux has a hundred commands and this file uses
     // nine; the ones it does not know about are the ones a future change will
     // reach for.

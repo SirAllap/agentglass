@@ -11,6 +11,8 @@ import { describe, expect, test } from "bun:test";
 
 const src = await Bun.file(new URL("../src/terminal.ts", import.meta.url)).text();
 const mobile = await Bun.file(new URL("../../mobile/app/(tabs)/terminal.tsx", import.meta.url)).text();
+// The new-window sheet lives in its own file.
+const sheets = await Bun.file(new URL("../../mobile/src/terminal/WindowSheets.tsx", import.meta.url)).text();
 
 describe("Shell window", () => {
   test("the server opens a window with no agent for kind shell", () => {
@@ -22,7 +24,7 @@ describe("Shell window", () => {
   });
 
   test("the sheet offers Shell whether or not agents are installed", () => {
-    const sheet = mobile.slice(mobile.indexOf("open={picking}"));
+    const sheet = sheets;
     expect(sheet).toContain('label="Shell"');
     expect(sheet).toContain('openAgent("shell", false)');
     // Not inside the branch that only draws when nothing is installed.

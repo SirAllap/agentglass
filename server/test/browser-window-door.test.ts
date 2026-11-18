@@ -13,7 +13,8 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TMUX_TEST_TMPDIR } from "./tmuxTmp.ts";
-import { BROWSER_CREDENTIAL_VARS, BROWSER_OFF_VAR } from "../src/browseraccess.ts";
+import { settled } from "./paneSettled.ts";
+import { agentWindowEnv, BROWSER_CREDENTIAL_VARS, BROWSER_OFF_VAR } from "../src/browseraccess.ts";
 
 const SOCKET = `agx-door-${process.pid}`;
 const REAL_SOCKET = process.env.AGENTGLASS_TMUX_SOCKET;
@@ -74,18 +75,61 @@ describe.skipIf(!have)("the one door for an agent window", () => {
   }, 20_000);
 });
 
+/* A subagent is a child process of the tab's shell, and it must find the tab's
+   own credential where the shell found it: an environment is inherited, so the
+   `wk_` the door put in `-e` is what the CLI underneath reads. Measured with
+   the real `agentglass-browser`, against a stub that answers `health`. */
+const PY = Bun.which("python3");
+const CLI = new URL("../../bin/agentglass-browser", import.meta.url).pathname;
+const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+
+describe.skipIf(!have || !PY)("a child started inside an agent tab", () => {
+  test("reads the tab's scoped credential, and health from it answers ok", async () => {
+    const seen: Array<string | null> = [];
+    let relay: ReturnType<typeof Bun.serve> | null = null;
+    try {
+      relay = Bun.serve({
+        port: 0,
+        fetch(req) {
+          seen.push(req.headers.get("authorization"));
+          return new Response(JSON.stringify({ ok: true, value: { summary: "ok — window open, panel mounted, page alive" } }), { headers: { "Content-Type": "application/json" } });
+        },
+      });
+      const cred = agentWindowEnv({
+        name: "orbit-ORBIT-1042", engine: "claude",
+        base: { AGENTGLASS_SERVER: `http://127.0.0.1:${relay.port}` },
+      });
+      expect(cred.token).toMatch(/^wk_/);
+      const out = join(dir, "child-health.txt");
+      /* `sh -c` is the tab's shell; the CLI is its child, exactly as a
+         subagent's shell command would be. */
+      const w = await engineWindowOutcome(dir, "child-health",
+        ["sh", "-c", `${quote(PY!)} ${quote(CLI)} health > ${quote(out)} 2>&1`],
+        dir, cred.env, undefined, false, false, false);
+      expect(w.ok, w.ok ? "" : w.reason).toBe(true);
+      const said = await settled(() => { try { return readFileSync(out, "utf8"); } catch { return ""; } }, (t) => t.includes("ok"));
+      expect(said).toContain("ok");
+      expect(seen.length, "the CLI reached the relay").toBeGreaterThan(0);
+      expect(seen.every((h) => h === `Bearer ${cred.token}`), "and used the tab's credential, not the server's").toBe(true);
+      expect(seen).not.toContain(`Bearer ${process.env.AGENTGLASS_TOKEN}`);
+    } finally {
+      relay?.stop(true);
+    }
+  }, 20_000);
+});
+
 interface Site { file: string; what: string; person: boolean }
 /* One row per call to the window door in src, in source order per file. */
 const SITES: Site[] = [
   { file: "server/src/index.ts", what: "flight-plan Launch (Go)", person: false },
   { file: "server/src/index.ts", what: "open-shell (a person's tab)", person: true },
   { file: "server/src/agentops.ts", what: "named agent start / seat / schedule", person: false },
-  { file: "server/src/terminal.ts", what: "terminal's agent tab", person: true },
-  { file: "server/src/terminal.ts", what: "review button", person: true },
-  { file: "server/src/terminal.ts", what: "issue/agent button", person: true },
-  { file: "server/src/terminal.ts", what: "issue/agent button (shell fallback)", person: true },
-  { file: "server/src/terminal.ts", what: "resume: split", person: true },
-  { file: "server/src/terminal.ts", what: "resume: window", person: true },
+  { file: "server/src/terminal.ts", what: "the terminal's agent tab (Open engine)", person: false },
+  { file: "server/src/terminal.ts", what: "review button", person: false },
+  { file: "server/src/terminal.ts", what: "issue/agent button", person: false },
+  { file: "server/src/terminal.ts", what: "issue/agent button (shell fallback: no agent runs)", person: true },
+  { file: "server/src/terminal.ts", what: "resume: split fallback", person: false },
+  { file: "server/src/terminal.ts", what: "resume: window", person: false },
 ];
 
 /** The argument list of every engineWindowOutcome/engineWindowRunning call, with
@@ -113,10 +157,13 @@ test("every window the server opens is in the table, classified agent or person"
     expect({ file, calls: calls.length }).toEqual({ file, calls: mine.length });
     for (let i = 0; i < calls.length; i++) rows.push({ site: mine[i]!, args: calls[i]! });
   }
+  // `person` is the ninth parameter of engineWindowOutcome/engineWindowRunning
+  // (root, name, argv, cwd, env, into, select, reuse, person, cardId); read it
+  // by position, because the card id after it made "the last argument" wrong.
   for (const { site, args } of rows) {
-    const last = args.at(-1);
-    if (site.person) expect({ what: site.what, last }).toEqual({ what: site.what, last: "true" });
-    else expect({ what: site.what, last }).not.toEqual({ what: site.what, last: "true" });
+    const person = args[8] ?? "false";
+    if (site.person) expect({ what: site.what, person }).toEqual({ what: site.what, person: "true" });
+    else expect({ what: site.what, person }).not.toEqual({ what: site.what, person: "true" });
   }
   // The Launch path is the one Go opens, and it mints through the same door for
   // the engine the window ACTUALLY runs (claude), not the role's default provider,
@@ -125,15 +172,18 @@ test("every window the server opens is in the table, classified agent or person"
   const launch = index.slice(index.indexOf("async function launchFlightPlan("), index.indexOf("\n}\n", index.indexOf("async function launchFlightPlan(")));
   expect(launch).toContain('const engine = "claude" as const;');
   expect(launch).toContain('issueArgv({ kind: engine,');
-  expect(launch).toContain("mintBrowserCredential(env, name, engine, \"builder\")");
+  expect(launch).toContain('agentWindowEnv({ name, engine, role: "builder", base: env, root: plan.root })');
   expect(launch).toContain("withBrowserLine(FlightPlan.launchPrompt(plan, coordinator), engine, \"builder\")");
   expect(launch).toContain('AGENTGLASS_ROLE: "builder"');
 
   // The two other creation doors are the same class: no agent pane inherits the server's environment.
+  // A restore goes through the one door too, and a person's own tab keeps theirs.
   const restore = await Bun.file(new URL("../../server/src/tmuxrestore.ts", import.meta.url).pathname).text();
-  expect(restore).toContain("agentWindowGuard()");
-  expect(restore).toContain("replayArgs(");
+  expect(restore).toContain("agentWindowEnv(");
+  expect(restore).toContain("agentWindowTmux(");
+  expect(restore).toContain("if (pane.person) return { argv, set: Object.entries(personPaneEnv()), unsets: [] };");
+  expect(restore).not.toContain("agentWindowGuard");
   const pane = await Bun.file(new URL("../../server/src/tmuxpane.ts", import.meta.url).pathname).text();
   const split = pane.slice(pane.indexOf("export async function engineSplitRunning("));
-  expect(split.slice(0, split.indexOf("\n}\n"))).toContain("agentWindowDrops(given)");
+  expect(split.slice(0, split.indexOf("\n}\n"))).toContain("agentWindowDrops(sessionEnv)");
 });

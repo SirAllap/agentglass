@@ -125,8 +125,8 @@ describe("syncTheme never edits the user's own config", () => {
     }
   });
 
-  step("no live tmux is repainted from a test, whatever the file says", () => {
-    expect(ts.applyThemeTo([])).toBe(false);
+  step("no live tmux is repainted from a test, whatever the file says", async () => {
+    expect(await ts.applyThemeTo([])).toBe(false);
   });
 
   step("live reload targets the AgentGlass engine socket, never the default socket", () => {

@@ -27,6 +27,7 @@ import { trackChild, stopChild } from "./childledger.ts";
 import { deathTie } from "./pdeathsig.ts";
 import { gvfsDir, remotesFromMounts } from "./remotes.ts";
 import type { Volume } from "../../shared/types.ts";
+import { setTimeoutAs } from "./loopwatch.ts";
 
 type Props = Record<string, string[]>;
 type Obj = Record<string, Props>;
@@ -230,7 +231,7 @@ export function watchDevices(onChange: () => void, spawn = (): Bun.Subprocess<"i
   return bin ? Bun.spawn([...deathTie(), bin, "monitor"], { stdin: "ignore", stdout: "pipe", stderr: "ignore" }) : null;
 }, burstMs = 300, name = "udisksctl monitor"): () => void {
   let stopped = false, child: Bun.Subprocess | null = null, timer: ReturnType<typeof setTimeout> | null = null, wait = 1000;
-  const bump = () => { if (!timer) timer = setTimeout(() => { timer = null; if (!stopped) onChange(); }, burstMs); };
+  const bump = () => { if (!timer) timer = setTimeoutAs("volumes change", () => { timer = null; if (!stopped) onChange(); }, burstMs); };
   const run = async () => {
     const p = spawn();
     if (!p) return;
@@ -248,7 +249,7 @@ export function watchDevices(onChange: () => void, spawn = (): Bun.Subprocess<"i
     if (stopped) return;
     // A monitor that dies at once is a broken box, not a quiet one: only one that lived a while earns a fast restart.
     wait = Date.now() - born > 5000 ? 1000 : Math.min(wait * 2, 60_000);
-    setTimeout(() => { if (!stopped) void run(); }, wait);
+    setTimeoutAs("volumes run", () => { if (!stopped) void run(); }, wait);
   };
   void run();
   return () => { stopped = true; if (timer) clearTimeout(timer); if (child?.pid) stopChild(child.pid); try { child?.kill(); } catch { /* gone */ } };

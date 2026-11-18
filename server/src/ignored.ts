@@ -13,9 +13,10 @@
  * once per repo instead of once per file — a hundred paths is one spawn.
  */
 
-import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { existsSync } from "node:fs";
+import { brokerExec } from "./broker/brokerHost.ts";
+import { withSpawnSlot } from "./spawnpool.ts";
 
 /** Repo root for a path, or null. Walks up looking for `.git` (a directory in
  *  a normal checkout, a file in a linked worktree). */
@@ -33,6 +34,36 @@ function repoRootOf(p: string): string | null {
 const TTL_MS = 15_000;
 const cache = new Map<string, { at: number; ignored: boolean }>();
 
+const CHECK_MS = 5_000;
+const CHECK_ENV = { ...process.env, GIT_TERMINAL_PROMPT: "0" } as Record<string, string>;
+
+/**
+ * `git check-ignore --stdin` for one repo; the ignored paths, or null when git
+ * did not answer 0 (not a repo, git missing, timed out).
+ *
+ * This was a spawnSync on the only thread, run for every repo in the polled
+ * /changes list each time its 15 s cache lapsed: a slow fork (page tables of a
+ * ~1 GB process under memory pressure, measured at 2.4 s) froze the terminal
+ * with it. Now the spawn broker forks it, and the wait is an await.
+ */
+async function checkIgnore(root: string, input: string): Promise<string | null> {
+  const argv = ["git", "-C", root, "check-ignore", "--stdin"];
+  const via = brokerExec({ argv, env: CHECK_ENV, timeoutMs: CHECK_MS, stdin: input, maxBytes: 8 * 1024 * 1024, read: true });
+  if (via) {
+    const a = await via.done;
+    if (!a.lost && !a.truncated && a.code === 0) return a.stdout;
+    if (!a.lost && !a.truncated) return null;
+    // lost or cut: a read, so asking again in-process is safe
+  }
+  return withSpawnSlot(async () => {
+    try {
+      const proc = Bun.spawn(argv, { stdin: new TextEncoder().encode(input), stdout: "pipe", stderr: "ignore", timeout: CHECK_MS, env: CHECK_ENV });
+      const [text, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+      return code === 0 ? text : null;
+    } catch { return null; }
+  });
+}
+
 /**
  * Mark each path as ignored or not.
  *
@@ -40,7 +71,7 @@ const cache = new Map<string, { at: number; ignored: boolean }>();
  * that timescale. A path we cannot place in a repo is reported as not ignored —
  * "we don't know" must not hide something from you.
  */
-export function markIgnored(paths: string[]): Map<string, boolean> {
+export async function markIgnored(paths: string[]): Promise<Map<string, boolean>> {
   const out = new Map<string, boolean>();
   const now = Date.now();
   const byRoot = new Map<string, string[]>();
@@ -62,12 +93,8 @@ export function markIgnored(paths: string[]): Map<string, boolean> {
       // `--stdin` with one path per line; exit 0 means at least one matched, 1
       // means none did, and both are normal. Anything else (not a repo, git
       // missing) leaves the set empty, i.e. nothing hidden.
-      const r = spawnSync("git", ["-C", root, "check-ignore", "--stdin"], {
-        input: list.join("\n"),
-        encoding: "utf8",
-        timeout: 5_000,
-      });
-      if (r.status === 0 && r.stdout) ignored = new Set(r.stdout.split("\n").filter(Boolean));
+      const hit = await checkIgnore(root, list.join("\n"));
+      if (hit) ignored = new Set(hit.split("\n").filter(Boolean));
     } catch { /* treat as none ignored */ }
     for (const p of list) {
       const isIgnored = ignored.has(p);

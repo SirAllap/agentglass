@@ -34,14 +34,30 @@
    microtask queue. */
 import { appendFileSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
-import { configPath, inScope, workspaceRoot } from "./config.ts";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { configPath, inScope, workspaceRoot, envLimit } from "./config.ts";
+import { ORIGINS_ENV, PROFILES_ENV, originsAllow, profilesAllow, workerVerbGroups } from "./browserLimits.ts";
+import { WORKER_VERB_GROUPS, groupOfVerb } from "../../shared/browserLimits.ts";
+import { GUIDE_READ_VERBS, dropGrantsOf, grantFor, hasAnyGrant, noGrantRefusal, resetGuideGrants } from "./browserGuideGrants.ts";
 import { robotsOn, robotsRefusal } from "./robots.ts";
 import { blockedTarget } from "./net.ts";
-import { agentContainerName, foldWorkerName, isAgentContainer } from "../../shared/workerContainer.ts";
+import { agentContainerName, containerOwner, foldWorkerName, isAgentContainer } from "../../shared/workerContainer.ts";
+import { HANDOFF_OPEN_VERBS } from "../../shared/browserHandoff.ts";
+import {
+  disownContainer, dropSignIns, forgetMadeContainer, forgetTab, madeByAgent, madeNamed, noteMadeContainer, noteTabContainer, recordSignIn,
+  forgetVisitsOf, resetVaultContainers, signInsOf, signInsWhere, tabAgentMade, tabContainer, tryContainerSite, type ContainerSignIn,
+} from "./vaultContainers.ts";
+import { ACT_VERB_SET } from "../../shared/browserActVerbs.ts";
+import { addStep, finishGuide, guideAudit, guideFor, guideLock, guideOf, noteEvent, othersRefusal, sameCaller, startGuide, takeEnded, touchGuide, resetGuides, GUIDE_EVENTS, type GuideEvent } from "./browserGuide.ts";
+import { GUIDE_WAITS, SAY_NO_WORDS, SUMMARY_SAY, sayHasWords, regenerateNote, regenerateRun, currentVisit, endRun, lintPlan, parsePlan, resumeRun, runInput, sayCurrent, startRun, visitSeq, waitRunEvent, type Guide, type GuideWait, type PanelEvent, type PlanStep } from "./browserGuide.ts";
+import type { GuideActivity, LaneRow } from "../../shared/types.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { closeLane, configureLanes, isLaneId, laneKnown, laneRefusal, listLanes, listOwnedLanes, openLane, resetLanes, touchLane } from "./lanes.ts";
+import { closeLane, configureLanes, isLaneId, laneKnown, laneRecord, laneRefusal, listLanes, listOwnedLanes, markVisitSigned, noLaneError, openLane, resetLanes, showLane, touchLane, tryVisitSite } from "./lanes.ts";
+import { siteOf } from "./cookieimport.ts";
 import { diskAllows, diskEnabled } from "./disk.ts";
+import { fsBrowseEnabled } from "./fsbrowse.ts";
+import { VAULT_ASK_MS, takeVaultGrant } from "./vaultAsk.ts";
+import { listVaults, readIndex, resolveVaultName, vaultChoiceNames } from "./loginvault.ts";
 
 /** What the panel can be asked to do. Each one is implemented there; nothing
  *  here is interpreted, and there is deliberately no `eval`. */
@@ -80,6 +96,7 @@ export type BrowserOp =
   | "debug" | "clock" | "download" | "settings" | "drag" | "upload" | "storage" | "permission"
   | "pdf" | "throttle" | "har" | "region" | "clipboard" | "save" | "headers" | "fake"
   | "trace" | "intercept" | "checkup" | "dialog" | "handoff" | "vitals" | "a11y"
+  | "guide" | "point"
   | "inspect"
   | "tools" | "call-tool"
   | "whoami"
@@ -104,6 +121,7 @@ export const BROWSER_OPS: readonly BrowserOp[] = [
   "clock", "download", "settings", "drag", "upload", "storage", "permission", "pdf",
   "throttle", "har", "region", "clipboard", "save", "headers", "fake", "trace", "intercept",
   "checkup", "dialog", "handoff", "vitals", "a11y",
+  "guide", "point",
   "whoami",
   "done",
   "lane",
@@ -246,6 +264,9 @@ const TIMEOUT_MS: Record<BrowserOp, number> = {
   dialog: 15_000,
   /* One check waits up to 25 s inside the page; the CLI loops over checks. */
   handoff: 45_000,
+  /* `guide next` waits up to 25 s in the panel for the person, like a handoff
+     check; `point` resolves one element and starts its observer. */
+  guide: 45_000, point: 20_000,
   vitals: 15_000, a11y: 15_000,
   /* Reading what a page offers is a round trip; running one of its tools is
      the page's own code, which may wait on a network of its own. The page-side
@@ -341,12 +362,25 @@ export function noteBrowserReady(client: unknown, on: boolean, lanes?: unknown):
  * also a panel under the same client id and one registration must not shadow
  * the other.
  */
+let leftoversDone = false;
+let leftovers: ContainerSignIn[] | null = null;
 const managers = new Map<string, { at: number; since: number }>();
 
 export function noteBrowserManager(client: unknown, on: boolean): boolean {
   if (typeof client !== "string" || !client || client.length > 128) return false;
   if (!on) { managers.delete(client); return true; }
   managers.set(client, { at: Date.now(), since: managers.get(client)?.since ?? Date.now() });
+  /* The first window that can answer after a start: what a crash left in an
+     agent's container is removed now (decision B). */
+  if (!leftoversDone) {
+    leftoversDone = true;
+    /* The ids in the book NOW are the crash's; a retry takes only those that
+       are still there, never a sign-in a live agent made since. */
+    leftovers ??= signInsWhere(() => true);
+    const left = new Set(leftovers);
+    const todo = signInsWhere((s) => left.has(s));
+    void wipeSignIns(todo, "left from a crash").then((ok) => { if (!ok) leftoversDone = false; });
+  }
   return true;
 }
 
@@ -421,12 +455,43 @@ const laneScope = new AsyncLocalStorage<{ lane: string; as?: string; owner?: str
  * make is refused here, before the id is put in scope, so no verb composed out
  * of this request can reach it afterwards.
  */
+/*
+ * Lanes signed in from the login vault (decision F7). In one, any verb that
+ * could read the login back out is refused: the agent may use the session,
+ * never export it. Acting on the page and reading what it says stay allowed.
+ * The mark is a lane id and nothing else; the values are in Electron main.
+ */
+const vaultLanes = new Set<string>();
+/* Pulls on their way into a lane (finding 1): the lane is guarded from the
+   moment a pull is asked for, before main sets the first cookie, not after
+   its answer comes back. A count, so two pulls into one lane cannot unguard
+   each other. */
+const vaultPulling = new Map<string, number>();
+/* Lanes whose vault said "sign agents out when the task ends": `done` from
+   the lane's agent closes them (finding 4). */
+const vaultSignOut = new Set<string>();
+export const VAULT_LANE_REFUSED: ReadonlySet<string> = new Set([
+  "eval", "waitfor", "cookies", "storage", "har", "headers", "network", "cdp", "addInitScript", "debug", "trace", "save", "expose", "record",
+]);
+export function markVaultLane(lane: string, signOutAtEnd?: boolean): void {
+  vaultLanes.add(lane);
+  if (signOutAtEnd === true) vaultSignOut.add(lane);
+  else if (signOutAtEnd === false) vaultSignOut.delete(lane);
+}
+export function forgetVaultLane(lane: string): void { vaultLanes.delete(lane); vaultPulling.delete(lane); vaultSignOut.delete(lane); }
+export function isVaultLane(lane: string): boolean { return vaultLanes.has(lane) || (vaultPulling.get(lane) ?? 0) > 0; }
+export function vaultLaneRefusal(op: string, lane: unknown): string | null {
+  if (typeof lane !== "string" || !isVaultLane(lane) || !VAULT_LANE_REFUSED.has(op)) return null;
+  return `${op} is refused in a lane signed in from the login vault: it could read the login back out. Act on the page instead`;
+}
+
 export function gateLane(op: string, body: unknown, principal?: string): string | null {
   const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
   if (b.lane === undefined || op === "lane") return null;
   const owner = typeof principal === "string" && principal.trim() ? foldWorkerName(principal) : undefined;
   const as = owner ?? (typeof b.as === "string" ? b.as : undefined);
-  const msg = !isLaneId(b.lane) ? "lane must be the id `lane new` printed" : laneRefusal(b.lane, as, b.force === true, !!owner);
+  const msg = !isLaneId(b.lane) ? "lane must be the id `lane new` printed"
+    : laneRefusal(b.lane, as, b.force === true, !!owner) ?? vaultLaneRefusal(op, b.lane);
   if (msg) {
     recordAudit(op as BrowserOp, { lane: b.lane }, false, msg, false, undefined, as ? { as } : undefined);
     return msg;
@@ -499,7 +564,7 @@ const LIST_FIELDS = ["url", "profile", "identity", "show", "ephemeral"];
 const TRACE_FIELDS = ["delta", "limit", "root", "shot", "since", "viewport"];
 
 export const WORKER_VERBS: Readonly<Record<string, WorkerVerbRow>> = {
-  open: workerNoTarget(...LIST_FIELDS),
+  open: workerNoTarget(...LIST_FIELDS, "vault"),
   read: workerPage(),
   markdown: workerPage(),
   extract: workerPage("fields"),
@@ -542,7 +607,10 @@ export const WORKER_VERBS: Readonly<Record<string, WorkerVerbRow>> = {
   events: workerPage("kinds", "since", "wait", "timeoutMs"),
   whoami: workerNoTarget("identity", "tab"),
   health: workerNoTarget(),
-  lane: workerNoTarget("action", "id", "profile", "shared", "force", "ephemeral", "container"),
+  lane: workerNoTarget("action", "id", "profile", "shared", "force", "ephemeral", "container", "site", "vault"),
+  /* The CLI's `vault LANE --site S` is `lane vault` under another name: it is
+     sent as the `lane` op, so it is decided the same way. */
+  vault: workerNoTarget("id", "site", "vault"),
   a11y: workerPage(),
   inspect: workerPage("action"),
   vitals: workerPage(),
@@ -555,6 +623,9 @@ export const WORKER_VERBS: Readonly<Record<string, WorkerVerbRow>> = {
   download: refusedVerb(), drag: refusedVerb(), emulate: refusedVerb(),
   eval: refusedVerb(), expose: refusedVerb(), exposed: refusedVerb(),
   fake: refusedVerb(), handoff: refusedVerb(), har: refusedVerb(),
+  /* A guide is an agent talking the PERSON through their own page: a worker's
+     credential works in its own container, where there is nobody to guide. */
+  guide: refusedVerb(), point: refusedVerb(),
   headers: refusedVerb(), intercept: refusedVerb(), listeners: refusedVerb(),
   pdf: refusedVerb(), permission: refusedVerb(), permissions: refusedVerb(),
   profiles: refusedVerb(), record: refusedVerb(), region: refusedVerb(),
@@ -563,6 +634,22 @@ export const WORKER_VERBS: Readonly<Record<string, WorkerVerbRow>> = {
   storage: refusedVerb(), template: refusedVerb(), throttle: refusedVerb(),
   tools: refusedVerb(), trace: refusedVerb(), upload: refusedVerb(),
 };
+/* The row a verb has NOW: the table above is the default, and Settings ▸
+   Browser ▸ Worker verbs turns a whole group on or off. A lifted verb is
+   addressed like any page verb (its page must be the worker's own, and the
+   identity checks above it still hold); it has no per-field list, so its
+   fields are not narrowed: "*". Ceiling: a lifted group is the worker's own
+   container's, never the person's, because the credential cannot name that. */
+const LIFTED_ROW: WorkerVerbRow = { policy: "own", target: ["page"], fields: ["*"] };
+function workerVerbRow(op: string): WorkerVerbRow | undefined {
+  const base = WORKER_VERBS[op];
+  if (!base) return undefined;
+  const group = groupOfVerb(op);
+  if (!group) return base;
+  const on = workerVerbGroups().includes(group);
+  if (!on) return WORKER_REFUSED;
+  return base.policy === "own" ? base : LIFTED_ROW;
+}
 export const WORKER_OPS: ReadonlySet<string> = new Set(
   Object.entries(WORKER_VERBS)
     .filter(([op, r]) => r.policy === "own" && op !== "do")
@@ -571,9 +658,12 @@ export const WORKER_OPS: ReadonlySet<string> = new Set(
 /* Deny-by-default: a worker's body may carry only these fields for its op.
    `observe` and `partial` are request options the CLI writes on any verb
    (`--observe`, `--max-tokens`), not fields of one verb: refusing them refused
-   the act they rode on. */
+   the act they rode on. `roots` is the same kind: the MCP writes the turn's
+   writable roots on every body when `AGX_TURN_WRITE_ROOTS` is set, and the
+   route only ever narrows with it (no roots = no check), so refusing it
+   refused every call a sandboxed worker made, `health` included. */
 const WORKER_COMMON_FIELDS: ReadonlySet<string> = new Set([
-  "as", "how", "lane", "page", "pageExplicit", "observe", "partial",
+  "as", "how", "lane", "page", "pageExplicit", "observe", "partial", "roots",
 ]);
 export const WORKER_OP_FIELDS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
   Object.entries(WORKER_VERBS)
@@ -671,7 +761,7 @@ const WORKER_PAGE_REPLY_OPS: ReadonlySet<string> = new Set(["tabs", "tab", "open
  *  replaced by an empty list. */
 export function workerReply(worker: string, reply: BrowserReply): BrowserReply {
   if (!reply.ok) return reply;
-  const own = (id: string) => workerOwnsPage(worker, id);
+  const own = (id: string) => workerSees(worker, id);
   const v = reply.value;
   if (Array.isArray(v)) {
     const s = scopeValue(own, v);
@@ -718,11 +808,17 @@ export function resetWorkerPages(): void {
   ASK_WORKER.clear();
 }
 /** Drop a name's pages when its credential is revoked: the next turn under the
- *  same name must not inherit ids the previous one opened. */
+ *  same name must not inherit ids the previous one opened. Its vault lanes
+ *  with sign-out on are closed here too. */
 export function forgetWorkerPages(worker: string): void {
   const w = foldWorkerName(worker);
   WORKER_PAGES.delete(w);
   for (const [id, ask] of ASK_WORKER) if (ask.worker === w) ASK_WORKER.delete(id);
+  /* Its session ended: its guide grants end with it. */
+  dropGrantsOf(worker);
+  /* The turn ended (stopped, crashed, or simply finished) without `done`:
+     "sign agents out when the task ends" still holds (finding 4). */
+  void signOutVaultLanes(worker, true, true).catch(() => []);
 }
 /** How many asks are still waiting for a window, so a test can prove they do
  *  not accumulate. */
@@ -769,11 +865,88 @@ function recordWorkerReply(id: string, reply: BrowserReply): void {
   }
 }
 export function workerOpRefusal(op: string): string {
+  const group = groupOfVerb(op);
+  const lift = group
+    ? ` Settings ▸ Browser ▸ Worker verbs lifts it: turn on ${WORKER_VERB_GROUPS[group]!.title}.`
+    : " No setting lifts it: the verb reaches past the worker's own container.";
   return "this credential was minted for an agent, and the browser relay runs only the verbs an agent's own "
-    + `container can do: "${op}" is not one of them.`;
+    + `container can do: "${op}" is not one of them.${lift}`;
+}
+/* Guide grants (browserGuideGrants.ts, Settings ▸ Browser ▸ Worker verbs ▸
+   Guide grants). A worker with a live grant for its own name may talk the
+   person through THEIR OWN tab on the granted site: guide start/point/next/end,
+   and the reads in GUIDE_READ_VERBS on that one tab while its own guide runs
+   there. This sync gate checks the name; the site is checked where the tab's
+   URL is known (composeGuide, guideReadRefusal). Nothing in the person's
+   container acts for it — no click, fill, open, eval, cookies, vault — with or
+   without a guide running. */
+const GUIDE_VERBS: ReadonlySet<string> = new Set(["guide", "point"]);
+const GUIDE_READS: ReadonlySet<string> = new Set(GUIDE_READ_VERBS);
+const GUIDE_FIELDS: Readonly<Record<string, ReadonlySet<string>>> = {
+  guide: new Set(["action", "why", "waitMs", "plan", "say"]),
+  point: new Set(["selector", "say", "waitClick", "wait", "text", "copy", "expect", "step"]),
+};
+/** The live guide on `tab` when this worker runs it. */
+function ownGuideOn(own: string, tab: string | undefined): boolean {
+  const g = tab ? guideOf(tab) : undefined;
+  return !!g && sameCaller(g.as, own);
+}
+/** A tab this worker may see in a tab list: its own, or the one its guide runs on (switch on). */
+function workerSees(worker: string, id: string): boolean {
+  return workerOwnsPage(worker, id) || (hasAnyGrant(worker) && ownGuideOn(foldWorkerName(worker), id));
+}
+/**
+ * The guide door. `undefined`: not a guide ask, the usual worker rules decide.
+ * `null`: allowed. A string: refused, and with the switch off it names the switch.
+ */
+function workerGuideAsk(
+  b: Record<string, unknown>, own: string, op: string | undefined, page: string | undefined, step: boolean,
+): string | null | undefined {
+  if (!op) return undefined;
+  const named = typeof b.page === "string" && b.page.trim() ? b.page.trim() : page;
+  const sharedAsk = b.shared === true || b.how === "shared";
+  const isGuide = GUIDE_VERBS.has(op);
+  const guided = ownGuideOn(own, named);
+  /* A plain `--page <tab>` of the tab this worker guides is the same ask as `--shared --page <tab>`. */
+  const onPerson = sharedAsk || (guided && !!named && !workerOwnsPage(own, named));
+  if (!isGuide && !onPerson) return undefined;
+  if (!hasAnyGrant(own)) return isGuide || GUIDE_READS.has(op) ? noGrantRefusal(own) : undefined;
+  if (!isGuide && !GUIDE_READS.has(op)) {
+    return `this credential was minted for an agent, and on the person's own tab a worker only guides and reads: "${op}" is refused there, during a guide too. `
+      + "Point at it instead (point <selector> --say \"<what to do>\") and the person does it.";
+  }
+  if (step) {
+    return `this credential was minted for an agent, and "${op}" on the person's tab is one ask at a time, never a step of a \`do\`.`;
+  }
+  for (const key of ["profile", "container", "lane", "force", "ephemeral", "name", "active"]) {
+    if (b[key] !== undefined) {
+      return `this credential was minted for an agent, and "${key}" does not go with a guide of the person's tab: send only --shared (guide start), or --shared --page <tab>.`;
+    }
+  }
+  if (typeof b.as === "string" && b.as.trim() && foldWorkerName(b.as) !== own) return AGENT_SHARED_REFUSAL;
+  const fields = isGuide ? GUIDE_FIELDS[op]! : new Set(WORKER_VERBS[op]?.fields ?? []);
+  for (const key of Object.keys(b)) {
+    if (key === "shared" || WORKER_COMMON_FIELDS.has(key) || fields.has(key)) continue;
+    return `this credential was minted for an agent, and the ask carries "${key}", which "${op}" does not read: refused rather than guessed at.`;
+  }
+  if (isGuide) {
+    /* `guide start` with no tab is the tab in front; the relay checks it is the person's. */
+    if (op === "guide" && (b.action === "start" || b.action === "run")) return null;
+    if (named && !guided) return `this credential was minted for an agent, and no guide of yours runs on ${named}: guide start "<why>" --shared first.`;
+    return null;
+  }
+  if (op === "tabs") return null;
+  if (!named) return "this credential was minted for an agent, and a read of the person's tab names the tab: --shared --page <tab>, the tab guide start answered with.";
+  if (!guided) {
+    return `this credential was minted for an agent, and it reads the person's tab only while its own guide runs there: `
+      + `guide start "<why>" --shared first.`;
+  }
+  return null;
 }
 function workerSchemaRefusal(b: Record<string, unknown>, op: string | undefined): string | null {
-  const fields = op === undefined ? WORKER_LANE_FIELDS : op === "do" ? WORKER_DO_FIELDS : WORKER_OP_FIELDS.get(op);
+  const row = op !== undefined && op !== "do" ? workerVerbRow(op) : undefined;
+  if (row?.policy === "own" && row.fields.includes("*")) return null;
+  const fields = op === undefined ? WORKER_LANE_FIELDS : op === "do" ? WORKER_DO_FIELDS : row?.policy === "own" ? new Set(row.fields) : undefined;
   if (!fields) {
     return `this credential was minted for an agent, and "${op}" has no declared fields here: the ask is refused rather than read as some other verb.`;
   }
@@ -785,10 +958,45 @@ function workerSchemaRefusal(b: Record<string, unknown>, op: string | undefined)
   }
   return null;
 }
+/** A URL that logs the page into the app (`/?token=…`). A worker that learned
+ *  the machine token must not be able to spend it through its browser. */
+export const WORKER_TOKEN_URL_REFUSAL = "this credential was minted for an agent, and a URL that carries `token=` "
+  + "would sign the page in to the app as the person: the app's own credential is not something a worker's page may use.";
+export const WORKER_AUTH_HEADER_REFUSAL = "this credential was minted for an agent, and an `Authorization` header would "
+  + "sign its page in to the app as the person: the app's own credential is not something a worker's page may use.";
+export function urlCarriesToken(raw: string): boolean {
+  /* Absolute or relative alike: a relative string is read against a dummy base,
+     so `/?%74oken=X` is decoded exactly as `http://h/?%74oken=X` is. */
+  let u: URL;
+  try { u = new URL(raw, "http://x/"); } catch { return false; }
+  const has = (params: URLSearchParams) => [...params.keys()].some((k) => k.toLowerCase() === "token");
+  if (has(u.searchParams)) return true;
+  /* The hash is where a single-page app reads its own query (`#/p?token=X`):
+     the part after its `?` is decoded the same way. */
+  const h = u.hash.slice(1);
+  const q = h.indexOf("?");
+  return has(new URLSearchParams(q >= 0 ? h.slice(q + 1) : h));
+}
+/** Every string anywhere in a request body, at any depth and under any key,
+ *  that reads as a URL carrying a token. `cdp` `Page.navigate` params, a step's
+ *  args and whatever shape the executor learns next are all covered without
+ *  naming them. Walked with a stack, and capped by node count, not depth. */
+export function bodyCarriesToken(body: unknown): boolean {
+  const stack: unknown[] = [body];
+  for (let seen = 0; stack.length && seen < 20_000; seen++) {
+    const v = stack.pop();
+    if (typeof v === "string") { if (urlCarriesToken(v)) return true; }
+    else if (Array.isArray(v)) stack.push(...v);
+    else if (v && typeof v === "object") stack.push(...Object.values(v));
+  }
+  return false;
+}
 function workerAskRefused(
   b: Record<string, unknown>, own: string, op: string | undefined, page: string | undefined,
   afterOwnOpen = false, deferAddress = false, laneAddressed = false,
 ): string | null {
+  const guide = workerGuideAsk(b, own, op, page, deferAddress);
+  if (guide !== undefined) return guide;
   if (b.shared === true || b.active === true) return AGENT_SHARED_REFUSAL;
   if (b.how === "shared") return AGENT_SHARED_REFUSAL;
   /* `force` is a lever over somebody else's lane — it lists every caller's
@@ -798,6 +1006,17 @@ function workerAskRefused(
     return "this credential was minted for an agent, and `force` is not one of its levers: it overrides "
       + "the owner of a lane, and the lanes this agent may use are already its own.";
   }
+  if (typeof b.url === "string" && urlCarriesToken(b.url)) return WORKER_TOKEN_URL_REFUSAL;
+  /* `scrape` takes a list. Every entry is looked at, a non-string one too. */
+  if (Array.isArray(b.urls) && b.urls.some((u) => typeof u === "string" && urlCarriesToken(u))) return WORKER_TOKEN_URL_REFUSAL;
+  /* The server takes the token as `Authorization: Bearer` or `?token=` only
+     (auth.ts `presented`), never as a cookie. A group of verbs the person lifted
+     in Settings may set headers, so that one header stays refused whatever is
+     lifted. */
+  if (op === "headers" && b.headers && typeof b.headers === "object"
+      && Object.keys(b.headers).some((k) => k.toLowerCase() === "authorization")) {
+    return WORKER_AUTH_HEADER_REFUSAL;
+  }
   for (const key of ["as", "profile", "name"] as const) {
     const v = b[key];
     if (typeof v === "string" && v.trim() && foldWorkerName(v) !== own) return AGENT_SHARED_REFUSAL;
@@ -806,10 +1025,10 @@ function workerAskRefused(
     const c = foldWorkerName(b.container);
     if (c !== own && c !== "private") return AGENT_SHARED_REFUSAL;
   }
-  if (op && op !== "do" && !WORKER_OPS.has(op)) return workerOpRefusal(op);
+  if (op && op !== "do" && workerVerbRow(op)?.policy !== "own") return workerOpRefusal(op);
   const unknown = workerSchemaRefusal(b, op);
   if (unknown) return unknown;
-  const target = op ? WORKER_VERBS[op]?.target ?? [] : [];
+  const target = op ? workerVerbRow(op)?.target ?? [] : [];
   const named = typeof b.page === "string" && b.page.trim() ? b.page.trim() : page;
   if (target.includes("page") && !deferAddress && named && !workerOwnsPage(own, named)) {
     return "this credential was minted for an agent, and that page is not one it opened: a page id is "
@@ -850,19 +1069,17 @@ function workerAskRefused(
       && !(named && workerOwnsPage(own, named))) {
     return AGENT_SHARED_REFUSAL;
   }
-  /* Taking the pane is the person's screen, not the worker's page: a mint that
-     brings the browser forward pulls the view off whoever is using it. */
-  if ((op === "open" || op === "newtab") && b.show === true) {
-    return "this credential was minted for an agent, and `show` brings the browser view forward in the person's "
-      + "window: a worker's page is opened in the background.";
-  }
+  /* `show` from a worker is not refused here: the relay drops it and says so
+     (workerShowNote), so the page still opens, in the background. */
   /* A template lane is the lane twin of a template tab: the saved cookies and
-     storage of whichever container the template came from. */
-  if (op === "lane" && b.ephemeral === true) {
+     storage of whichever container the template came from. The one ephemeral
+     lane a worker may open is the vault plan's: `lane new --ephemeral --vault
+     NAME`, which a first visit signs in from that vault. */
+  if (op === "lane" && b.ephemeral === true && !(typeof b.vault === "string" && b.vault.trim())) {
     return "this credential was minted for an agent, and a lane from a template carries the cookies and storage "
-      + "saved from another container: ask for a plain private lane instead.";
+      + "saved from another container: ask for a plain private lane instead, or `lane new --ephemeral --vault NAME`.";
   }
-  if (op && op !== "do" && !WORKER_LIST_OPS.has(op) && !(op === "open" && typeof b.profile === "string")) {
+  if (op && op !== "do" && workerVerbRow(op)?.target.includes("page") && !(op === "open" && typeof b.profile === "string")) {
     if (!named && !afterOwnOpen && !byLane) {
       return "this credential was minted for an agent, and the ask names no page of its own: "
         + "open your own page first and address it, so the ask cannot fall through to the tab in front.";
@@ -895,6 +1112,7 @@ export function agentAskRefusal(body: unknown, worker?: string, op?: string, aft
      A step's ADDRESS is checked when it runs, not here: it is a page the
      earlier steps have not minted yet. `runSteps` gates every step again with
      the registry as it stands, so nothing skips the check. */
+  if (own && bodyCarriesToken(body)) return WORKER_TOKEN_URL_REFUSAL;
   let level: Array<{ item: unknown; page?: string; op?: string; step?: boolean; ownedOpen?: boolean; lane?: boolean }> =
     [{ item: body, op, ownedOpen: afterOwnOpen }];
   for (let depth = 0; depth < 3 && level.length; depth++) {
@@ -949,6 +1167,12 @@ export function agentAskRefusal(body: unknown, worker?: string, op?: string, aft
   }
   return null;
 }
+
+/* Said to a worker that reached for the person's own tab. Mirrored in the CLI
+   (bin/agentglass-browser, WORKER_PERSON_TAB_HINT): never point a worker at
+   `--shared`, which is the call it is refused. */
+export const WORKER_PERSON_TAB_HINT = "The person's own tab is out of reach for a worker by design: ask the "
+  + "orchestrator (seat) to run a guide there, or open your own container with `--as <name>`.";
 
 const AGENT_SHARED_REFUSAL = "this credential was minted for an agent, and it reaches only that agent's own container, "
   + "page and lanes: the person's container, and another agent's profile, are not something it reaches. Name "
@@ -1010,10 +1234,12 @@ const okSelector = (s: unknown): s is string =>
  *  import, so a server whose operator changes the env sees it take effect
  *  without a restart, and so tests can set it per case. */
 function allowedOrigins(): string[] {
-  const raw = process.env.AGENTGLASS_BROWSER_ORIGINS;
-  if (!raw || !raw.trim()) return ["*"];
-  return raw.split(",").map((s) => s.trim()).filter(Boolean);
+  return originsAllow();
 }
+
+/** What a refusal by the origin or profile list ends with: the row that lifts it, and the variable when the operator's environment holds the list. */
+const originsLift = (): string => ` Lift it in Settings ▸ Browser ▸ Allowed origins${process.env[ORIGINS_ENV]?.trim() ? ` (locked: ${ORIGINS_ENV} was set when the server started)` : ""}.`;
+const profilesLift = (): string => ` Lift it in Settings ▸ Browser ▸ Allowed profiles${process.env[PROFILES_ENV]?.trim() ? ` (locked: ${PROFILES_ENV} was set when the server started)` : ""}.`;
 
 function originAllowed(host: string, list: readonly string[]): boolean {
   if (list.includes("*")) return true;
@@ -1027,9 +1253,7 @@ function originAllowed(host: string, list: readonly string[]): boolean {
  *  Read on every call for the same reason as the other two: an operator's
  *  change takes effect without a restart, and tests can set it per case. */
 function allowedProfiles(): string[] {
-  const raw = process.env.AGENTGLASS_BROWSER_PROFILES;
-  if (!raw || !raw.trim()) return ["*"];
-  return raw.split(",").map((s) => s.trim()).filter(Boolean);
+  return profilesAllow();
 }
 
 /** The unprofiled default (no `--as` at all) is always allowed — this list is
@@ -1229,7 +1453,7 @@ const AGENT_PERMISSIONS: ReadonlySet<string> = new Set(["microphone", "camera", 
 /** `AGENTGLASS_BROWSER_READONLY=1` — observing stays open, acting is refused.
  *  Read on every call for the same reason as `allowedOrigins`. */
 function readonlyMode(): boolean {
-  return process.env.AGENTGLASS_BROWSER_READONLY === "1";
+  return envLimit("AGENTGLASS_BROWSER_READONLY") === "1";
 }
 
 /** `AGENTGLASS_BROWSER_WEBMCP=1` — `tools` and `call-tool` exist. Off by
@@ -1237,7 +1461,7 @@ function readonlyMode(): boolean {
  *  a model will read; turning them on is the operator's decision, not an
  *  agent's. Only the exact value `1`, read on every call like the rest. */
 function webmcpOn(): boolean {
-  return process.env.AGENTGLASS_BROWSER_WEBMCP === "1";
+  return envLimit("AGENTGLASS_BROWSER_WEBMCP") === "1";
 }
 
 /** Every verb, named. This list is read-only mode's whole enforcement, so a
@@ -1266,6 +1490,9 @@ const OBSERVE_OPS: ReadonlySet<BrowserOp> = new Set([
   /* Opening a lane touches no page and no person's window: it makes a room for
      an agent to work in, which read-only mode has no reason to refuse. */
   "lane",
+  /* Guide mode draws over the page and waits for the person; it never touches
+     the page itself, which is the whole reason it exists. */
+  "guide", "point",
 ]);
 
 /** `cookies` is the one verb that is sometimes each: reading the jar is an
@@ -1274,7 +1501,7 @@ const OBSERVE_OPS: ReadonlySet<BrowserOp> = new Set([
  *  to `true` — acting — on purpose. */
 function isActing(op: BrowserOp, args: Record<string, unknown>): boolean {
   /* Making a lane touches nothing of anybody's; closing one ends another's work. */
-  if (op === "lane") return args.action === "close";
+  if (op === "lane") return args.action === "close" || args.action === "vault";
   if (op === "cookies") return args.set !== undefined;
   /* `debug` is two verbs wearing one name: asking where it is paused only
      looks, while setting a breakpoint or stepping changes what the page does
@@ -1453,8 +1680,10 @@ export interface PageSecrets {
  * - `fake --body` and `intercept --body`: a response the agent wrote itself,
  *   to a page it is testing.
  * - `settings set`: a preference, and `settings get` prints it back anyway.
+ * - `point --text`: the visible label that picks one of several matches,
+ *   read off the page like a selector, never typed into it.
  */
-export const valueCarryingExemptForTest: readonly string[] = ["clipboard", "select", "extract", "fake", "intercept", "settings"];
+export const valueCarryingExemptForTest: readonly string[] = ["clipboard", "select", "extract", "fake", "intercept", "settings", "point"];
 const VALUE_CARRYING: Record<string, (
   out: Record<string, unknown>,
   args: Record<string, unknown>,
@@ -1970,6 +2199,77 @@ function underDir(p: string, dir: string): boolean {
 }
 
 /**
+ * The same roots check `bin/agentglass-browser-mcp` makes, made again where the
+ * write lands.
+ *
+ * The door resolves the directory in its own process, and the directory is
+ * inside the work tree: the turn's own shell can replace it with a link between
+ * that check and this one. So the roots ride on the body and both sides are
+ * resolved again here. Empty when the body names no roots — a person's own call,
+ * not a turn's.
+ */
+export function turnWriteRefusal(p: string, roots: unknown): string {
+  if (!Array.isArray(roots) || !roots.length) return "";
+  const real = (x: string): string => {
+    let at = resolve(x);
+    const rest: string[] = [];
+    for (;;) {
+      try { return rest.length ? join(realpathSync(at), ...rest) : realpathSync(at); } catch { /* climb */ }
+      const up = dirname(at);
+      if (up === at) return resolve(x);
+      rest.unshift(basename(at));
+      at = up;
+    }
+  };
+  const want = real(p);
+  for (const r of roots) {
+    if (typeof r !== "string" || !r) continue;
+    const root = real(r);
+    if (!underDir(want, root)) continue;
+    const first = relative(root, want).split(sep)[0];
+    if (want !== root && (first === ".git" || first === ".claude")) {
+      return `refused: ${want} is inside ${first} of a writable root, and that is what runs next`;
+    }
+    return "";
+  }
+  return `refused: ${want} is outside this turn's writable roots (${roots.filter((r) => typeof r === "string").join(", ")})`;
+}
+
+/** The two protocol methods that decide where a page's next file lands. */
+const DOWNLOAD_METHODS: ReadonlySet<string> = new Set(["Browser.setDownloadBehavior", "Page.setDownloadBehavior"]);
+
+/**
+ * The refusal for a `cdp` ask or a `do` step that arms a download, or "".
+ *
+ * `Page.setDownloadBehavior` and its browser-wide twin reach the same power as
+ * `download` without going through it: no selector, no click, just where the
+ * next file a page offers lands. `behavior: "default"` and `"deny"` name no
+ * directory and write nothing; an `allow` with no `downloadPath` puts the file
+ * in the browser's own download folder, which is nobody's turn root either.
+ */
+export function downloadPathRefusal(args: Record<string, unknown>, roots: unknown): string {
+  if (!DOWNLOAD_METHODS.has(String(args.method ?? ""))) return "";
+  const params = (args.params && typeof args.params === "object" ? args.params : {}) as Record<string, unknown>;
+  const path = params.downloadPath;
+  if (typeof path === "string" && path) {
+    // Chromium resolves a relative directory against the browser process, not
+    // this one: "assets" would be checked here as `<cwd>/assets` and land in the
+    // app's own working directory.
+    if (!isAbsolute(path)) {
+      return "refused: the downloadPath must be an absolute path, because Chromium resolves a relative "
+        + "one against the browser's own working directory, not this process's";
+    }
+    return turnWriteRefusal(path, roots);
+  }
+  const behavior = String(params.behavior ?? "allow");
+  if (behavior === "default" || behavior === "deny") return "";
+  if (!Array.isArray(roots) || !roots.length) return "";
+  return "refused: arming a download with no downloadPath puts the next file in the browser's own "
+    + "download folder, outside this turn's writable roots. Name a directory inside the turn's "
+    + "worktree or its own run folder.";
+}
+
+/**
  * May this file be attached to a page's file input?
  *
  * Before this, the only check was `startsWith("/")`, and the audit's example
@@ -1994,7 +2294,7 @@ function underDir(p: string, dir: string): boolean {
  * The message names the rule and the path, never the file's contents.
  */
 export function uploadPathError(p: string): { error: string; real?: undefined } | { error?: undefined; real: string } {
-  if (process.env.AGENTGLASS_FS_BROWSE_DISABLED === "1") return { error: "attaching files is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" };
+  if (!fsBrowseEnabled()) return { error: "attaching files is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" };
   if (!diskEnabled()) return { error: "attaching files is disabled (AGENTGLASS_DISK_DISABLED=1)" };
   if (p.includes("\0")) return { error: "path contains a NUL byte" };
   const spelled = resolve(p);
@@ -2062,7 +2362,20 @@ function rememberNamedTab(as: string, tab: string): void {
 
 function namedTabOf(as: string): string | undefined { return NAMED_TABS.get(foldWorkerName(as)); }
 
-export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { error: string } {
+/** The allow-list refusal, worded for who is asking. A worker is refused
+ *  `--shared` (see AGENT_SHARED_REFUSAL), so pointing it there is a loop: its
+ *  only way through is somebody who can change the setting. */
+export function profileRefusal(profile: string, list: string[], worker: boolean): string {
+  const head = `profile refused: "${profile}" is not in the allow-list (${list.join(", ")}).`;
+  if (worker) {
+    return `${head} Ask the orchestrator or the person to add "${profile}" to Settings ▸ Browser ▸ Allowed profiles.`;
+  }
+  return `${head}${profilesLift()} Pass --shared (\`shared: true\` on the MCP) to work in the person's own container instead.`;
+}
+
+/** `worker`: the ask comes on an agent's credential, which changes the way
+ *  through a refusal names (see `profileRefusal`). */
+export function parseAsk(op: unknown, body: unknown, opts: { worker?: boolean } = {}): { ask: BrowserAsk } | { error: string } {
   if (!BROWSER_OPS.includes(op as BrowserOp)) return { error: `unknown browser operation` };
   const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
   const args: Record<string, unknown> = {};
@@ -2114,6 +2427,13 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
         } else {
           args.container = "private";
         }
+        /* `lane new --ephemeral --vault NAME`: which vault a first visit of
+           this lane signs in from. Only an ephemeral lane is ever filled. */
+        if (b.vault !== undefined) {
+          if (typeof b.vault !== "string" || !b.vault.trim() || b.vault.length > 128) return { error: "vault must be the name of a vault" };
+          if (args.container !== "ephemeral") return { error: "vault only applies to an ephemeral lane (lane new --ephemeral --vault NAME)" };
+          args.vault = b.vault.trim();
+        }
       } else if (action === "list") {
         args.action = "list";
         if (b.force === true) args.force = true;
@@ -2122,8 +2442,24 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
         args.action = "close";
         args.id = b.id;
         if (b.force === true) args.force = true;
+      } else if (action === "vault") {
+        /* Sign this lane in to one site from the login vault. Only the
+           site's name crosses here; the values stay in Electron main. */
+        if (!isLaneId(b.id)) return { error: "vault needs the lane id" };
+        const site = typeof b.site === "string" ? b.site.trim().toLowerCase() : "";
+        if (!/^[a-z0-9.-]{1,253}$/.test(site)) return { error: "vault needs one site, like acme.test" };
+        if (b.vault !== undefined && (typeof b.vault !== "string" || !b.vault.trim() || b.vault.length > 128)) {
+          return { error: "vault must be a vault name the ambiguous answer listed" };
+        }
+        args.action = "vault";
+        args.id = b.id;
+        args.site = site;
+        if (typeof b.vault === "string") args.vault = b.vault.trim();
+      } else if (action === "vaults") {
+        /* The vault names and their site counts, from the index alone. */
+        args.action = "vaults";
       } else {
-        return { error: "lane action must be one of: new, list, close" };
+        return { error: "lane action must be one of: new, list, close, vault, vaults" };
       }
       break;
     }
@@ -2172,8 +2508,7 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
              and a refusal that says no way through gets worked around. The way
              through is the person's own container, which the list never
              covers. */
-          const msg = `profile refused: "${b.profile}" is not in the allow-list (${list.join(", ")}). `
-            + "Pass --shared (`shared: true` on the MCP) to work in the person's own container instead.";
+          const msg = profileRefusal(b.profile, list, opts.worker === true);
           recordAudit(op as BrowserOp, { profile: b.profile }, false, msg, false, undefined, caller);
           return { error: msg };
         }
@@ -2195,6 +2530,8 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
        * for: "you have to work in the background, in your own container."
        */
       if (b.show === true) args.show = true;
+      /* Which vault a first visit in the agent's own container signs in from. */
+      if (typeof b.vault === "string" && b.vault.trim()) args.vault = b.vault.trim().slice(0, 128);
       /* An ephemeral mint is deliberately blank: the CLI writes the
          template's cookies via CDP onto this tab BEFORE its own follow-up
          `open` navigates it to the real (fully validated) origin, and
@@ -2216,7 +2553,7 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
       const list = allowedOrigins();
       const host = new URL(url).host;
       if (!originAllowed(host, list)) {
-        const msg = `origin refused: ${host} is not in the allow-list (${list.join(", ")})`;
+        const msg = `origin refused: ${host} is not in the allow-list (${list.join(", ")}).${originsLift()}`;
         recordAudit(op as BrowserOp, { url }, false, msg, false, undefined, caller);
         return { error: msg };
       }
@@ -2707,7 +3044,7 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
           let host = "";
           try { const u = new URL(String(b.origin)); if (/^https?:$/.test(u.protocol)) host = u.port ? `${u.hostname}:${u.port}` : u.hostname; } catch { /* checked below */ }
           const list = allowedOrigins();
-          if (!host || !originAllowed(host, list)) return { error: `origin ${String(b.origin)} must be a full http(s) origin in AGENTGLASS_BROWSER_ORIGINS (${list.join(", ")})` };
+          if (!host || !originAllowed(host, list)) return { error: `origin ${String(b.origin)} must be a full http(s) origin in the allow-list (${list.join(", ")}).${originsLift()}` };
           args.origin = b.origin;
         }
         args.answer = b.answer; args.permissions = what;
@@ -2744,7 +3081,7 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
       let host = "";
       try { const u = new URL(b.origin); host = u.port ? `${u.hostname}:${u.port}` : u.hostname; } catch { /* checked below */ }
       if (!host || !originAllowed(host, list)) {
-        return { error: `origin ${b.origin} is not in AGENTGLASS_BROWSER_ORIGINS (${list.join(", ")})` };
+        return { error: `origin ${b.origin} is not in the allow-list (${list.join(", ")}).${originsLift()}` };
       }
       args.origin = b.origin; args.permissions = perms;
       break;
@@ -2906,7 +3243,7 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
         const list = allowedOrigins();
         const host = new URL(url).host;
         if (!originAllowed(host, list)) {
-          const msg = `origin refused: ${host} is not in the allow-list (${list.join(", ")})`;
+          const msg = `origin refused: ${host} is not in the allow-list (${list.join(", ")}).${originsLift()}`;
           recordAudit(op as BrowserOp, { url }, false, msg, false, undefined, caller);
           return { error: msg };
         }
@@ -2940,8 +3277,17 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
           }
           args.until = b.until.trim();
         }
+        /* The handoff's deadline, kept by the panel: a caller that dies (killed,
+           crashed, its socket timed out) must not leave the banner up and the
+           glass lifted for good. Seconds, 1 to 3600, the CLI's own bounds. */
+        if (b.timeoutMs !== undefined) {
+          const n = Number(b.timeoutMs);
+          if (typeof b.timeoutMs !== "number" || !Number.isFinite(n)) return { error: "timeoutMs must be a number of milliseconds" };
+          args.timeoutMs = Math.min(3_600_000, Math.max(1000, Math.round(n)));
+        }
       } else {
         if (b.until !== undefined) return { error: "until goes with the reason that arms the handoff" };
+        if (b.timeoutMs !== undefined) return { error: "timeoutMs goes with the reason that arms the handoff" };
         if (b.check !== undefined) {
           if (b.check !== true) return { error: "check is a flag" };
           args.check = true;
@@ -2954,6 +3300,121 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
           if (b.cancel !== true) return { error: "cancel is a flag" };
           args.cancel = true;
         }
+      }
+      break;
+    }
+    case "guide": {
+      /* Guide mode: start "<why>", run (a plan the server walks), say (new
+         words on the card), next (wait for the person), end (the audit). */
+      const action = b.action;
+      if (action !== "start" && action !== "run" && action !== "say" && action !== "next" && action !== "end") {
+        return { error: 'guide takes action: "start" (with why), "run" (with why, page and plan), "say", "next" or "end"' };
+      }
+      args.action = action;
+      if (action === "run") {
+        if (typeof b.page !== "string" || !b.page) return { error: "guide run needs page: the tab the person is guided on (--page <tab>)" };
+        const plan = parsePlan(b.plan);
+        if ("error" in plan) return { error: plan.error };
+        args.plan = plan.steps;
+      } else if (b.plan !== undefined) {
+        return { error: "plan goes with guide run" };
+      }
+      if (action === "say") {
+        /* A new draft for the card's field (the answer to the person's "Suggest another"), new words, or both. */
+        if (b.suggest !== undefined) {
+          if (typeof b.suggest !== "string" || !b.suggest.trim()) return { error: "suggest is the new draft for the card's field: a non-empty string" };
+          if (b.suggest.length > 2000) return { error: `suggest is ${b.suggest.length} characters; at most 2000 fit on a guide card. Shorten the draft` };
+          args.suggest = b.suggest;
+        }
+        if (b.say !== undefined || args.suggest === undefined) {
+          if (typeof b.say !== "string" || !b.say.trim() || b.say.length > 2000) return { error: "guide say needs say: the card's new words (at most 2000 characters)" };
+          if (!sayHasWords(b.say)) return { error: `guide say ${SAY_NO_WORDS}` };
+          args.say = b.say.trim();
+        }
+      } else if (b.say !== undefined) {
+        return { error: "say goes with guide say (a step's words go with point)" };
+      } else if (b.suggest !== undefined) {
+        return { error: "suggest goes with guide say (a step's first draft goes with point --suggest)" };
+      }
+      if (action === "start" || action === "run") {
+        if (typeof b.why !== "string" || !b.why.trim() || b.why.length > 200 || /[\r\n]/.test(b.why)) {
+          return { error: `guide ${action} needs why: one short line saying what the person is being walked through (at most 200 characters)` };
+        }
+        args.why = b.why.trim();
+      } else if (b.why !== undefined) {
+        return { error: "why goes with guide start or guide run" };
+      }
+      if (b.waitMs !== undefined) {
+        if (action !== "next") return { error: "waitMs goes with guide next" };
+        const n = Number(b.waitMs);
+        if (typeof b.waitMs !== "number" || !Number.isFinite(n)) return { error: "waitMs must be a number of milliseconds" };
+        args.waitMs = Math.min(25_000, Math.max(0, Math.round(n)));
+      }
+      break;
+    }
+    case "point": {
+      /* One step of a guide: where to look, what to do there, and whether the
+         person's click on it is the answer. Only a locator travels, never a value. */
+      if (!okSelector(b.selector)) return { error: "point needs a selector, or an id from an observation" };
+      args.selector = b.selector;
+      /* What the page is about, shown before the person acts (the agent writes
+         it from a read of the page). Data, never markup; it ends on OK. */
+      if (b.summary !== undefined) {
+        if (typeof b.summary !== "string" || !b.summary.trim() || !sayHasWords(b.summary)) return { error: "summary is what the page is about, in words: a non-empty string" };
+        if (b.summary.length > 2000) return { error: `summary is ${b.summary.length} characters; at most 2000 fit on a guide card. Shorten it` };
+        if (b.waitClick === true || (b.wait !== undefined && b.wait !== "ok")) return { error: "a summary step ends on the person's OK, once they have read it: drop --wait-click / --wait-*" };
+        args.summary = b.summary.trim();
+      }
+      const say = b.say === undefined && args.summary ? SUMMARY_SAY : b.say;
+      if (typeof say !== "string" || !say.trim() || say.length > 2000) {
+        return { error: "point needs say: what the person should do there (at most 2000 characters)" };
+      }
+      if (!sayHasWords(say)) return { error: `point: say ${SAY_NO_WORDS}` };
+      args.say = say.trim();
+      /* The exact words the person will paste, shown on the card with a Copy
+         button. Data, never markup; the panel writes it to the clipboard only
+         on the person's own click. Kept as given: a command's lines matter. */
+      if (b.copy !== undefined) {
+        if (typeof b.copy !== "string" || !b.copy.trim()) return { error: "copy is the text the person will paste: a non-empty string" };
+        if (b.copy.length > 2000) return { error: `copy is ${b.copy.length} characters; at most 2000 fit on a guide card. Shorten it, or split it over two steps` };
+        args.copy = b.copy;
+      }
+      /* A draft for a text field, which the card puts in the field only on the
+         person's own click on "Use suggestion". Data, never markup; kept as
+         given so its lines survive. The panel refuses a target that is not a
+         text field. */
+      if (b.suggest !== undefined) {
+        if (typeof b.suggest !== "string" || !b.suggest.trim()) return { error: "suggest is the draft the person may put in the field: a non-empty string" };
+        if (b.suggest.length > 2000) return { error: `suggest is ${b.suggest.length} characters; at most 2000 fit on a guide card. Shorten the draft` };
+        args.suggest = b.suggest;
+      }
+      /* Several nodes match: the one whose text holds this label is pointed. */
+      if (b.text !== undefined) {
+        if (typeof b.text !== "string" || !b.text.trim() || b.text.length > 200) return { error: "text is the label that picks one of several matches (at most 200 characters)" };
+        args.text = b.text.trim();
+      }
+      if (b.waitClick !== undefined) {
+        if (typeof b.waitClick !== "boolean") return { error: "waitClick is a flag" };
+        args.waitClick = b.waitClick;
+      }
+      /* What ends the step: --wait-ok, --wait-click, --wait-nav, --wait-input, --wait-submit. */
+      if (b.wait !== undefined) {
+        if (!GUIDE_WAITS.includes(b.wait as GuideWait)) return { error: `wait is one of ${GUIDE_WAITS.join(", ")}` };
+        if (b.waitClick !== undefined && (b.waitClick === true) !== (b.wait === "click")) return { error: "waitClick and wait disagree: send one" };
+        args.wait = b.wait;
+        args.waitClick = b.wait === "click";
+      }
+      /* What should be true after the person's click: `guide next` answers
+         expected true|false by whether this CSS matches then. Read only. */
+      if (b.expect !== undefined) {
+        if (!okSelector(b.expect)) return { error: "expect is a CSS selector that should match after the click" };
+        args.expect = b.expect;
+      }
+      if (b.step !== undefined) {
+        if (typeof b.step !== "string" || !/^\d{1,3}\/\d{1,3}$/.test(b.step.trim())) return { error: "step is N/M, like 2/4" };
+        const [n, m] = b.step.trim().split("/").map(Number);
+        if (!n || !m || n > m) return { error: "step is N/M with 1 <= N <= M, like 2/4" };
+        args.step = `${n}/${m}`;
       }
       break;
     }
@@ -3829,6 +4290,34 @@ export function parseAsk(op: unknown, body: unknown): { ask: BrowserAsk } | { er
     recordAudit(op as BrowserOp, args, false, msg, false, undefined, caller);
     return { error: msg };
   }
+  /* Guide mode's lock: an act on a tab the person is being guided through is
+     refused for everyone, whatever read-only mode says. See browserGuide.ts.
+     It reads the handoff's list of open verbs (shared/browserHandoff.ts): what
+     may run on a tab handed to the person may run on a guided one, plus the
+     guide's own verbs, which the guide checks by name below. Anything else,
+     a new verb included, is an act. */
+  {
+    const target = typeof args.page === "string" ? args.page
+      : (op === "tab" || op === "closetab") && typeof args.id === "string" ? args.id : undefined;
+    /* `tab <id>` only brings that tab to the front: switching TO a guided tab
+       shows the person the page they are being guided through, and acts on
+       nothing. Closing it is still an act. */
+    const acting = op !== "guide" && op !== "point" && !(op === "tab" && target !== undefined)
+      && (ACT_VERB_SET.has(op as string) || !HANDOFF_OPEN_VERBS.has(op as string) || isActing(op as BrowserOp, args));
+    /* Same "aimed at the tab in front" test as `pageBound` above: an `open`
+       that names a container mints a tab of its own, and a lane's ask goes to
+       the lane's hidden tab, so neither can land on the guided page. `lane`
+       itself (new, list, close, vault, `vault --list`) works on the lane list
+       and the lanes' own hidden tabs, never on a tab of the person's, so a
+       guide on one tab must not refuse it. */
+    const aimedInFront = !pageOps.has(op as string) && args.lane === undefined && op !== "lane"
+      && !(op === "open" && typeof args.profile === "string");
+    const why = guideLock(op as string, acting, target, aimedInFront, caller.as);
+    if (why) {
+      recordAudit(op as BrowserOp, args, false, why, false, undefined, caller);
+      return { error: why };
+    }
+  }
   if (claim) noteContainer(claim.name, claim.identity);
   return { ask: { id: nextId(), op: op as BrowserOp, args } };
 }
@@ -4249,7 +4738,7 @@ export async function runLanes(
    *  without it a lane is anonymous and the panel's ownership check, which
    *  reads an absent `as` as "cannot tell", allows it. `worker` files each
    *  reply's page id under the worker that opened it. */
-  opts: { observe?: boolean; caller?: Record<string, unknown>; worker?: string } = {},
+  opts: { observe?: boolean; caller?: Record<string, unknown>; worker?: string; roots?: unknown } = {},
 ): Promise<{ ok: boolean; lanes: Array<Record<string, unknown>> }> {
   const out = await Promise.all(lanes.map(async (lane, i) => {
     /* The page id rides on every step of its lane, so a caller writes it once
@@ -4346,7 +4835,7 @@ export function parseScrape(b: Record<string, unknown>, caller?: Record<string, 
     if (!url) return { error: `${String(raw).slice(0, 200)}: url must be an http(s) address` };
     const host = new URL(url).host;
     if (!originAllowed(host, list)) {
-      const msg = `origin refused: ${host} is not in the allow-list (${list.join(", ")})`;
+      const msg = `origin refused: ${host} is not in the allow-list (${list.join(", ")}).${originsLift()}`;
       recordAudit("newtab", { url }, false, msg, false, undefined, caller);
       return { error: msg };
     }
@@ -4427,8 +4916,12 @@ export async function runSteps(
    *  its own; a single `do` passes the one its steps carry.
    *
    *  `as`, `how` and `pageExplicit` are the CALLER, and they have to reach
-   *  every sub-ask or the batch is anonymous — see the note in the loop. */
-  opts: { observe?: boolean; page?: string; caller?: Record<string, unknown>; worker?: string } = {},
+   *  every sub-ask or the batch is anonymous — see the note in the loop.
+   *
+   *  `roots` are the turn's writable roots, when a turn asked: a `do` is where
+   *  a `cdp` step skips the door's own `cdp` branch, so the rule is made again
+   *  here, where the step becomes an ask. */
+  opts: { observe?: boolean; page?: string; caller?: Record<string, unknown>; worker?: string; roots?: unknown } = {},
 ): Promise<{ ok: boolean; steps: Array<Record<string, unknown>>; stoppedAt?: number }> {
   const out: Array<Record<string, unknown>> = [];
   /* Whether an earlier step opened a tab in the worker's own container: the
@@ -4460,9 +4953,16 @@ export async function runSteps(
        after that, the page this `do` minted; then the caller's (a lane's). */
     const basePage = typeof args.page === "string" && args.page ? args.page : ownPage ?? opts.page;
     const addressed = { ...(opts.caller ?? {}), ...(basePage ? { page: basePage } : {}), ...args };
-    const parsed = parseAsk(step.op, addressed);
+    const parsed = parseAsk(step.op, addressed, { worker: !!opts.worker });
     if ("error" in parsed) {
       out.push({ op: step.op, ok: false, error: parsed.error });
+      return { ok: false, steps: out, stoppedAt: i };
+    }
+    /* A step is a verb of its own: a `cdp` here never met the door's `cdp`
+       branch, so the download rule is made where the step becomes an ask. */
+    const refusedPath = downloadPathRefusal(parsed.ask.args as Record<string, unknown>, opts.roots);
+    if (refusedPath) {
+      out.push({ op: step.op, ok: false, error: refusedPath });
       return { ok: false, steps: out, stoppedAt: i };
     }
     /* The registry as it stands NOW: a page an earlier step opened is the
@@ -4616,22 +5116,103 @@ async function observeTracked(ask: BrowserAsk, send: (a: BrowserAsk) => Promise<
 /* The one door a worker's reply comes through: every route returns what this
    returns, so scoping lives here rather than in each route's verb list. The
    worker is read before the wait — that map entry is consumed on the answer. */
+/**
+ * "Sign agents out when the task ends" (finding 4): the agent said `done`, so
+ * every lane it owns that was signed in from a vault with that setting on is
+ * closed. Closing is the sign-out: main wipes the jar and logs it. Returns the
+ * lanes closed.
+ */
+export async function signOutVaultLanes(as: string, worker: boolean, windowOver = false): Promise<string[]> {
+  const mine = worker ? listOwnedLanes(as) : listLanes(as);
+  const closed: string[] = [];
+  for (const l of mine) {
+    /* A pull still waiting on the person's OK when the worker's window ends:
+       nobody is left to use the login, so the lane closes and main's
+       laneGone() check after the yes fills nothing (sec 4). */
+    const pending = windowOver && (vaultPulling.get(l.id) ?? 0) > 0;
+    if (!pending && (!vaultSignOut.has(l.id) || !vaultLanes.has(l.id))) continue;
+    const r = await closeLane(l.id, as, false, worker).catch(() => ({ ok: false }));
+    if (!r.ok) continue;
+    forgetVaultLane(l.id);
+    closed.push(l.id);
+    recordAudit("lane", { action: "signout", id: l.id }, true, undefined, false, undefined, { as });
+  }
+  /* The task is over (done, or the agent's session ended): the vault's
+     cookies come out of the agent's own containers too, exactly those. */
+  await wipeSignIns(signInsOf(as), windowOver ? "session ended" : "done").catch(() => false);
+  /* Whatever the wipe said, the next task starts over: a visit is tried again. */
+  forgetVisitsOf(as);
+  return closed;
+}
+
+/* The lane rule, for an agent's own `--as` container: while the vault's
+   sign-ins are in it, a verb that could read them back out is refused. Raw JS
+   there can read and act as the person. Never for the person's Default. */
+function containerVaultRefusal(ask: BrowserAsk, worker: string | undefined): string | null {
+  const as = worker ?? (typeof ask.args.as === "string" && ask.args.as.trim() ? ask.args.as : undefined);
+  if (!as || as.trim().toLowerCase() === SHARED_KEY) return null;
+  /* `do` needs no case of its own: each step reaches askBrowser as its own verb. */
+  const a = ask.args;
+  if (!VAULT_LANE_REFUSED.has(ask.op) || (typeof a.lane === "string" && a.lane) || a.active === true) return null;
+  const page = typeof a.page === "string" && a.page ? a.page : undefined;
+  /* The person's own tab (shared) is fine, but only when no tab is named:
+     a named tab is judged by its container. */
+  if (!page && (a.shared === true || a.how === "shared")) return null;
+  /* A known tab is judged by its own container; with no tab named, or one
+     the server never saw, the agent's sign-ins anywhere count. */
+  const box = tabContainer(page);
+  const held = box ? signInsWhere((s) => s.container === box).length > 0 : signInsOf(as).length > 0;
+  if (!held) return null;
+  return `${ask.op} is refused while this container holds sign-ins from the login vault: it could read the login back out. Use the reading verbs (read, text, markdown, interactive) and act on the page instead; the sign-ins go when you say done`;
+}
+
 export async function askBrowser(ask: BrowserAsk): Promise<BrowserReply> {
   const worker = ASK_WORKER.get(ask.id)?.worker;
+  const refused = containerVaultRefusal(ask, worker);
+  if (refused) {
+    recordAudit(ask.op, ask.args, false, refused);
+    return { ok: false, error: refused };
+  }
+  if (ask.op === "done") {
+    const reply = await askBrowserInner(ask, worker);
+    const as = worker ?? (typeof ask.args.as === "string" && ask.args.as ? ask.args.as : undefined);
+    if (as) await signOutVaultLanes(as, !!worker).catch(() => []);
+    return reply;
+  }
+  return askBrowserInner(ask, worker);
+}
+
+async function askBrowserInner(ask: BrowserAsk, worker: string | undefined): Promise<BrowserReply> {
   /* The container a worker's mint is sent to, written down here rather than
      trusted from the body: the panel reads an absent or empty profile as the
      person's container, so neither may cross this door from a worker. The gate
      already refuses them; this is the second layer, on the one path every ask
      takes. */
   const laneAddressed = typeof ask.args.lane === "string" && !!ask.args.lane.trim();
-  const sent = worker && !laneAddressed && mintsInAContainer(ask.op, ask.args)
-    ? { ...ask, args: { ...ask.args, profile: agentContainerName(worker) } }
-    : ask;
+  /* A worker's `show` never takes the person's view: dropped before anything
+     acts on it, and said in the answer. An agent's container once replaced
+     the person's pane; lanes are seen beside, in the overview, never instead. */
+  const workerShow = worker ? workerShowNote(ask) : null;
+  const unshown = workerShow ? { ...ask, args: Object.fromEntries(Object.entries(ask.args).filter(([k]) => k !== "show")) } : ask;
+  const sent = worker && !laneAddressed && mintsInAContainer(unshown.op, unshown.args)
+    ? { ...unshown, args: { ...unshown.args, profile: agentContainerName(worker) } }
+    : unshown;
   try {
+    const checking = worker ? guideReadRefusal(worker, sent, (a) => (asker ? asker(a) : askWithRetry(a))) : null;
+    if (checking) {
+      const why = await checking;
+      if (why) return { ok: false, error: why };
+    }
     const reply = await askPanel(sent);
     if (!worker) return reply;
     if (ask.op === "health") return workerHealth(reply);
-    return WORKER_PAGE_REPLY_OPS.has(ask.op) ? workerReply(worker, reply) : reply;
+    const scoped = WORKER_PAGE_REPLY_OPS.has(ask.op) ? workerReply(worker, reply) : reply;
+    if (!workerShow || !scoped.ok) return scoped;
+    /* An answer scoped down to nothing still says why nothing came forward. */
+    if (Array.isArray(scoped.value) && scoped.value.length === 0) return { ...scoped, value: { ...workerShow } };
+    return scoped.value && typeof scoped.value === "object" && !Array.isArray(scoped.value)
+      ? { ...scoped, value: { ...(scoped.value as Record<string, unknown>), ...workerShow } }
+      : scoped;
   } finally {
     /* No window, a composed answer, a timeout before parking: an ask that never
        reached `settleBrowser` must not stay in the map. */
@@ -4641,6 +5222,9 @@ export async function askBrowser(ask: BrowserAsk): Promise<BrowserReply> {
 
 async function askPanel(ask: BrowserAsk): Promise<BrowserReply> {
   if (ask.op === "observe") return observeTracked(ask, (a) => (asker ? asker(a) : askWithRetry(a)));
+  /* Before the stand-in, like `observe`: the guide's state lives here, and a
+     test of it is a test of this composition against a fake panel. */
+  if (ask.op === "guide" || ask.op === "point") return composeGuide(ask, (a) => (asker ? asker(a) : askWithRetry(a)));
   if (asker) return asker(ask);
   /* robots.txt, when the operator asked for it — see robots.ts for why it is
      off by default. Here rather than in `parseAsk` because it is a fetch, and
@@ -4675,7 +5259,675 @@ async function askPanel(ask: BrowserAsk): Promise<BrowserReply> {
     return composeProfiles(ask);
   }
   if (ask.op === "profiles" && typeof ask.args.drop === "string") return composeDrop(ask);
-  return askWithRetry(ask);
+  /* Sign-in on a first visit: awaited BEFORE the navigation is sent, so the
+     first request already carries the login. With the setting off main
+     answers `off` and the reply is exactly a plain `open`'s. */
+  const visiting = visitSignIn(ask);
+  const visit = visiting ? await visiting : null;
+  if (visit?.fail) {
+    recordAudit(ask.op, ask.args, false, visit.fail.error);
+    return visit.fail;
+  }
+  const reply = await askWithRetry(ask);
+  if (ask.op === "closetab" && reply.ok) await afterTabClose(ask, reply).catch(() => undefined);
+  if (!reply.ok || !reply.value || typeof reply.value !== "object" || Array.isArray(reply.value)) return reply;
+  /* The panel's record of the container (id, minted, agentMade) is the relay's, never the agent's. */
+  const { container: _c, minted: _m, agentMade: _a, ...value } = reply.value as Record<string, unknown>;
+  const rv = reply.value as object;
+  const plain = "container" in rv || "minted" in rv || "agentMade" in rv ? { ...reply, value } : reply;
+  /* A lane's own outcome; or, in a container, its own sign-in or the sentence why not. */
+  const page: { title?: string } = {};
+  const said = visit?.vault ?? (visiting ? undefined : await containerVisit(ask, reply.value as Record<string, unknown>, page));
+  const shown = laneShowNote(ask);
+  /* The tab list is the panel's, read before the page had a title: its row for
+     this tab carries the host. Once the loaded page's title is known the row says it too. */
+  const rows = page.title && Array.isArray(value.tabs) ? (value.tabs as unknown[]).map((r) => {
+    const row = r && typeof r === "object" ? r as Record<string, unknown> : null;
+    return row && row.id === value.id ? { ...row, title: page.title } : r;
+  }) : undefined;
+  return said || shown || page.title
+    ? { ...plain, value: { ...value, ...(page.title ? { title: page.title } : {}), ...(rows ? { tabs: rows } : {}), ...(said ? { vault: said } : {}), ...shown } }
+    : plain;
+}
+
+/** `open|newtab --show` from a worker's credential: a no-op, said in one sentence. */
+function workerShowNote(ask: BrowserAsk): { shown: false; why: string } | null {
+  if ((ask.op !== "open" && ask.op !== "newtab") || ask.args.show !== true) return null;
+  return { shown: false, why: "an agent's page never takes the person's view; it stays in the background, and the person sees it in the Browser overview" };
+}
+
+/* The person's own Browser panels: a registration that hosts no lane. */
+function personPanels(): number {
+  browserReadyCount();
+  return [...ready.values()].filter((r) => r.lanes.length === 0).length;
+}
+
+/**
+ * `open --lane L --show`: a lane's tab lives in a window of its own, so the
+ * panel that honours `show` on a mint never sees this ask. The relay tells the
+ * person's pane instead, and says in the answer whether there was a pane to
+ * tell: the CLI used to print "brought forward" before it had asked anybody.
+ */
+function laneShowNote(ask: BrowserAsk): { shown: boolean; marked?: boolean; why?: string } | null {
+  if ((ask.op !== "open" && ask.op !== "newtab") || ask.args.show !== true || typeof ask.args.lane !== "string") return null;
+  if (personPanels() === 0) {
+    return { shown: false, why: "the Browser pane is not open in the agentglass window, so nothing could bring this lane forward" };
+  }
+  /* Never over the person's page, and never "shown": the pane may be hidden
+     behind another view, and the watch opens only from the person's click.
+     The lane is marked in the Browser overview for them to open. */
+  return showLane(ask.args.lane)
+    ? { shown: false, marked: true, why: "an agent's page never takes the person's view; this lane is marked in the Browser overview for them to open" }
+    : { shown: false, why: noLaneError(ask.args.lane) };
+}
+
+/** The name the person knows a vault by ("Zen — Ubuntu"), from its id or the
+ *  name an agent typed; the name itself when the index has nothing better. */
+export function vaultDisplayName(nameOrId: string): string {
+  let vaults: Record<string, { label: string }>;
+  try { vaults = readIndex().vaults; } catch { return nameOrId; }
+  const id = vaults[nameOrId] ? nameOrId : resolveVaultName(nameOrId, vaults);
+  return (id && vaults[id]?.label) || nameOrId;
+}
+
+/** The lanes as the person's Browser pane shows them: a vault lane carries its
+ *  box's display name, and its id beside it. */
+export function paneLaneRows(): LaneRow[] {
+  return listLanes().map((l) => {
+    if (!l.vault) return l;
+    let id: string | undefined;
+    try { const v = readIndex().vaults; id = v[l.vault] ? l.vault : resolveVaultName(l.vault, v); } catch { /* no vault yet */ }
+    return { ...l, vault: vaultDisplayName(l.vault), ...(id ? { vaultId: id } : {}) };
+  });
+}
+
+/**
+ * Decision B: the first `open`/`newtab` of a site in a container the agent's
+ * own ask made (the panel's `minted`, by id) signs it in from the vault, after
+ * the page is there, then reloads it. Never the person's Default, never a
+ * container the person made or named. The cookies set are written down (name,
+ * domain, path) and removed when the task ends. Undefined = nothing to say.
+ */
+async function containerVisit(ask: BrowserAsk, v: Record<string, unknown>, page?: { title?: string }): Promise<Record<string, unknown> | undefined> {
+  if (ask.op !== "open" && ask.op !== "newtab") return undefined;
+  const a = ask.args as Record<string, unknown>;
+  if ((typeof a.lane === "string" && a.lane) || laneScope.getStore()?.lane) return undefined;
+  if (a.shared === true || a.active === true || a.how === "shared") return undefined;
+  const worker = ASK_WORKER.get(ask.id)?.worker;
+  const as = worker ?? (typeof a.as === "string" && a.as.trim() ? a.as : undefined);
+  const tab = typeof v.id === "string" ? v.id : typeof v.tab === "string" ? v.tab : typeof a.page === "string" ? a.page : "";
+  const fromReply = typeof v.container === "string";
+  const container = fromReply ? v.container as string : tabContainer(tab);
+  const name = typeof v.profile === "string" ? v.profile : typeof a.profile === "string" ? a.profile : "";
+  /* The flag lives on the profile itself: an id is a slug of a name, so a
+     container the person makes after an agent's was removed can get the same
+     id. Without the flag it is the person's: never signed in, never wiped. A
+     navigation in a known tab carries no container: the tab's open said it. */
+  const agentMade = fromReply ? v.agentMade === true : tabAgentMade(tab);
+  if (tab && container) noteTabContainer(tab, container, agentMade);
+  if (container && fromReply && !agentMade) disownContainer(container);
+  if (container && agentMade && as && as.toLowerCase() !== SHARED_KEY) {
+    if (v.minted === true) noteMadeContainer(container, name, foldWorkerName(as), true);
+    /* A worker's reserved container is its own by name: nobody else can make one. */
+    else if (worker && isAgentContainer(a.profile) && containerOwner(String(a.profile)) === foldWorkerName(worker)) {
+      noteMadeContainer(container, name || String(a.profile), foldWorkerName(worker));
+    }
+  }
+  if (!agentMade || !madeByAgent(container, as)) return containerVaultNote(ask);
+  if (typeof a.url !== "string") return undefined;
+  let site = "";
+  try {
+    const u = new URL(a.url);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return undefined;
+    site = siteOf(u.hostname);
+  } catch { return undefined; }
+  if (!/^[a-z0-9.-]{1,253}$/.test(site) || !tryContainerSite(container!, site)) return undefined;
+  const vault = typeof a.vault === "string" && a.vault ? a.vault : undefined;
+  const r = await askOnce({
+    id: nextId(), op: "lane",
+    args: {
+      vaultPull: {
+        container, site, agent: as ?? "", ...(vault ? { vault } : {}),
+        /* Signed in = the vault's sign-in is still on this book, not "the jar has a cookie". */
+        held: signInsWhere((s) => s.container === container && s.site === site).length > 0,
+        onVisit: true, budgetMs: VAULT_VISIT_BUDGET_MS, deadlineAt: Date.now() + VAULT_VISIT_BUDGET_MS,
+      },
+    },
+  }, VAULT_VISIT_MS);
+  const got = r.ok && r.value && typeof r.value === "object" ? r.value as Record<string, unknown> : null;
+  if (!got) return { signedIn: false, site, why: "the sign-in did not finish in time; the page is signed out; ask with browser_vault" };
+  if (got.ok === true) {
+    const cookies = Array.isArray(got.cookies) ? got.cookies as ContainerSignIn["cookies"] : [];
+    if (cookies.length) recordSignIn({ container: container!, name, owner: foldWorkerName(as!), site, cookies });
+    if (!cookies.length) return { signedIn: false, site, why: "the vault had no cookie for this site that could go in; ask with browser_vault" };
+    /* The page loaded before the cookies went in: once more, signed in. */
+    const again = await askWithRetry({ id: nextId(), op: "reload", args: { page: tab, ...(as ? { as } : {}) } }).catch(() => undefined);
+    /* The open's own answer was read before the login went in: the page's title is the reloaded one's. */
+    const t = again?.ok && again.value && typeof again.value === "object" ? (again.value as { title?: unknown }).title : undefined;
+    if (page && typeof t === "string" && t.trim()) page.title = t;
+    const label = typeof got.label === "string" && got.label ? got.label : typeof got.vault === "string" ? vaultDisplayName(got.vault) : undefined;
+    /* The same field a lane's sign-in carries: the name the person knows, and the id beside it. */
+    const vid = typeof got.vault === "string" && got.vault ? got.vault : undefined;
+    return { signedIn: true, site, ...(label ? { vault: label } : {}), ...(vid ? { vaultId: vid } : {}) };
+  }
+  const code = typeof got.code === "string" ? got.code : "";
+  if (VISIT_QUIET.has(code)) return undefined;
+  /* Never silent when a pull was asked: the sign-in is already on record. */
+  if (code === "has-login") {
+    const label = typeof got.label === "string" && got.label ? got.label : typeof got.vault === "string" && got.vault ? vaultDisplayName(got.vault) : undefined;
+    const vid = typeof got.vault === "string" && got.vault ? got.vault : undefined;
+    return { signedIn: true, site, already: true, ...(label ? { vault: label } : {}), ...(vid ? { vaultId: vid } : {}) };
+  }
+  if (code === "ambiguous") {
+    const names = (Array.isArray(got.vaults) ? got.vaults : []).map((x) => {
+      const o = x && typeof x === "object" ? x as Record<string, unknown> : null;
+      return typeof x === "string" ? x : o && typeof o.label === "string" && o.label ? o.label : o && typeof o.id === "string" ? o.id : "";
+    }).filter(Boolean);
+    return {
+      signedIn: false, site,
+      why: `${site} is in more than one vault and none is the default: ask the person which, then open it again with --vault NAME`
+        + `${names.length ? `, one of: ${names.map((x) => JSON.stringify(x)).join(", ")}` : ""}; or the person sets a default vault in Settings ▸ Browser ▸ Login vault`,
+    };
+  }
+  return { signedIn: false, site, why: typeof got.error === "string" && got.error ? got.error : "the sign-in failed; ask with browser_vault" };
+}
+
+/**
+ * Remove exactly the cookies these sign-ins put in, one ask per sign-in. A
+ * sign-in the window could not clean stays in the book for the next try (the
+ * next task end, or the next start). True when every one went.
+ */
+async function wipeSignIns(list: readonly ContainerSignIn[], why: string): Promise<boolean> {
+  let all = true;
+  for (const s of list) {
+    const r = await askOnce({
+      id: nextId(), op: "lane",
+      /* `sweep`: the site's other cookies in this agent's own container go too
+         (the page rotates the login, so the listed names alone left it signed in). */
+      args: { vaultWipe: { container: s.container, cookies: s.cookies, site: s.site, agent: s.owner, why, sweep: true } },
+    }, VAULT_VISIT_MS).catch(() => ({ ok: false } as BrowserReply));
+    const v = r.ok && r.value && typeof r.value === "object" ? r.value as { ok?: unknown; code?: unknown; vaultLeft?: unknown } : null;
+    /* The window re-read the jar and counted the cookies the vault put in (same name, domain, path and value) that are still there: any means the wipe did not hold; keep the record for a retry. A page's own cookie of the same name does not count. */
+    const stillIn = typeof v?.vaultLeft === "number" && v.vaultLeft > 0;
+    /* `vaultLeft: null` = the window had no book to check against: it cannot prove the cookies are gone, so the record stays and the next task end retries. */
+    const unknown = v?.ok === true && v.vaultLeft === null;
+    if (v?.ok === true && !stillIn && !unknown) dropSignIns([s]);
+    else if (v?.ok === true) all = false;
+    /* The window holds a person's container under that id now: the record
+       goes, the person's cookies stay. */
+    else if (v?.code === "not-agent") disownContainer(s.container);
+    else all = false;
+  }
+  return all;
+}
+
+
+/** An agent's last tab in a container closed: that container's sign-ins come out. */
+async function afterTabClose(ask: BrowserAsk, reply: BrowserReply): Promise<void> {
+  const closed = typeof ask.args.page === "string" ? ask.args.page : typeof ask.args.id === "string" ? ask.args.id : "";
+  const gone = tabContainer(closed);
+  if (closed) forgetTab(closed);
+  /* A tab this server never saw (closed by --index) names no container: wipe nothing. */
+  if (!gone) return;
+  const mine = signInsWhere((s) => s.container === gone);
+  if (!mine.length || !Array.isArray(reply.value)) return;
+  /* A row names its container by name or id; either one still open keeps it. */
+  const open = new Set((reply.value as TabRow[]).flatMap((r) => {
+    const t = r as unknown as Record<string, unknown>;
+    const ids = [typeof t.profile === "string" ? t.profile.toLowerCase() : "", typeof t.id === "string" ? tabContainer(t.id) ?? "" : ""];
+    return ids.filter(Boolean);
+  }));
+  const left = mine.filter((s) => !open.has(s.container) && !open.has(s.name.toLowerCase()));
+  if (left.length) await wipeSignIns(left, "last tab closed");
+}
+
+/* Main's answers a sign-in on visit says nothing about: the setting is off,
+   the vault has no login for the site, or the lane already holds one. */
+const VISIT_QUIET: ReadonlySet<string> = new Set(["off", "none"]);
+
+/**
+ * The first `open`/`newtab` of a site in an EPHEMERAL lane asks main to sign
+ * the lane in from the vault (main decides whether the setting is on; the
+ * server cannot read it). Once per lane per site, whatever the outcome. Null
+ * when there is nothing to do; `vault` is the field the reply gains; `fail`
+ * means the lane is gone and nothing is navigated.
+ */
+/* Not `async`: an ask with nothing to sign in must reach `askOnce` in the same
+   tick, parked before its caller's next line runs. An `await` of a null here
+   let a window drop, or a second ask, land before the first was parked. */
+function visitSignIn(ask: BrowserAsk): Promise<VisitResult> | null {
+  if (ask.op !== "open" && ask.op !== "newtab") return null;
+  const scoped = laneScope.getStore();
+  const lane = typeof ask.args.lane === "string" && ask.args.lane ? ask.args.lane : scoped?.lane;
+  if (!lane) return null;
+  /* Only `ephemeral`: in memory, wiped at close. Named, private and the
+     person's own container are never filled. */
+  const rec = laneRecord(lane);
+  if (!rec || rec.container !== "ephemeral") return null;
+  if (typeof ask.args.url !== "string") return null;
+  let host = "";
+  try {
+    const u = new URL(ask.args.url);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    host = u.hostname;
+  } catch { return null; }
+  const site = siteOf(host);
+  if (!/^[a-z0-9.-]{1,253}$/.test(site)) return null;
+  /* The caller askOnce will place: a lane this caller may not drive is
+     refused there, with its own sentence, and nothing is pulled into it. */
+  const owner = ASK_WORKER.get(ask.id)?.worker ?? scoped?.owner;
+  const as = owner ?? (typeof ask.args.as === "string" && ask.args.as ? ask.args.as : undefined) ?? scoped?.as;
+  if (laneRefusal(lane, as, false, typeof owner === "string" && !!owner.trim())) return null;
+  /* Two first opens of one lane+site at once: the second waits for the
+     sign-in the first started, so neither navigates before it is done. */
+  const key = `${lane}\n${site}`;
+  const running = VISIT_RUNNING.get(key);
+  if (running) return running;
+  /* A vault the open names wins over the lane's own, and lets a re-open
+     after an ambiguous (or failed) first visit pull again. */
+  const named = typeof ask.args.vault === "string" && ask.args.vault.trim() ? ask.args.vault.trim() : undefined;
+  if (!tryVisitSite(lane, site, !!named)) return null;
+  const p = visitPull(lane, site, named ?? rec.vault, as, owner).finally(() => VISIT_RUNNING.delete(key));
+  VISIT_RUNNING.set(key, p);
+  return p;
+}
+
+/* Container + site pairs already told they are not signed in, so the note is said once each. */
+const CONTAINER_NOTED = new Set<string>();
+
+/**
+ * An `open`/`newtab` in an agent's own `--as` container (not a lane): that
+ * container is a `persist:` partition on disk, and task-end sign-out closes
+ * only lanes, so it is NEVER signed in from the vault. The first visit of each
+ * site says so, with the command that gives a signed-in lane. The person's
+ * Default container (no identity, `--shared`) gets nothing.
+ */
+function containerVaultNote(ask: BrowserAsk): Record<string, unknown> | undefined {
+  if (ask.op !== "open" && ask.op !== "newtab") return undefined;
+  const a = ask.args as Record<string, unknown>;
+  if ((typeof a.lane === "string" && a.lane) || laneScope.getStore()?.lane) return undefined;
+  if (a.shared === true || a.active === true || a.how === "shared") return undefined;
+  const named = (v: unknown) => typeof v === "string" && !!v.trim() && v.trim().toLowerCase() !== SHARED_KEY;
+  const box = named(a.profile) ? String(a.profile) : named(a.as) && a.profile === undefined ? String(a.as) : "";
+  if (!box || typeof a.url !== "string") return undefined;
+  let site = "";
+  try {
+    const u = new URL(a.url);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return undefined;
+    site = siteOf(u.hostname);
+  } catch { return undefined; }
+  const key = `${containerOwner(box).toLowerCase()}\n${site}`;
+  if (CONTAINER_NOTED.has(key)) return undefined;
+  if (CONTAINER_NOTED.size >= 5000) CONTAINER_NOTED.clear();
+  CONTAINER_NOTED.add(key);
+  return {
+    signedIn: false, site,
+    why: "this container was not made by your own open (it is the person's, or was made before this server started), so it is not signed in from the vault; "
+      + `for a signed-in one open it in a new container of your own (--as <new-name>), or run lane new --ephemeral --vault "<name>", then open ${a.url} --lane <id>`,
+  };
+}
+
+type VisitResult = { vault?: Record<string, unknown>; fail?: BrowserReply };
+/* The on-visit sign-in running now, by lane and site. */
+const VISIT_RUNNING = new Map<string, Promise<VisitResult>>();
+
+async function visitPull(lane: string, site: string, vault: string | undefined, as: string | undefined, owner: string | undefined): Promise<VisitResult> {
+  const r = await composeVaultPull({
+    id: nextId(), op: "lane", args: { action: "vault", id: lane, site, ...(vault ? { vault } : {}) },
+  }, as, typeof owner === "string" && !!owner.trim(), true);
+  if (r.ok) {
+    markVisitSigned(lane, site);
+    const v = r.value && typeof r.value === "object" ? r.value as Record<string, unknown> : {};
+    /* The box as the person named it, not main's internal id; the id stays beside it. */
+    return { vault: { signedIn: true, site, ...(typeof v.vault === "string" ? { vault: vaultDisplayName(v.vault), vaultId: v.vault } : {}) } };
+  }
+  /* The lane is gone (main answered `closed`, or a sensitive answer with no
+     grant closed it): the `open` fails as one on a closed lane does. */
+  const code = (r.value as { code?: unknown } | undefined)?.code;
+  if (code === "closed") return { fail: { ok: false, error: noLaneError(lane) } };
+  if (!laneKnown(lane)) return { fail: { ok: false, error: r.error ?? noLaneError(lane) } };
+  if (typeof code === "string" && VISIT_QUIET.has(code)) return {};
+  return { vault: { signedIn: false, site, why: r.error ?? "the sign-in failed; ask with browser_vault" } };
+}
+
+/**
+ * Guide mode, composed here because the guide's state is the relay's: the
+ * lock in `parseAsk` reads it, and the audit `guide end` returns is built from
+ * what crossed this door. The panel draws the bubble and waits for the
+ * person; it is told which tab, and which step, every time.
+ */
+async function composeGuide(ask: BrowserAsk, send: (a: BrowserAsk) => Promise<BrowserReply>): Promise<BrowserReply> {
+  const as = typeof ask.args.as === "string" ? ask.args.as : "";
+  const page = typeof ask.args.page === "string" ? ask.args.page : undefined;
+  const verb = ask.op === "point" ? "point" : `guide ${String(ask.args.action)}`;
+  const on = (tab: string, extra: Record<string, unknown> = {}) => send({ ...ask, args: { ...ask.args, page: tab, ...extra } });
+  if (ask.op === "guide" && (ask.args.action === "start" || ask.args.action === "run")) {
+    const isRun = ask.args.action === "run";
+    let tab = page;
+    /* A worker guides only the PERSON's tab (Settings ▸ Browser ▸ Worker verbs ▸
+       Guide the person): the tab's row must say the default container. */
+    const worker = ASK_WORKER.get(ask.id)?.worker;
+    let rows: TabRow[] | undefined;
+    if (!tab || worker) {
+      const t = await send({ id: nextId(), op: "tabs", args: {} });
+      if (!t.ok) return t;
+      rows = tabRows(t.value);
+    }
+    if (!tab) {
+      /* No tab named: the one in front, which is the one the person is looking at. */
+      tab = activeBlock(rows ?? [])?.id;
+      if (!tab) return { ok: false, error: "there is no tab to guide: open the page first (open <url>), then guide start" };
+    }
+    if (worker) {
+      const why = personTabRefusal(worker, tab, rows ?? []);
+      if (why) return { ok: false, error: why };
+    }
+    const st = startGuide(tab, as, String(ask.args.why));
+    if ("error" in st) return { ok: false, error: st.error };
+    /* The person is shown the guided page: a guide on a tab behind another one
+       points at nothing they can see, and they cannot click what they cannot see. */
+    const front = await toFront(tab, send);
+    /* `agent` names who guides: the panel shows it, so the person sees which worker is talking. */
+    const r = front.ok ? await on(tab, { action: "start", activity: guideActivity(tab, "start", { say: st.guide.why, ...(as ? { agent: as } : {}), ...(isRun ? { run: true } : {}) }) }) : front;
+    if (!r.ok) {
+      /* Never shown, so never a guide: the lock comes off at once. */
+      finishGuide(st.guide, "agent");
+      return r;
+    }
+    if (isRun) {
+      const steps = ask.args.plan as PlanStep[];
+      const run = startRun(st.guide, steps, worker);
+      const d = await drawRunStep(st.guide, send);
+      if (!d.ok) { finishGuide(st.guide, "agent"); return d; }
+      const lint = lintPlan(steps);
+      return { ok: true, value: {
+        tab, why: st.guide.why, guiding: true, running: true, steps: run.steps.length,
+        startedAt: new Date(st.guide.startedAt).toISOString(),
+        ...(lint.length ? { warnings: lint } : {}),
+        next: "guide next, again and again: each call returns the run's next event in order (step, back, navigated, input, submit, lost, resumed, run-done). guide end returns the audit. Acts on this tab are refused until guide end.",
+      } };
+    }
+    return { ok: true, value: {
+      tab, why: st.guide.why, guiding: true, startedAt: new Date(st.guide.startedAt).toISOString(),
+      next: 'point <selector> --say "<what to do there>" [--wait-click], then guide next. Acts on this tab are refused until guide end.',
+    } };
+  }
+  const g = guideFor(as, page);
+  if (!g) {
+    const gone = takeEnded(as, ask.args.action !== "end");
+    if (gone && ask.args.action === "end") return { ok: true, value: guideAudit(gone) };
+    if (gone) return { ok: false, error: `the guide has ended (${gone.endedBy === "stop" ? "the person pressed Stop" : gone.endedBy === "takeover" ? "the person took the tab over" : gone.endedBy === "closed" ? "the tab was closed" : gone.endedBy === "site" ? "the tab left the granted site, or the grant ended" : "it was idle too long"}): guide end returns the audit` };
+    return { ok: false, error: `no guide is on${page ? ` in ${page}` : ""}: guide start "<why>" first` };
+  }
+  if (!sameCaller(g.as, as)) return { ok: false, error: othersRefusal(g, verb) };
+  /* A worker's grant is for one site: a tab that moved off it, or a grant that
+     ran out, ends the guide. `guide end` still collects the audit. */
+  const worker = ASK_WORKER.get(ask.id)?.worker;
+  if (worker && ask.args.action !== "end") {
+    const t = await send({ id: nextId(), op: "tabs", args: {} });
+    if (!t.ok) return t;
+    const why = personTabRefusal(worker, g.tab, tabRows(t.value));
+    if (why) return { ok: false, error: await endForSite(g, why, send) };
+  }
+  if (ask.op === "guide" && ask.args.action === "say") {
+    const say = typeof ask.args.say === "string" ? ask.args.say : undefined;
+    const suggest = typeof ask.args.suggest === "string" ? ask.args.suggest : undefined;
+    const n = sayCurrent(g, say, suggest);
+    if (n === undefined) return { ok: false, error: "there is no card to change yet: point first" };
+    const r = await on(g.tab, { activity: guideActivity(g.tab, "say", { ...(say !== undefined ? { say } : {}), ...(suggest !== undefined ? { suggest } : {}) }) });
+    if (!r.ok) { endIfGone(g, r.error); return r; }
+    return { ok: true, value: { step: n, ...(say !== undefined ? { say } : {}), ...(suggest !== undefined ? { suggest: "on the card, in place of the old draft" } : {}) } };
+  }
+  if (g.run && ask.op === "point") {
+    return { ok: false, error: "a plan is running on this tab: the server points each step. Change the words with guide say, or guide end first" };
+  }
+  if (g.run && ask.args.action === "next") {
+    const ms = typeof ask.args.waitMs === "number" ? ask.args.waitMs : 25_000;
+    const ev = await waitRunEvent(g, Math.min(25_000, ms));
+    touchGuide(g);
+    if (!ev) return { ok: true, value: { pending: true, step: g.run.index + 1, of: g.run.steps.length } };
+    return { ok: true, value: ev };
+  }
+  if (ask.op === "point") {
+    touchGuide(g);
+    const label = typeof ask.args.step === "string" ? ask.args.step : undefined;
+    const nm = label ? /^(\d+)\/(\d+)$/.exec(label.trim()) : null;
+    const waitClick = ask.args.waitClick === true;
+    const front = await toFront(g.tab, send);
+    if (!front.ok) { endIfGone(g, front.error); return front; }
+    const r = await on(g.tab, { n: g.steps.length + 1, activity: guideActivity(g.tab, waitClick ? "wait" : "point", {
+      ...(nm ? { step: { n: Number(nm[1]), m: Number(nm[2]) } } : {}),
+      say: String(ask.args.say), waitClick,
+      ...(typeof ask.args.copy === "string" ? { copy: ask.args.copy } : {}),
+      ...(typeof ask.args.suggest === "string" ? { suggest: ask.args.suggest } : {}),
+      ...(typeof ask.args.summary === "string" ? { summary: ask.args.summary } : {}),
+    }) });
+    if (!r.ok) { endIfGone(g, r.error); return r; }
+    const v = (r.value ?? {}) as { name?: unknown; role?: unknown; followed?: unknown; matched?: unknown };
+    const step = addStep(g, {
+      target: String(ask.args.selector), say: String(ask.args.say), waitClick: ask.args.waitClick === true,
+      ...(label ? { label } : {}),
+      ...(typeof ask.args.copy === "string" ? { copy: ask.args.copy } : {}),
+      ...(typeof ask.args.suggest === "string" ? { suggest: ask.args.suggest } : {}),
+      ...(typeof ask.args.summary === "string" ? { summary: ask.args.summary } : {}),
+      ...(typeof v.name === "string" && v.name ? { name: v.name } : {}),
+      ...(typeof v.role === "string" && v.role ? { role: v.role } : {}),
+      followed: v.followed !== false,
+    });
+    return { ok: true, value: {
+      step: step.n, ...(label ? { label } : {}), target: step.target,
+      ...(step.name ? { name: step.name } : {}), ...(step.role ? { role: step.role } : {}),
+      followed: step.followed,
+      /* Several nodes matched: the panel ringed the first one on screen. */
+      ...(typeof v.matched === "number" && v.matched > 1 ? { matched: v.matched, note: `${v.matched} nodes match; the first visible one is highlighted` } : {}),
+      waiting: step.waitClick ? "the person's click on the target (or Back / Stop)" : "OK, Back or Stop",
+    } };
+  }
+  if (ask.args.action === "next") {
+    const r = await on(g.tab);
+    if (!r.ok) { endIfGone(g, r.error); return r; }
+    const v = (r.value ?? {}) as { event?: unknown; url?: unknown; expected?: unknown };
+    touchGuide(g);
+    if (v.event === undefined || v.event === null) {
+      return { ok: true, value: { pending: true, step: g.steps.length || undefined } };
+    }
+    /* The person put the card's draft in the field. News for the agent, not
+       the step's answer: the step stays open for OK, the click or Back. */
+    /* The person asked for another draft: news, not the answer. Write one and send it with guide say --suggest. */
+    if (v.event === "regenerate") {
+      const cur = g.steps[g.steps.length - 1];
+      const note = regenerateNote((r.value as { note?: unknown }).note);
+      return { ok: true, value: { event: "regenerate", ...(cur ? { step: cur.n } : {}), ...(note ? { note } : {}), next: "write another draft and send it with guide say --suggest" } };
+    }
+    if (v.event === "suggest-inserted") {
+      const cur = g.steps[g.steps.length - 1];
+      if (cur) cur.suggestInsertedAt = g.lastAt;
+      return { ok: true, value: { event: "suggest-inserted", ...(cur ? { step: cur.n } : {}) } };
+    }
+    if (!GUIDE_EVENTS.includes(v.event as GuideEvent)) return { ok: false, error: `the panel answered an event this server does not know: ${String(v.event)}` };
+    const ev = v.event as GuideEvent;
+    const url = typeof v.url === "string" ? v.url : undefined;
+    const step = noteEvent(g, ev, url);
+    if (worker && ev === "navigated" && url && !grantFor(worker, url)) {
+      return { ok: false, error: await endForSite(g, noGrantRefusal(worker, url), send) };
+    }
+    const over = ev === "stop" || ev === "takeover" || ev === "closed";
+    return { ok: true, value: {
+      event: ev, ...(step ? { step: step.n } : {}),
+      ...(typeof v.expected === "boolean" ? { expected: v.expected } : {}),
+      ...(ev === "navigated" ? { navigated: true, ...(url ? { url } : {}) } : {}),
+      ...(over ? { ended: true, next: "the person ended the guide: guide end returns the audit" } : {}),
+    } };
+  }
+  /* end: the bubble comes down if the panel can still hear; the lock comes off either way. */
+  if (g.run) endRun(g, "agent");
+  await on(g.tab, { activity: guideActivity(g.tab, "end") }).catch(() => undefined);
+  finishGuide(g, "agent");
+  return { ok: true, value: guideAudit(g) };
+}
+
+/** Why a worker may not guide or read `tab`: not in the window, not the
+ *  person's own container, or no live grant for this worker on its site. */
+function personTabRefusal(worker: string, tab: string, rows: readonly TabRow[]): string | null {
+  const row = rows.find((r) => r.id === tab);
+  const box = row ? foldWorkerName(row.profile ?? "") : "";
+  if (!row || (box && box !== "default") || isAgentContainer(box)) {
+    return `this credential was minted for an agent, and ${tab} is not a tab of the person's own container: a worker guides the person on their own tab only.`;
+  }
+  return grantFor(worker, row.url) ? null : noGrantRefusal(worker, row.url ?? "");
+}
+
+/** The guided tab left the granted site: the guide ends, and the bubble comes down. */
+async function endForSite(g: Parameters<typeof noteEvent>[0], why: string, send: (a: BrowserAsk) => Promise<BrowserReply>): Promise<string> {
+  finishGuide(g, "site");
+  await send({ id: nextId(), op: "guide", args: { action: "end", page: g.tab, activity: guideActivity(g.tab, "end") } }).catch(() => undefined);
+  return `${why} The guide has ended: guide end returns the audit.`;
+}
+
+/** A worker's read of the person's tab, checked against the tab's site now:
+ *  null when it is the worker's own page or a guided tab on a granted site.
+ *  Fails closed: the gate ran before this, and the person may have pressed
+ *  Stop since, so a tab that is not the worker's own is served only while
+ *  its own guide runs there at this moment, checked again after the tab list. */
+/* Null, not a promise of null, when the ask is not a read of somebody else's
+   page: like `visitSignIn`, nothing may be awaited before an ask is parked. */
+function guideReadRefusal(worker: string, ask: BrowserAsk, send: (a: BrowserAsk) => Promise<BrowserReply>): Promise<string | null> | null {
+  if (!GUIDE_READS.has(ask.op) || ask.op === "tabs") return null;
+  const page = typeof ask.args.page === "string" ? ask.args.page : "";
+  if (!page || workerOwnsPage(worker, page)) return null;
+  return guidedReadRefusal(worker, page, send);
+}
+
+async function guidedReadRefusal(worker: string, page: string, send: (a: BrowserAsk) => Promise<BrowserReply>): Promise<string | null> {
+  const notGuiding = `this credential was minted for an agent, and it reads the person's tab only while its own guide runs there: `
+    + `no guide of yours runs on ${page} now. guide start "<why>" --shared first.`;
+  const g = guideOf(page);
+  if (!g || !sameCaller(g.as, worker)) return notGuiding;
+  const t = await send({ id: nextId(), op: "tabs", args: {} });
+  if (!t.ok) return t.error ?? "the tab list did not answer";
+  if (guideOf(page) !== g) return notGuiding;
+  const why = personTabRefusal(worker, page, tabRows(t.value));
+  return why ? endForSite(g, why, send) : null;
+}
+
+/**
+ * Draws the run's current step on the person's card: a `point` the relay
+ * composes from the plan (a selector, the words, the wait), tagged with the
+ * visit the panel echoes on every event it posts back. It only points: the
+ * panel's `point` reads the page and rings the target, it never acts.
+ */
+async function drawRunStep(g: Guide, send: (a: BrowserAsk) => Promise<BrowserReply>): Promise<BrowserReply> {
+  const run = g.run!;
+  const s = run.steps[run.index]!;
+  const visit = visitSeq(run);
+  const activity = guideActivity(g.tab, s.wait === "click" ? "wait" : "point", {
+    step: { n: run.index + 1, m: run.steps.length }, say: s.say, waitClick: s.wait === "click",
+    ...(s.copy ? { copy: s.copy } : {}),
+    ...(s.summary ? { summary: s.summary } : {}),
+    ...(s.suggest ? { suggest: s.suggest } : {}),
+  });
+  const r = await send({ id: nextId(), op: "point", args: {
+    page: g.tab, ...(s.target ? { selector: s.target } : {}), ...(s.text ? { text: s.text } : {}), ...(s.suggest ? { suggest: s.suggest } : {}),
+    say: s.say, wait: s.wait, waitClick: s.wait === "click", run: { visit }, activity,
+  } });
+  /* A target not on the page yet is not lost here: the panel's watcher
+     waits for it and posts lost only after 2 s with none. */
+  return r;
+}
+
+/** The card's sentence when the step's target is not on the page. The person
+ *  never wrote the selector, so it is said in words: the step's text, else the
+ *  name or words inside a locator (role=link[name="History"] is "History"),
+ *  else "it". Never the raw selector. Plan text, kept as text. */
+export function lostSay(s: Pick<PlanStep, "text" | "target">): string {
+  const words = (s.text ?? "").trim() || targetWords(s.target ?? "");
+  return words ? `Can't find "${words}" on this page. Back?` : "Can't find it on this page. Back?";
+}
+
+/** The words a locator names a thing by, or "" for CSS, an id or a test id. */
+function targetWords(raw: string): string {
+  const role = /^role=[^\[]*\[\s*name\s*=\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([^\]]*))/.exec(raw);
+  const plain = /^(?:text|label|placeholder)=\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|(.*))$/.exec(raw);
+  const m = role ?? plain;
+  if (!m) return "";
+  return String(m[1] ?? m[2] ?? m[3] ?? "").replace(/\\(.)/g, "$1").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * POST /browser/guide/event: the panel's report of the person's hand (a click
+ * on the target, typing, a submit, a navigation, the target lost) or of the
+ * card's buttons, for a running plan. The server moves the plan on here, with
+ * no agent call. Window-only: the route refuses an agent's credential.
+ */
+export async function guidePanelEvent(body: unknown, sendTo?: (a: BrowserAsk) => Promise<BrowserReply>): Promise<{ ok: boolean; error?: string; value?: Record<string, unknown> }> {
+  const send = sendTo ?? ((a: BrowserAsk) => (asker ? asker(a) : askWithRetry(a)));
+  const b = (body ?? {}) as Record<string, unknown>;
+  const tab = typeof b.tab === "string" ? b.tab : "";
+  const event = typeof b.event === "string" ? b.event : "";
+  if (!tab) return { ok: false, error: "tab is the guided tab's id" };
+  const KNOWN = ["ok", "back", "stop", "click", "navigated", "input", "submit", "lost", "found", "done", "resume", "regenerate"];
+  if (!KNOWN.includes(event)) return { ok: false, error: `event is one of ${KNOWN.join(", ")}` };
+  const url = typeof b.url === "string" && b.url.length <= 4000 ? b.url : undefined;
+  const visit = typeof b.visit === "number" ? b.visit : undefined;
+  /* "Suggest another" on a run's card: news for the agent's guide next; the step stays on. */
+  if (event === "regenerate") {
+    const rg = guideOf(tab);
+    if (!rg?.run || rg.run.endedAt) return { ok: true, value: { known: false } };
+    if (visit !== undefined && visit !== visitSeq(rg.run)) return { ok: true, value: { known: false } };
+    regenerateRun(rg, regenerateNote(b.note));
+    return { ok: true, value: { regenerate: true } };
+  }
+  if (event === "resume") {
+    const r = resumeRun(tab);
+    if ("error" in r) return { ok: false, error: r.error };
+    const g = r.guide;
+    await send({ id: nextId(), op: "guide", args: { action: "start", page: tab, activity: guideActivity(tab, "start", { say: g.why, ...(g.as ? { agent: g.as } : {}), run: true }) } }).catch(() => undefined);
+    const d = await drawRunStep(g, send);
+    return d.ok ? { ok: true, value: { resumed: true, step: g.run!.index + 1 } } : { ok: false, error: d.error };
+  }
+  const g = guideOf(tab);
+  /* Stop first, ended run or not: after done, overflow or a restart the
+     guide still holds the tab, and the person's Stop is what frees it. */
+  if (event === "stop" && g?.run) {
+    runInput(g, { event: "stop", ...(url ? { url } : {}) });
+    finishGuide(g, "stop");
+    return { ok: true, value: { ended: true, resumable: g.run.endedBy !== "done" && g.run.endedBy !== "overflow" } };
+  }
+  if (!g?.run || g.run.endedAt) return { ok: true, value: { known: false } };
+  const change = runInput(g, { event: event as PanelEvent["event"], ...(visit !== undefined ? { visit } : {}), ...(url ? { url } : {}) });
+  const run = g.run;
+  /* A worker's grant is for one site: the person following a link off it ends the guide. */
+  if (event === "navigated" && run.worker && url && !grantFor(run.worker, url)) {
+    await endForSite(g, noGrantRefusal(run.worker, url), send);
+    return { ok: true, value: { ended: true } };
+  }
+  if (change === "step" && !run.endedAt) {
+    const d = await drawRunStep(g, send);
+    if (!d.ok) return { ok: false, error: d.error };
+  } else if (change === "lost") {
+    const v = currentVisit(run);
+    if (v) await send({ id: nextId(), op: "guide", args: { action: "say", page: tab, activity: guideActivity(tab, "say", { say: lostSay(run.steps[run.index]!), lost: true, ...(run.steps[run.index]!.wait === "ok" ? { skip: true } : {}) }) } }).catch(() => undefined);
+  } else if (change === "found") {
+    await send({ id: nextId(), op: "guide", args: { action: "say", page: tab, activity: guideActivity(tab, "say", { say: run.steps[run.index]!.say }) } }).catch(() => undefined);
+  }
+  return { ok: true, value: { change, step: run.index + 1, of: run.steps.length, ...(run.endedAt ? { ended: true, endedBy: run.endedBy } : {}) } };
+}
+
+/** Brings the guided tab to the front. Selecting a tab is not an act on its page. */
+function toFront(tab: string, send: (a: BrowserAsk) => Promise<BrowserReply>): Promise<BrowserReply> {
+  return send({ id: nextId(), op: "tab", args: { id: tab } });
+}
+
+/* What the panel draws for this guide verb; the observer in Electron main adds the live rect. */
+function guideActivity(tab: string, phase: GuideActivity["phase"], extra: Omit<GuideActivity, "kind" | "tab" | "phase"> = {}): GuideActivity {
+  return { kind: "guide", tab, phase, ...extra };
+}
+
+/* A guide whose tab the panel no longer has, or the person took over, is over. */
+function endIfGone(g: Parameters<typeof noteEvent>[0], error: string | undefined): void {
+  const e = error ?? "";
+  if (/^no tab called|no tab is open/.test(e)) noteEvent(g, "closed");
+  else if (/took this tab over/.test(e)) noteEvent(g, "takeover");
 }
 
 /** The retry loop, on its own so a composed verb reaches it too. `profiles`
@@ -4751,9 +6003,16 @@ async function composeWhoami(ask: BrowserAsk): Promise<BrowserReply> {
 async function composeDrop(ask: BrowserAsk): Promise<BrowserReply> {
   const name = String(ask.args.drop);
   const rec = containerRecord(name);
+  const made = madeNamed(name);
   const reply = await askOnce(ask);
   if (!reply.ok) return reply;
   forgetContainer(name);
+  /* Dropped: the vault's cookies are removed by the book (the jar goes too),
+     and the id is nobody's any more. */
+  for (const id of made) {
+    await wipeSignIns(signInsWhere((s) => s.container === id), "container dropped").catch(() => false);
+    forgetMadeContainer(id);
+  }
   const v = (reply.value && typeof reply.value === "object" ? reply.value : {}) as Record<string, unknown>;
   const unclaimed = !rec?.creator;
   return {
@@ -4798,15 +6057,148 @@ async function composeLane(ask: BrowserAsk): Promise<BrowserReply> {
           : listLanes(ask.args.force === true ? undefined : as),
       },
     };
+  } else if (ask.args.action === "vault") {
+    reply = await composeVaultPull(ask, as, !!principal);
+    /* The box as the person named it; the id stays beside it. */
+    if (reply.ok && reply.value && typeof (reply.value as { vault?: unknown }).vault === "string") {
+      const v = reply.value as Record<string, unknown> & { vault: string };
+      reply = { ...reply, value: { ...v, vault: vaultDisplayName(v.vault), vaultId: v.vault } };
+    }
+  } else if (ask.args.action === "vaults") {
+    reply = { ok: true, value: { vaults: vaultNames() } };
   } else if (ask.args.action === "close") {
     const r = await closeLane(String(ask.args.id), as, ask.args.force === true, !!principal);
+    if (r.ok) forgetVaultLane(String(ask.args.id));
     reply = r.ok ? { ok: true, value: { closed: ask.args.id } } : { ok: false, error: r.error };
   } else {
-    const r = await openLane(as, ask.args.container as "private" | "shared" | "named" | "ephemeral", typeof ask.args.name === "string" ? ask.args.name : undefined);
+    const r = await openLane(as, ask.args.container as "private" | "shared" | "named" | "ephemeral", typeof ask.args.name === "string" ? ask.args.name : undefined,
+      typeof ask.args.vault === "string" && ask.args.vault ? ask.args.vault : undefined);
     reply = r.ok ? { ok: true, value: { lane: r.lane } } : { ok: false, error: r.error };
   }
   recordAudit("lane", ask.args, reply.ok, reply.error);
   return reply;
+}
+
+/*
+ * `lane vault ID --site S` (and `browser_vault`): sign one ephemeral lane in
+ * to one site from the login vault (plan parts C and D). The server never
+ * holds a value: it asks the app window, which asks Electron main, which
+ * spawns the vault helper and answers with counts. Read-only mode is refused
+ * before any of that (isActing).
+ *
+ * A sensitive site is OKed by Electron main itself: a native dialog (Deny by
+ * default, five minutes then Deny), and main's report of the yes on its own
+ * key (POST /vault/ok), which mints the grant checked here. A yes the window
+ * makes up finds no grant. On
+ * success the lane is marked, so verbs that could read the login back out are
+ * refused there from now on (F7).
+ */
+/* The vault helper's read, plus main's own dialog for a sensitive site: the
+   person has five minutes there, then it is a no. */
+const VAULT_PULL_MS = VAULT_ASK_MS + 30_000;
+/* A sign-in on a first visit asks nobody: the helper's read alone. Main is
+   given 5 s less as its own deadline, so it always gives up first and wipes
+   what it set (it cannot be cancelled from here). */
+export const VAULT_VISIT_MS = 30_000;
+const VAULT_VISIT_BUDGET_MS = VAULT_VISIT_MS - 5_000;
+
+/* Each vault as `--vault` takes it, with how many sites it holds. Read from
+   the index only: no key is opened and no site, cookie or value is in it. */
+function vaultNames(): { name: string; id: string; sites: number }[] {
+  let all: ReturnType<typeof listVaults> = [];
+  try { all = listVaults(); } catch { /* no vault yet */ }
+  all.sort((a, b) => (a.label || a.id).localeCompare(b.label || b.id));
+  const names = vaultChoiceNames(all);
+  return all.map((v, i) => ({ name: names[i]!, id: v.id, sites: v.sites }));
+}
+
+async function composeVaultPull(ask: BrowserAsk, as: string | undefined, worker: boolean, onVisit = false): Promise<BrowserReply> {
+  const lane = String(ask.args.id);
+  const site = String(ask.args.site);
+  const mine = laneRefusal(lane, as, false, worker);
+  if (mine) return { ok: false, error: mine };
+  const vault = ask.args.vault;
+  /* Guarded before the ask goes out (finding 1): main sets cookies before it
+     answers, so a mark put on after the answer left a gap a read could use. */
+  vaultPulling.set(lane, (vaultPulling.get(lane) ?? 0) + 1);
+  let r: BrowserReply;
+  try {
+    r = await askOnce({
+      id: nextId(), op: "lane",
+      args: {
+        vaultPull: {
+          lane, site, agent: as ?? "", ...(typeof vault === "string" && vault ? { vault } : {}),
+          /* deadlineAt is fixed HERE, when the server starts waiting: a window
+             that is busy and reads the ask late still stops in time. */
+          ...(onVisit ? { onVisit: true, budgetMs: VAULT_VISIT_BUDGET_MS, deadlineAt: Date.now() + VAULT_VISIT_BUDGET_MS } : {}),
+        },
+      },
+    }, onVisit ? VAULT_VISIT_MS : VAULT_PULL_MS);
+  } finally {
+    const left = (vaultPulling.get(lane) ?? 1) - 1;
+    if (left > 0) vaultPulling.set(lane, left); else vaultPulling.delete(lane);
+  }
+  const got = r.ok && r.value && typeof r.value === "object" ? r.value as Record<string, unknown> : null;
+  if (!got && onVisit) {
+    /* No answer to a sign-in on visit: main stops itself at its own deadline
+       and wipes what it set, so the lane is not closed. It is marked, so the
+       task-end sign-out covers it, and the site stays tried: no second pull. */
+    markVaultLane(lane);
+    return { ok: false, error: "the sign-in did not finish in time; the page is signed out; ask with browser_vault", value: { code: "no-answer" } };
+  }
+  if (!got) {
+    /* No answer: main may have set some cookies before it went quiet. The
+       lane is closed, never left open and unguarded. */
+    markVaultLane(lane);
+    await closeLane(lane, as, false, worker).catch(() => null);
+    forgetVaultLane(lane);
+    return r.ok ? { ok: false, error: "the window did not answer the pull: the lane was closed" } : { ...r, error: `${r.error ?? "the pull failed"}: the lane was closed` };
+  }
+  if (got.ok !== true) {
+    /* Main answers no before it sets anything, except three codes: `closed`
+       (the lane is gone and main wiped its jar), `no-guard` (no cookie was set
+       yet; the guard the server took sits on an empty jar) and `late` (a
+       sign-in on visit past main's deadline: main wiped what it set). In each
+       the lane holds no vault login. */
+    /* Main sends `{ id, label }` for each vault (pullSite). Shown as the name
+       `--vault` takes back: the label, or the id when two share a label. */
+    const rows = Array.isArray(got.vaults)
+      ? got.vaults.flatMap((v): { id: string; label: string }[] => {
+        if (typeof v === "string") return [{ id: v, label: v }];
+        const o = v && typeof v === "object" ? v as Record<string, unknown> : null;
+        return o && typeof o.id === "string" ? [{ id: o.id, label: typeof o.label === "string" ? o.label : "" }] : [];
+      })
+      : undefined;
+    let known: { id: string; label: string }[] = [];
+    try { known = listVaults(); } catch { /* the index is unreadable: use the answer's own */ }
+    const vaults = rows ? vaultChoiceNames(rows, [...rows, ...known.filter((k) => !rows.some((r) => r.id === k.id))]) : undefined;
+    return {
+      ok: false,
+      error: got.code === "ambiguous"
+        ? `${site} is in more than one vault: ask the person which, then pass --vault NAME, one of: ${(vaults ?? []).map((v) => JSON.stringify(v)).join(", ") || "(none listed: run `agentglass-browser vault --list`)"}`
+        : String(got.error ?? "the pull failed"),
+      ...(vaults ? { value: { code: "ambiguous", vaults } } : {}),
+      ...(got.code === "expired" ? { value: { code: "expired", reason: "expired", site, asked: "person" } } : {}),
+      /* On visit the caller reads main's code (off, none, closed...). */
+      ...(onVisit && got.code !== "ambiguous" && got.code !== "expired" ? { value: { code: typeof got.code === "string" ? got.code : "" } } : {}),
+    };
+  }
+  /* A sensitive site is granted here only on main's own report of the
+     person's yes (POST /vault/ok, main key). The answer came back through the
+     window, so a yes the window made up finds no grant: the lane is closed. */
+  if (got.sensitive === true && !takeVaultGrant(lane, site)) {
+    markVaultLane(lane);
+    await closeLane(lane, as, false, worker).catch(() => null);
+    forgetVaultLane(lane);
+    return { ok: false, error: `${site} is marked sensitive and Electron main did not report the person's OK: the lane was closed` };
+  }
+  /* No sign-out setting from this answer: it came back through the window,
+     and the window must not mark or unmark a lane (New 1). Main's own
+     /vault/lane report, before the first cookie, is the only source. */
+  markVaultLane(lane);
+  /* Counts and labels only: main sent nothing else, and nothing else goes on. */
+  const keep = ["site", "vault", "label", "sensitive", "set", "failed", "partitioned", "session", "storage"];
+  return { ok: true, value: Object.fromEntries(keep.filter((k) => got![k] !== undefined).map((k) => [k, got![k]])) };
 }
 
 async function composeProfiles(ask: BrowserAsk): Promise<BrowserReply> {
@@ -4849,7 +6241,7 @@ async function composeProfiles(ask: BrowserAsk): Promise<BrowserReply> {
   return { ok: true, value: { you, activeTab: active, profiles: detail, names: bare } };
 }
 
-function askOnce(ask: BrowserAsk): Promise<BrowserReply> {
+function askOnce(ask: BrowserAsk, timeoutMs?: number): Promise<BrowserReply> {
   // Two different absences, said differently, because only one of them can be
   // fixed by the caller. Collapsing them cost a working feature for one build:
   // with the pane simply not opened yet, the answer said the window was shut,
@@ -4914,7 +6306,7 @@ function askOnce(ask: BrowserAsk): Promise<BrowserReply> {
       owner ?? ask.args.as ?? scoped?.as,
       scoped?.force === true,
       typeof owner === "string" && !!owner.trim(),
-    );
+    ) ?? vaultLaneRefusal(ask.op, lane);
     if (msg) {
       recordAudit(ask.op, ask.args, false, msg);
       return Promise.resolve({ ok: false, error: msg });
@@ -4997,10 +6389,10 @@ function askOnce(ask: BrowserAsk): Promise<BrowserReply> {
       ASK_WORKER.delete(ask.id);
       resolve(redacted);
     };
-    const timer = setTimeout(() => {
+    const timer = setTimeout(() => { // loop-ok: rejects one pending ask
       pending.delete(ask.id);
       settle({ ok: false, error: `the browser did not answer in time (${ask.op})` });
-    }, TIMEOUT_MS[ask.op]);
+    }, timeoutMs ?? TIMEOUT_MS[ask.op]);
     pending.set(ask.id, { resolve: settle, timer, target });
     /* Re-built rather than cast, so the narrowing above is what proves the op
        is sendable. A cast here would pass a verb the panel cannot answer and
@@ -5046,7 +6438,14 @@ export function resetBrowserDrive(): void {
   ready.clear();
   managers.clear();
   resetLanes();
+  VISIT_RUNNING.clear();
+  CONTAINER_NOTED.clear();
+  resetVaultContainers();
+  leftoversDone = false;
+  leftovers = null;
   resetWorkerPages();
+  resetGuides();
+  resetGuideGrants();
   wireLanes();
   for (const [, p] of pending) { clearTimeout(p.timer); p.resolve({ ok: false, error: "cancelled" }); }
   pending.clear();

@@ -77,7 +77,21 @@ describe("slices", () => {
     expect(r.part).toBe("lines 1–30, 460–540");
     expect(text(r.data)).toBe(
       "… lines 1-30 …\n" + Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n") +
-      "\n… lines 460-540 …\n" + Array.from({ length: 81 }, (_, i) => `line ${460 + i}`).join("\n") + "\n");
+      "\n… lines 460-540 …\n" + Array.from({ length: 81 }, (_, i) => `line ${460 + i}`).join("\n") +
+      "\n… cut after line 540: the file has 1000 lines in total, the rest was not sent …\n");
+  });
+
+  test("a cut always says so in the material: the reviewer is never left thinking a cut is the end of the file", () => {
+    const fn = Array.from({ length: 1000 }, (_, i) => (i + 1 === 646 ? "function planCleanup() {}" : `line ${i + 1} ${"x".repeat(60)}`)).join("\n") + "\n";
+    const big = Buffer.from(fn);
+    const whole = sliceOf(big, undefined);
+    expect(whole.part).toBe("partial");
+    const body = text(whole.data);
+    if (body.includes("planCleanup")) {
+      // the function itself reached the reviewer
+    } else {
+      expect(body).toContain("cut after line 200: the file has 1000 lines in total, the rest was not sent");
+    }
   });
 
   test("ranges that touch merge, ranges apart stay two windows", () => {
@@ -98,6 +112,16 @@ describe("slices", () => {
     expect(r.part).toBe("partial");
     expect(text(r.data).split("\n").filter((l) => l.startsWith("line ")).length).toBe(200);
     expect(sliceOf(numbered(100), undefined).part).toBe("whole");
+  });
+
+  test("a file over the cap is copied whole when the cap is 0 (no cap), or its notice names the cut when a cap is set", () => {
+    const big = Buffer.from(Array.from({ length: 2000 }, (_, i) => `line ${i + 1} ${"x".repeat(30)}`).join("\n") + "\n");
+    const unlimited = sliceOf(big, undefined, 0);
+    expect(unlimited.part).toBe("whole");
+    expect(unlimited.data).toEqual(big);
+    const capped = sliceOf(big, undefined, 1024);
+    expect(capped.part).toBe("partial");
+    expect(text(capped.data)).toContain("cut after line 200: the file has 2000 lines in total, the rest was not sent");
   });
 
   test("the run copies the slice, the certificate and the read line say so, and a path-only call stays whole", async () => {

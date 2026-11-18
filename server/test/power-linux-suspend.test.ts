@@ -35,6 +35,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const POWER = new URL("../../electron/power.js", import.meta.url).pathname;
+const RULES = new URL("../../electron/power-rules.js", import.meta.url).pathname;
 const dirs: string[] = [];
 afterAll(() => { for (const d of dirs) { try { rmSync(d, { recursive: true, force: true }); } catch { /* fine */ } } });
 
@@ -59,7 +60,8 @@ function parseCalls(text: string): Call[] {
 interface Status {
   awake: boolean;
   why?: { chats: number; runs: number; hooked: number; named: number } | null;
-  locks?: { sleep: string | null; lid: boolean; display: boolean; app: boolean };
+  locks?: { sleep: string | null; lid: boolean; display: boolean; app: boolean; idle?: boolean };
+  released?: boolean;
   inhibitMissing?: boolean;
   platform?: string;
 }
@@ -71,6 +73,9 @@ async function drive(script: string, env: Record<string, string> = {}): Promise<
   mkdirSync(join(scratch, "bin"), { recursive: true });
   mkdirSync(join(scratch, "node_modules", "electron"), { recursive: true });
   copyFileSync(POWER, join(scratch, "power.js"));
+  copyFileSync(RULES, join(scratch, "power-rules.js"));
+  /* `systemctl --version`, as the machine under test: 261 unless a test says older. */
+  writeFileSync(join(scratch, "bin", "systemctl"), `#!/bin/sh\necho "systemd \${AGX_STUB_SYSTEMD:-261} (stub)"\n`, { mode: 0o755 });
   const log = join(scratch, "inhibit.log");
   /* The stub records its argv, then waits like the real one — and says how
      it was ended, so a released lock is distinguishable from one that was
@@ -152,38 +157,57 @@ describe("the Linux inhibitor", () => {
     expect(lidLock?.ended, "the lid lock was not").toBeUndefined();
   });
 
-  test("falls back to a block lock on a logind that refuses block-weak — which is weak there — never to delay", async () => {
-    /* Before 257 a block lock was honoured only for other, unprivileged users
-       — not for the one holding it — which is exactly what block-weak spells
-       out on 257 and later. A delay lock, the first fallback, holds a suspend
-       for InhibitDelayMaxSec and then lets it go: nothing. */
-    const t = await drive(`power.setMode("on"); await new Promise((r) => setTimeout(r, 500));`, { AGX_STUB_NO_WEAK: "1" });
-    const sleepModes = t.calls.filter((c) => whatOf(c) === "sleep").map((c) => `${modeOf(c)}:${c.ended ?? "held"}`);
-    expect(sleepModes).toEqual(["block-weak:REFUSED", "block:TERM"]);
+  test("on systemd before 257 holds NO sleep lock — never block — and only the idle and lid locks", async () => {
+    /* Plain block can stop the person's own suspend ("Operation inhibited"),
+       and a person who wants to suspend must win. */
+    const t = await drive(`power.setMode("on"); await new Promise((r) => setTimeout(r, 300));`, { AGX_STUB_SYSTEMD: "255" });
+    expect(t.calls.filter((c) => whatOf(c) === "sleep")).toHaveLength(0);
+    expect(t.calls.some((c) => modeOf(c) === "block" && whatOf(c) === "sleep")).toBe(false);
+    expect(t.calls.filter((c) => whatOf(c) === "idle").map(modeOf)).toEqual(["block"]);
     expect(t.calls.filter((c) => whatOf(c) === "handle-lid-switch")).toHaveLength(1);
   });
 
-  test("a logind that refused block-weak is not asked again after a resume", async () => {
-    /* The resume handler re-asserts every lock. A refusal is the logind's
-       version speaking, and it does not change while the app runs. */
+  test("a logind that refuses block-weak anyway ends with the idle lock, never a block sleep lock, and is not asked again after a resume", async () => {
+    /* Version unreadable (stub systemctl absent from PATH is not possible
+       here, so 261 is claimed) while logind refuses the mode: the refusal is
+       the logind's version speaking. */
     const t = await drive(`
       power.setMode("on"); await new Promise((r) => setTimeout(r, 500));
       electron.__emit("suspend"); await new Promise((r) => setTimeout(r, 200));
       electron.__emit("resume"); await new Promise((r) => setTimeout(r, 500));
     `, { AGX_STUB_NO_WEAK: "1" });
-    const sleepModes = t.calls.filter((c) => whatOf(c) === "sleep").map((c) => modeOf(c));
-    expect(sleepModes).toEqual(["block-weak", "block", "block"]);
+    const sleepModes = t.calls.filter((c) => whatOf(c) === "sleep").map((c) => `${modeOf(c)}:${c.ended ?? "held"}`);
+    expect(sleepModes).toEqual(["block-weak:REFUSED"]);
+    expect(t.status.locks?.sleep).toBeNull();
+    expect(t.status.locks?.idle).toBe(true);
+  });
+
+  test("let it sleep drops every lock, and the next turn (idle to working) holds them again", async () => {
+    let working = false;
+    const api = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ working }) });
+    try {
+      working = true;
+      const t = await drive(`
+        power.setMode("agent"); await new Promise((r) => setTimeout(r, 400));
+        power.release(); await new Promise((r) => setTimeout(r, 300));
+        console.log("AFTER " + JSON.stringify(power.status()));
+      `, { AGX_API: `http://127.0.0.1:${api.port}` });
+      expect(t.status.released, "still working, still released").toBe(true);
+      expect(t.status.awake).toBe(false);
+      expect(t.status.locks).toEqual({ sleep: null, lid: false, display: false, app: false, idle: false });
+    } finally { api.stop(true); }
   });
 
   test("the status says which locks are held, in which mode, and not the ones let go", async () => {
     /* What the header draws. "Awake" alone could not say that the person's
        own suspend still goes through, nor that the lid is what is held. */
     const t = await drive(`power.setMode("on"); await new Promise((r) => setTimeout(r, 300));`);
-    expect(t.status.locks).toEqual({ sleep: "block-weak", lid: true, display: true, app: false });
+    expect(t.status.locks).toEqual({ sleep: "block-weak", lid: true, display: true, app: false, idle: false });
     expect(t.status.inhibitMissing).toBe(false);
     expect(t.status.platform, "what a lock means depends on it").toBe("linux");
-    const fell = await drive(`power.setMode("on"); await new Promise((r) => setTimeout(r, 500));`, { AGX_STUB_NO_WEAK: "1" });
-    expect(fell.status.locks?.sleep, "the fallback is named, not assumed").toBe("block");
+    const fell = await drive(`power.setMode("on"); await new Promise((r) => setTimeout(r, 500));`, { AGX_STUB_SYSTEMD: "255" });
+    expect(fell.status.locks?.sleep, "no sleep lock on an old logind").toBeNull();
+    expect(fell.status.locks?.idle).toBe(true);
     const asleep = await drive(`
       power.setMode("on"); await new Promise((r) => setTimeout(r, 300));
       electron.__emit("suspend"); await new Promise((r) => setTimeout(r, 300));
@@ -198,7 +222,7 @@ describe("the Linux inhibitor", () => {
     const t = await drive(`power.setMode("on"); await new Promise((r) => setTimeout(r, 300));`, { PATH: "/nonexistent" });
     expect(t.status.awake).toBe(true);
     expect(t.status.inhibitMissing).toBe(true);
-    expect(t.status.locks).toEqual({ sleep: null, lid: false, display: true, app: false });
+    expect(t.status.locks).toEqual({ sleep: null, lid: false, display: true, app: false, idle: false });
   });
 
   test("in agent mode the status carries why the server says something is working", async () => {

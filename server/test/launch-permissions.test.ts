@@ -32,7 +32,8 @@ const DENY = ["Bash(gh pr merge:*)", "Bash(gh release:*)"];
 describe("the setting", () => {
   test("a fresh install asks, and denies merging and releasing", () => {
     expect(launchMode()).toBe("default");
-    expect(launchDeny()).toEqual(DENY);
+    // The base never-rules (trunk pushes, rm -rf of / and ~) are on a fresh install too, so the two merge/release rules are a floor, not the whole list.
+    expect(launchDeny()).toEqual(expect.arrayContaining(DENY));
   });
 
   test("a write is read back; a rule that does not parse refuses the whole write", () => {
@@ -136,6 +137,7 @@ const OWN_FLAGS: Record<string, string> = {
   "agents/claudecode.ts": "the pane engine: the caller picks its mode",
   "agents/headless.ts": "an unattended one-shot with no terminal",
   "understudy-judge.ts": "an unattended one-shot with no terminal",
+  "diskexplain.ts": "an unattended `claude -p` with no tools and no terminal",
   "index.ts": "runAgentIn, an unattended `claude -p` with no terminal",
   "antigravity.ts": "another vendor's engine",
 };

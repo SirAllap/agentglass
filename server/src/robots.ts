@@ -33,6 +33,7 @@
  * default is what bounds it.
  */
 import { blockedTarget, dnsResolver, guardedFetch, type Resolver } from "./net.ts";
+import { envLimit } from "./config.ts";
 
 export const ROBOTS_ENV = "AGENTGLASS_BROWSER_ROBOTS";
 export const ROBOTS_AGENT = "agentglass";
@@ -41,7 +42,7 @@ const MAX_CACHED = 500;
 const MAX_BYTES = 512 * 1024;
 
 export function robotsOn(): boolean {
-  return process.env[ROBOTS_ENV] === "1";
+  return envLimit(ROBOTS_ENV) === "1";
 }
 
 interface Rule { allow: boolean; pattern: string }

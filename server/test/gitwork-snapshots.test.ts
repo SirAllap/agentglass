@@ -37,9 +37,9 @@ function build(): void {
 describe("WIP snapshots", () => {
   beforeEach(build);
 
-  it("round-trips: snapshot a dirty tree, clean it, restore the mess", () => {
+  it("round-trips: snapshot a dirty tree, clean it, restore the mess", async () => {
     writeFileSync(join(repo, "a.txt"), "work in progress\n");
-    const c = createSnapshot(repo, "before the experiment");
+    const c = await createSnapshot(repo, "before the experiment");
     expect(c.ok).toBe(true);
     expect(c.sha).toMatch(/^[0-9a-f]{40}$/);
     // Creating a snapshot touched NOTHING — the tree is still dirty.
@@ -48,57 +48,57 @@ describe("WIP snapshots", () => {
     git("checkout", "-f");
     git("clean", "-f", "-q");
     expect(git("status", "--porcelain").stdout.toString().trim()).toBe("");
-    const r = restoreSnapshot(repo, c.sha!);
+    const r = await restoreSnapshot(repo, c.sha!);
     expect(r.ok).toBe(true);
     expect(Bun.spawnSync(["cat", join(repo, "a.txt")], {}).stdout.toString()).toBe("work in progress\n");
     // The snapshot is still there — restore is not a one-shot ticket: revert
     // the tree and the same snapshot applies again.
-    expect(listSnapshots(repo).snapshots!.length).toBe(1);
+    expect((await listSnapshots(repo)).snapshots!.length).toBe(1);
     git("checkout", "-f");
     git("clean", "-f", "-q");
-    expect(restoreSnapshot(repo, c.sha!).ok).toBe(true);
+    expect((await restoreSnapshot(repo, c.sha!)).ok).toBe(true);
     expect(Bun.spawnSync(["cat", join(repo, "a.txt")], {}).stdout.toString()).toBe("work in progress\n");
   });
 
-  it("labels snapshots and lists them newest-first", () => {
+  it("labels snapshots and lists them newest-first", async () => {
     writeFileSync(join(repo, "a.txt"), "one\n");
-    const c1 = createSnapshot(repo, "first");
+    const c1 = await createSnapshot(repo, "first");
     writeFileSync(join(repo, "a.txt"), "two\n");
-    const c2 = createSnapshot(repo, "second");
+    const c2 = await createSnapshot(repo, "second");
     expect(c1.ok && c2.ok).toBe(true);
-    const l = listSnapshots(repo);
+    const l = await listSnapshots(repo);
     expect(l.ok).toBe(true);
     expect(l.snapshots!.map((s) => s.label)).toEqual(["second", "first"]);
     expect(l.snapshots![0]!.sha).toBe(c2.sha!);
   });
 
-  it("delete removes exactly the named snapshot", () => {
+  it("delete removes exactly the named snapshot", async () => {
     writeFileSync(join(repo, "a.txt"), "one\n");
-    const c1 = createSnapshot(repo, "first");
+    const c1 = await createSnapshot(repo, "first");
     writeFileSync(join(repo, "a.txt"), "two\n");
-    const c2 = createSnapshot(repo, "second");
-    expect(deleteSnapshot(repo, c1.sha!).ok).toBe(true);
-    const l = listSnapshots(repo);
+    const c2 = await createSnapshot(repo, "second");
+    expect((await deleteSnapshot(repo, c1.sha!)).ok).toBe(true);
+    const l = await listSnapshots(repo);
     expect(l.snapshots!.map((s) => s.label)).toEqual(["second"]);
     // Deleting again reports the missing snapshot.
-    expect(deleteSnapshot(repo, c1.sha!).ok).toBe(false);
-    expect(listSnapshots(repo).snapshots!.length).toBe(1);
+    expect((await deleteSnapshot(repo, c1.sha!)).ok).toBe(false);
+    expect((await listSnapshots(repo)).snapshots!.length).toBe(1);
     void c2;
   });
 
-  it("refuses a clean tree", () => {
-    const c = createSnapshot(repo, "nothing to see");
+  it("refuses a clean tree", async () => {
+    const c = await createSnapshot(repo, "nothing to see");
     expect(c.ok).toBe(false);
     expect(c.error).toContain("clean");
   });
 
-  it("prunes past the 30-snapshot cap, keeping the newest", () => {
+  it("prunes past the 30-snapshot cap, keeping the newest", async () => {
     for (let i = 0; i < 35; i++) {
       writeFileSync(join(repo, "a.txt"), `work ${i}\n`);
-      const c = createSnapshot(repo, `snap ${i}`);
+      const c = await createSnapshot(repo, `snap ${i}`);
       expect(c.ok).toBe(true);
     }
-    const l = listSnapshots(repo);
+    const l = await listSnapshots(repo);
     expect(l.snapshots!.length).toBe(30);
     expect(l.snapshots![0]!.label).toBe("snap 34");
     // The pruned old ones are gone from the ref namespace entirely.
@@ -106,9 +106,9 @@ describe("WIP snapshots", () => {
     expect(refs.length).toBe(30);
   });
 
-  it("auto-stash lets surgery run on a dirty tree and restores after", () => {
+  it("auto-stash lets surgery run on a dirty tree and restores after", async () => {
     writeFileSync(join(repo, "a.txt"), "dirty\n");
-    const r = withAutoStash(repo, () => {
+    const r = await withAutoStash(repo, () => {
       // The op sees a clean tree — that is the point.
       if (git("status", "--porcelain").stdout.toString().trim() !== "") return { ok: false, error: "tree was dirty inside the op" };
       return { ok: true, output: "ok" };
@@ -119,18 +119,18 @@ describe("WIP snapshots", () => {
     expect(git("stash", "list").stdout.toString().trim()).toBe("");
   });
 
-  it("auto-stash: a refusal that changed nothing puts the work back", () => {
+  it("auto-stash: a refusal that changed nothing puts the work back", async () => {
     writeFileSync(join(repo, "a.txt"), "dirty\n");
-    const r = withAutoStash(repo, () => ({ ok: false, error: "refused" }));
+    const r = await withAutoStash(repo, () => ({ ok: false, error: "refused" }));
     expect(r.ok).toBe(false);
     expect(r.error).toBe("refused");
     expect(git("stash", "list").stdout.toString().trim()).toBe("");
     expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("dirty\n");
   });
 
-  it("auto-stash failure with partial state leaves the stash where the error says", () => {
+  it("auto-stash failure with partial state leaves the stash where the error says", async () => {
     writeFileSync(join(repo, "a.txt"), "dirty\n");
-    const r = withAutoStash(repo, () => { writeFileSync(join(repo, "half.txt"), "partial\n"); return { ok: false, error: "boom" }; });
+    const r = await withAutoStash(repo, () => { writeFileSync(join(repo, "half.txt"), "partial\n"); return { ok: false, error: "boom" }; });
     expect(r.ok).toBe(false);
     expect(r.error).toContain("stash@{0}");
     expect(git("stash", "list").stdout.toString()).toContain("agx: auto-stash");
@@ -155,15 +155,15 @@ describe.skipIf(process.getuid?.() === 0)("a stash made despite a non-zero exit"
   });
   afterAll(() => { try { chmodSync(join(repo, "locked"), 0o755); } catch { /* gone */ } });
 
-  it("stashPush reports it as pushed, not as a failure", () => {
-    const r = stashPush(repo, "wip");
+  it("stashPush reports it as pushed, not as a failure", async () => {
+    const r = await stashPush(repo, "wip");
     expect(git("stash", "list").stdout.toString()).toContain("wip");
     expect(r.ok).toBe(true);
     chmodSync(join(repo, "locked"), 0o755);
   });
 
-  it("auto-stash carries on and restores, instead of saying the operation did not start", () => {
-    const r = withAutoStash(repo, () => ({ ok: true, output: "ok" }));
+  it("auto-stash carries on and restores, instead of saying the operation did not start", async () => {
+    const r = await withAutoStash(repo, () => ({ ok: true, output: "ok" }));
     chmodSync(join(repo, "locked"), 0o755);
     expect(r.error ?? "").not.toContain("was not started");
     expect(r.ok).toBe(true);
@@ -172,8 +172,8 @@ describe.skipIf(process.getuid?.() === 0)("a stash made despite a non-zero exit"
 
 describe("fetch", () => {
   beforeEach(build);
-  it("on a repository with no remote says so, not git's atomic-fetch complaint", () => {
-    const r = fetchRemote(repo);
+  it("on a repository with no remote says so, not git's atomic-fetch complaint", async () => {
+    const r = await fetchRemote(repo);
     expect(r.ok).toBe(false);
     expect(r.error).toBe("no remote is configured for this repository");
   });

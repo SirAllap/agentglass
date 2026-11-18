@@ -64,9 +64,9 @@ describe("base branch", () => {
 
   step("honours an explicit override, because not every branch is cut from trunk", async () => {
     run(repo, "branch", "release-9");
-    gw.setBase(repo, "CARD-1", "release-9");
+    await gw.setBase(repo, "CARD-1", "release-9");
     expect((await gw.baseOf(repo, "CARD-1"))).toBe("release-9");
-    gw.setBase(repo, "CARD-1", null); // back to inferred
+    await gw.setBase(repo, "CARD-1", null); // back to inferred
     expect((await gw.baseOf(repo, "CARD-1"))).toBe("main");
   });
 
@@ -112,8 +112,8 @@ describe("base branch", () => {
     // `git config --unset` exits 5 on a missing key. Taken literally, the
     // picker's "work it out for me" would fail on every branch that never had
     // an override — which is most of them — and report it as a broken action.
-    expect(gw.setBase(repo, "CARD-1", null).ok).toBe(true);
-    expect(gw.setBase(repo, "CARD-1", "").ok).toBe(true);
+    expect((await gw.setBase(repo, "CARD-1", null)).ok).toBe(true);
+    expect((await gw.setBase(repo, "CARD-1", "")).ok).toBe(true);
     expect((await gw.baseOf(repo, "CARD-1"))).toBe("main");
   });
 

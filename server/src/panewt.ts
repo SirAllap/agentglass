@@ -52,6 +52,7 @@ import type { Database } from "bun:sqlite";
 import { closeSync, fstatSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { db } from "./db.ts";
 import { agentCwdsUnder } from "./paneloc.ts";
+import { projectRootOf } from "./git.ts";
 
 /**
  * One row per pane OF ONE TMUX SERVER: the key is the pane id and the server
@@ -135,8 +136,18 @@ ON CONFLICT(pane_id, server) DO UPDATE SET session_id = excluded.session_id, tra
  *  own command line carries its `--resume`. */
 const KEEP_MS = 90 * 24 * 60 * 60_000;
 
+/** Drop the notes past the window. The legacy `pane_agent` table goes by the
+ *  same rule: nothing else ever deleted from it, and a pane id is never reused
+ *  across servers, so it grew by one row per pane for ever — and each start
+ *  copied its dead rows back into `pane_note` only for this sweep to drop them. */
+export function prunePaneNotes(d: Database = db, now = Date.now()): void {
+  const cut = now - KEEP_MS;
+  try { d.run("DELETE FROM pane_note WHERE at < ?", [cut]); } catch { /* a read-only database keeps its rows */ }
+  try { d.run("DELETE FROM pane_agent WHERE at < ?", [cut]); } catch { /* no legacy table, or read-only */ }
+}
+
 ensurePaneNoteTable(db);
-try { db.run("DELETE FROM pane_note WHERE at < ?", [Date.now() - KEEP_MS]); } catch { /* a read-only database keeps its rows */ }
+prunePaneNotes();
 
 /** tmux's own spelling of a pane id. Anything else came from somewhere that
  *  should not be writing here, and is dropped rather than stored. */
@@ -246,16 +257,57 @@ export function notePaneFromHook(body: {
   session_id?: string;
   tmux_pane?: unknown;
   tmux_server?: unknown;
+  hook_event_type?: unknown;
   payload?: Record<string, unknown>;
-}): boolean {
+}, now = Date.now()): boolean {
   const pane = typeof body.tmux_pane === "string" ? body.tmux_pane : "";
   const p = body.payload ?? {};
   const transcriptPath = typeof p.transcript_path === "string" ? p.transcript_path : "";
   const cwd = typeof p.cwd === "string" ? p.cwd : "";
   if (!pane || !transcriptPath || !cwd) return false;
   const server = typeof body.tmux_server === "string" ? body.tmux_server : "";
-  return notePaneAgent({ pane, sessionId: body.session_id ?? "unknown", transcriptPath, cwd, server });
+  const sessionId = body.session_id ?? "unknown";
+  const tool = TOOL_HOOKS.has(String(body.hook_event_type ?? ""));
+  const key = `${server}\n${pane}`;
+  const last = hookNotes.get(key);
+  if (tool && last && last.tool && last.sessionId === sessionId && last.transcriptPath === transcriptPath
+    && last.cwd === cwd && paneOfSession.get(sessionId) === key && now - last.at < NOTE_QUIET_MS) return true;
+  if (!notePaneAgent({ pane, sessionId, transcriptPath, cwd, server, at: now })) return false;
+  if (hookNotes.size >= 2000) { hookNotes.clear(); paneOfSession.clear(); }
+  hookNotes.set(key, { sessionId, transcriptPath, cwd, at: now, tool });
+  paneOfSession.set(sessionId, key);
+  return true;
 }
+
+/*
+ * A TOOL CALL DOES NOT REWRITE THE NOTE IT WROTE A MOMENT AGO.
+ *
+ * `/ingest` calls this for every hook event, and an agent at work sends two
+ * per tool call. Each one was two write transactions (the note, and its copy
+ * in the old table) plus a `PRAGMA table_info`, on the server's only thread,
+ * to store a row that differed from the one already there in nothing but its
+ * time. Read from the code, not timed: with thirty agents working that is
+ * the largest share of the writes `/ingest` makes for a session the scanner
+ * owns, since such a session's events themselves are not stored from the hook.
+ *
+ * So a tool event that says what the last tool event from that pane said,
+ * less than NOTE_QUIET_MS after it, is not written. Everything else is: a
+ * prompt, a stop, a notification, a session start, a pane that changed agent,
+ * conversation or directory, a session last seen in another pane, and the
+ * first tool event after any of those.
+ *
+ * The ceiling: the stored time of a working pane can be up to NOTE_QUIET_MS
+ * old. Its readers ask "seen in the last five or ten minutes" (FRESH_MS in
+ * agentboard.ts and tmuxrestore.ts) and "which of two rows is newer", and
+ * fifteen seconds moves neither. What is remembered here is per process: a
+ * row removed or rewritten by another process is put back within that time.
+ */
+export const NOTE_QUIET_MS = 15_000;
+const TOOL_HOOKS = new Set(["PreToolUse", "PostToolUse"]);
+const hookNotes = new Map<string, { sessionId: string; transcriptPath: string; cwd: string; at: number; tool: boolean }>();
+const paneOfSession = new Map<string, string>();
+/** For the tests: forget what the hooks last said. */
+export function __forgetHookNotes(): void { hookNotes.clear(); paneOfSession.clear(); }
 
 /**
  * The pane a session is sitting in — the reverse of the lookup above.
@@ -515,8 +567,77 @@ function transcriptWork(path: string): string[] {
   return work;
 }
 
+/**
+ * WHERE THE SESSION STANDS NOW, by its own transcript.
+ *
+ * The process cwd of a Claude Code tab never moves when the agent goes into a
+ * worktree (`EnterWorktree`, a `cd`): the agent works there through its tools
+ * and the process stays where it was started. Every transcript entry carries
+ * the session's `cwd` as it was at that moment, so the last one is where the
+ * session is standing. Text in, one path out, newest entry wins.
+ */
+export function latestCwdFromTranscript(text: string): string | null {
+  const lines = text.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!;
+    if (!line.includes('"cwd"')) continue;
+    let entry: { cwd?: unknown };
+    try { entry = JSON.parse(line); } catch { continue; }
+    if (typeof entry?.cwd === "string" && entry.cwd.startsWith("/")) return entry.cwd;
+  }
+  return null;
+}
+
+/** Every entry carries it, so a short tail is enough. */
+const CWD_TAIL_BYTES = 64 * 1024;
+let cwdCache: { path: string; size: number; cwd: string | null } | null = null;
+
+function transcriptCwd(path: string): string | null {
+  let size = -1;
+  try {
+    const fd = openSync(path, "r");
+    try { size = fstatSync(fd).size; } finally { closeSync(fd); }
+  } catch { return null; }
+  if (cwdCache && cwdCache.path === path && cwdCache.size === size) return cwdCache.cwd;
+  const cwd = latestCwdFromTranscript(readTail(path, CWD_TAIL_BYTES));
+  cwdCache = { path, size, cwd };
+  return cwd;
+}
+
+/**
+ * Which directory the tab's footer should name instead of the process cwd.
+ *
+ * The first candidate (the person's explicit re-root, then the transcript's
+ * latest cwd) that is NOT the anchor itself and is the same repo as it: same
+ * git common dir. Another repo's directory never moves a tab, and a directory
+ * git cannot place (a worktree since removed) is not believed.
+ */
+export function movedRoot(
+  candidates: readonly (string | null | undefined)[],
+  anchors: readonly (string | null | undefined)[],
+  repoOf: (dir: string) => string | null,
+): string | null {
+  const anchor = anchors.find((a): a is string => !!a);
+  if (!anchor) return null;
+  const home = repoOf(anchor);
+  if (!home) return null;
+  for (const c of candidates) {
+    if (!c || c === anchor) continue;
+    if (repoOf(c) === home) return c;
+  }
+  return null;
+}
+
+/* A person's explicit re-root (`agentglass-agent recwd`), per pane. It outranks
+   the transcript, and is checked against the repo on every read, so a
+   directory that stopped being a worktree of the tab's repo is ignored. */
+const rootOverride = new Map<string, string>();
+export function setPaneRoot(paneId: string, dir: string | null): void {
+  if (dir) rootOverride.set(paneId, dir); else rootOverride.delete(paneId);
+}
+
 /** Forget the cached tail. Tests write a transcript, read it, then write more. */
-export function resetTailCache(): void { tailCache = null; workCache = null; }
+export function resetTailCache(): void { tailCache = null; workCache = null; cwdCache = null; rootOverride.clear(); }
 
 /**
  * Where the agent in this pane has been working, most certain first.
@@ -537,6 +658,8 @@ export function paneDirs(
   panePid: number,
   cwdsOf: (pid: number) => string[] = agentCwdsUnder,
   server?: string,
+  shellCwd?: string | null,
+  repoOf: (dir: string) => string | null = projectRootOf,
 ): { pane: string; dirs: string[]; work: string[]; agent: string } {
   const cwds = cwdsOf(panePid);
   /* On THIS server: pane ids start at %0 on every one, and a dead server's
@@ -547,9 +670,22 @@ export function paneDirs(
   // this pane. tmux reuses pane ids: %3 outlives the agent that was in it, and
   // a note from the last one would otherwise send you to a worktree belonging
   // to a session that ended yesterday.
-  const live = note && cwds.includes(note.cwd) ? note : null;
-  const dirs = [...cwds];
+  /* The hook reports the session's cwd as it is NOW, and an agent that moved
+     into a worktree reports that, while the process still stands where it
+     started: equality alone then threw the note away and with it the move. The
+     same repo as an agent in this pane vouches for it just as well. */
+  const live = note && (cwds.includes(note.cwd) || movedRoot([note.cwd], cwds, repoOf)) ? note : null;
+  let dirs = [...cwds];
   if (live) for (const d of transcriptDirs(live.transcript_path)) if (!dirs.includes(d)) dirs.push(d);
+  /* The tab's own root first when its session moved: explicit re-root, else
+     the transcript's latest cwd, either only inside the tab's own repo. */
+  const moved = movedRoot([rootOverride.get(paneId), live ? transcriptCwd(live.transcript_path) : null], cwds.length ? cwds : [shellCwd], repoOf);
+  if (moved) dirs = [moved, ...dirs.filter((d) => d !== moved)];
+  /* A plain shell has no agent process under it, so `cwds` is empty and this pane would otherwise answer
+     with nothing at all. Its own directory — `pane_current_path`, read straight from tmux rather than
+     guessed from an agent that was never there — is the one thing it does have, so it goes in last: an
+     agent's own answer still wins whenever there is one. */
+  if (shellCwd && !dirs.includes(shellCwd)) dirs.push(shellCwd);
   /* WHOSE answer, from the same check: the panel keeps a pane's worktree for as
      long as this id stays the same, so a stale note's id — a reused pane, a
      session ended and its ids handed out again — would keep the dead

@@ -70,4 +70,39 @@ describe("one id wins, whichever screen reads it", () => {
     expect(readTaskRef({ headRefName: "api-3-1-bump", title: "Bump the client" }, common)).toBeNull();
     expect(readTaskRef({ headRefName: "api-3-bump", title: "Bump the client" }, common)).toMatchObject({ label: "API-3" });
   });
+
+  it("reads a key from the body's Card reference, and keeps the ClickUp card beside it", () => {
+    const body = "## Card reference\n\nORBIT-1042\n\nhttps://clickup.com/t/8ab12cd34";
+    const r = readTaskRef({ body }, reach);
+    expect(r).toMatchObject({
+      label: "ORBIT-1042", query: "ORBIT-1042", from: "body", tracker: null,
+      also: { label: "8ab12cd34", query: "8ab12cd34", tracker: "clickup" },
+    });
+    expect(r!.url).toBeUndefined();
+  });
+
+  it("keeps a body key the site never listed as a ClickUp card", () => {
+    // `LEGACY-123` is also the shape of a ClickUp custom id; only a project the
+    // site itself listed is Jira's.
+    const body = "## Card reference\n\nLEGACY-123\n\nhttps://clickup.com/t/8ab12cd34";
+    const r = readTaskRef({ body }, reach);
+    expect(r).toMatchObject({ query: "8ab12cd34", tracker: "clickup" });
+    expect(r!.also).toBeUndefined();
+  });
+
+  // The Card reference is written on purpose and can be changed; a head branch cannot be renamed without closing the
+  // pull request. So a pull request re-pointed at another card names it there, and that key wins over the branch's.
+  it("lets the Card reference key win over a different key in the branch", () => {
+    const r = readTaskRef({ headRefName: "ORBIT-7-retry", body: "## Card reference\n\nORBIT-12" }, reach);
+    expect(r).toMatchObject({ label: "ORBIT-12", query: "ORBIT-12", from: "body" });
+  });
+  it("still lets the branch's key win over a key in the body's prose", () => {
+    const r = readTaskRef({ headRefName: "ORBIT-7-retry", body: "Follow-up of ORBIT-12." }, reach);
+    expect(r).toMatchObject({ label: "ORBIT-7", from: "branch" });
+  });
+
+  it("reads the Card reference before the prose it sits in", () => {
+    const body = "Split out of ORBIT-7.\n\n## Card reference\n\nORBIT-12";
+    expect(readTaskRef({ body }, reach)).toMatchObject({ label: "ORBIT-12", from: "body" });
+  });
 });

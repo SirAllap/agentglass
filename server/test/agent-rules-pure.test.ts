@@ -4,7 +4,10 @@
  * would write as the rule for a call.
  */
 import { describe, expect, test } from "bun:test";
-import { BASE_RULES, decide, inForceFor, isLooser, isWrapper, isLooserMode, ruleFor, seatChecksRule, shellSegments, type AgentRule, type RuleSetting } from "../../shared/agentRules.ts";
+import { BASE_RULES, BLOCK_ROLE, blockRole, decide, inForceFor, isLooser, isWrapper, isLooserMode, ruleFor, seatChecksRule, seatDelegatesRule, seatRules, SEAT_DELEGATES_ID, SEAT_DELEGATES_MATCHES, shellSegments, type AgentRule, type RuleSetting } from "../../shared/agentRules.ts";
+
+/** The CLI's own `--role` choices, from the parser `agentglass-agent start --help` prints. */
+const CLI = await Bun.file(new URL("../../bin/agentglass-agent", import.meta.url)).text();
 
 const ROOT = "/work/acme/orbit";
 let n = 0;
@@ -71,6 +74,18 @@ describe("decide", () => {
     expect(decide(rules, ROOT, "Bash", { command: "npm publish && gh pr merge 1" }).decision).toBe("never");
   });
 
+  test("a heredoc body is text: an ask does not fire on it, a never still does", () => {
+    const rules = [...base, rule("Bash(gh pr review:*)", "ask", ROOT)];
+    const notes = "cat > notes.md <<EOF\n- the tab ended on `gh pr review 12 --approve`\nEOF";
+    expect(decide(rules, ROOT, "Bash", { command: notes }).decision).toBe("unknown");
+    // the same words on a command line, or after the body, are the call they look like
+    expect(decide(rules, ROOT, "Bash", { command: "gh pr review 12" }).decision).toBe("ask");
+    expect(decide(rules, ROOT, "Bash", { command: `${notes}\ngh pr review 12` }).decision).toBe("ask");
+    // a quoted tag runs nothing; an unquoted one runs its substitutions, so a never still stops one
+    expect(decide(rules, ROOT, "Bash", { command: "cat > notes.md <<'EOF'\ngh pr review 12\nEOF" }).decision).toBe("unknown");
+    expect(decide(base, ROOT, "Bash", { command: "cat <<X\n$(gh pr merge 1)\nX" }).decision).toBe("never");
+  });
+
   test("a wrapper does not hide the command it runs", () => {
     for (const command of ["env X=1 gh pr merge 1", "env -u HOME gh pr merge 1", "sudo gh pr merge 1", "sudo -u ci gh pr merge 1", "command gh pr merge 1",
       "nice -n 5 gh pr merge 1", "nohup gh pr merge 1", "timeout 60 gh pr merge 1", "timeout -s KILL 5m gh pr merge 1", "stdbuf -oL gh pr merge 1",
@@ -110,6 +125,17 @@ describe("decide", () => {
     expect(decide(base, ROOT, "Bash", { command: "npm publish && gh release create v1" }).decision).toBe("never");
   });
 
+  test("a project that allows git push still never pushes to master, in any spelling", () => {
+    /* A learned "git push: allow" for a project won the line, and the trunk
+       check was skipped with it: git push e2e HEAD:master ran. */
+    const named = BASE_RULES.map((b) => ({ ...rule(b.match, b.setting), action: b.action }));
+    const allowPush = [...named, { ...rule("Bash(git push:*)", "allow", ROOT), action: "git.push" }];
+    for (const command of ["git push upstream HEAD:master", "git push origin +master", "git push --all", "git push origin main"]) {
+      expect(decide(allowPush, ROOT, "Bash", { command }).decision, command).toBe("never");
+    }
+    expect(decide(allowPush, ROOT, "Bash", { command: "git push origin ORBIT-1042-fix" }).decision).toBe("allow");
+  });
+
   test("a pending suggestion decides nothing", () => {
     const pending = { ...rule("Bash(npm publish:*)", "never"), pending: true };
     expect(decide([pending], ROOT, "Bash", { command: "npm publish" }).decision).toBe("unknown");
@@ -146,6 +172,68 @@ describe("decide", () => {
     // a project's allow on the same command does not loosen it: the stricter speaks
     expect(decide([rule("Bash(make check:*)", "allow", ROOT), seatRule], ROOT, "Bash", { command: "make check" }, "seat").decision).toBe("never");
     expect(seatChecksRule(ROOT, false)).toBeNull();
+  });
+
+  test("the delegation rule follows the engine, not a count of blocks", () => {
+    const b = (name: string, kind: string | undefined, engine: string) => ({ name, kind, engine, onPath: true });
+    expect(seatDelegatesRule(ROOT, [], "claude")).toBeNull();
+    expect(seatDelegatesRule(ROOT, [b("Builder", "builder", "claude"), b("Inspector", "reviewer", "claude")], "claude")).toBeNull();
+    expect(seatDelegatesRule(ROOT, [b("Inspector", "reviewer", "opencode")], "claude")).not.toBeNull();
+    expect(seatDelegatesRule(ROOT, [b("Builder", "builder", "claude"), b("Inspector", "reviewer", "opencode")], "claude")).not.toBeNull();
+    // the chair on OpenCode: the Claude block is the one that owns the job
+    expect(seatDelegatesRule(ROOT, [b("Inspector", "reviewer", "claude")], "opencode")).not.toBeNull();
+  });
+
+  test("the sentence names the first on-path block with its CLI, then the path's workers with their engines", () => {
+    const blocks = [
+      { name: "Builder", kind: "builder", engine: "opencode", onPath: true },
+      { name: "Inspector", kind: "reviewer", engine: "opencode", onPath: true },
+      { name: "QA-only", kind: undefined, engine: "opencode", onPath: false },
+    ];
+    const delegation = seatDelegatesRule(ROOT, blocks, "claude")!;
+    expect(delegation).toMatchObject({ id: SEAT_DELEGATES_ID, action: "seat.delegates", role: "seat", setting: "never", project: ROOT });
+    const [first, workers, ceiling] = delegation.why!.split("\n");
+    expect(first).toContain("Builder block (OpenCode)");
+    expect(first).toContain("--role builder");
+    expect(workers).toBe("The path's workers: Builder (OpenCode), Inspector (OpenCode).");
+    expect(ceiling).toContain("agentglass's hook");
+    expect(ceiling).toContain("flow.delegationGuard");
+    const d = decide([delegation], ROOT, delegation.match, { description: "review the diff" }, "seat");
+    expect(d.decision).toBe("never");
+    expect(d.reason).toContain("--role builder");
+    // a worker keeps its own answer, and a Bash call is not touched
+    expect(decide([delegation], ROOT, delegation.match, { description: "review the diff" }).decision).toBe("unknown");
+    expect(decide([delegation], ROOT, "Bash", { command: "git status" }, "seat").decision).toBe("unknown");
+  });
+
+  test("both names Claude Code gives the subagent tool are covered, and a stored wildcard allow does not loosen it", () => {
+    const delegation = seatDelegatesRule(ROOT, [{ name: "Inspector", kind: "reviewer", engine: "opencode", onPath: true }], "claude")!;
+    expect(SEAT_DELEGATES_MATCHES).toEqual(["Agent", "Task"]);
+    for (const tool of ["Agent", "Task"]) {
+      expect(decide([delegation], ROOT, tool, { description: "review the footer diff" }, "seat").decision, tool).toBe("never");
+      // `Agent(*)` is specificity 1 against the bare tool's 0: the narrower-looking allow must not speak
+      const stored = rule(`${tool}(*)`, "allow", ROOT);
+      expect(decide([stored, delegation], ROOT, tool, { description: "review the footer diff" }, "seat").decision, tool).toBe("never");
+      // every other agent keeps its own answer
+      expect(decide([stored, delegation], ROOT, tool, { description: "review the footer diff" }).decision, tool).toBe("allow");
+    }
+  });
+
+  test("every role a block can name is one of the CLI's --role choices, and a made-up kind starts as a builder", () => {
+    const line = /p\.add_argument\("--role", choices=\[([^\]]*)\]/.exec(CLI);
+    expect(line).not.toBeNull();
+    const choices = [...line![1]!.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
+    expect(choices.sort()).toEqual(["builder", "reviewer", "scout", "verifier"]);
+    for (const kind of ["verifier", "reviewer", "builder", "scout"]) expect(choices, kind).toContain(blockRole(kind));
+    for (const kind of [undefined, "qa-only", "landing", "custom"]) expect(blockRole(kind), String(kind)).toBe("builder");
+    expect(Object.values(BLOCK_ROLE).every((r) => choices.includes(r))).toBe(true);
+  });
+
+  test("the derivation is pure: the caller's guard decides whether the delegated rule exists", () => {
+    const flow = { hasVerifier: true, seatEngine: "claude", blocks: [{ name: "Inspector", kind: "reviewer", engine: "opencode", onPath: true }] };
+    expect(seatRules(ROOT, flow, false).map((r) => r.id)).toEqual(["seat.checks"]);
+    expect(seatRules(ROOT, flow, true).map((r) => r.id)).toEqual(["seat.checks", SEAT_DELEGATES_ID]);
+    expect(seatRules(ROOT, { ...flow, hasVerifier: false }, false)).toEqual([]);
   });
 });
 

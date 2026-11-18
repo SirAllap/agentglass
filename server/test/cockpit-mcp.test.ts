@@ -173,8 +173,8 @@ async function call(name: string, args: Record<string, unknown> = {}, env: Recor
 }
 
 const READ_TOOLS = [
-  "cockpit_accounts", "cockpit_agents", "cockpit_attention", "cockpit_errors", "cockpit_manifest", "cockpit_orphans", "cockpit_recent_events",
-  "cockpit_session", "cockpit_sessions", "cockpit_spend", "cockpit_tool_latency",
+  "cockpit_accounts", "cockpit_agents", "cockpit_attention", "cockpit_errors", "cockpit_manifest", "cockpit_memory", "cockpit_orphans", "cockpit_recent_events",
+  "cockpit_session", "cockpit_sessions", "cockpit_spend", "cockpit_status", "cockpit_tool_latency",
 ];
 
 describe.skipIf(!HAVE_PY)("the cockpit MCP server", () => {
@@ -861,9 +861,13 @@ describe.skipIf(!HAVE_PY)("the stdio server outlives a bad call", () => {
     // The loader caches what it compiles in a __pycache__ next to the source,
     // and the source is the app's own resources/bin: a stray directory in an
     // installed package, or a write refused on a read-only one.
+    // Measured: agentglass-browser-mcp loads its sibling `agentglass-browser` at import
+    // (_load_sibling), so the copy must carry all three or the cockpit exits 2 with
+    // FileNotFoundError and the test reads a missing fixture, not a stray __pycache__.
+    // READ_TOOLS above also gained cockpit_status (ba13b2582, agent status table).
     const bin = mkdtempSync(join(tmpdir(), "agx-cockpit-bin-"));
     try {
-      for (const f of ["agentglass-cockpit-mcp", "agentglass-browser-mcp"]) {
+      for (const f of ["agentglass-cockpit-mcp", "agentglass-browser-mcp", "agentglass-browser"]) {
         await Bun.write(join(bin, f), Bun.file(new URL(`../../bin/${f}`, import.meta.url).pathname));
       }
       const p = Bun.spawn(["python3", join(bin, "agentglass-cockpit-mcp")], {
