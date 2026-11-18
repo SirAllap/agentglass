@@ -258,6 +258,9 @@ export type ProviderUsage = {
    *  row reads. Label and plan are the plugin's user-chosen words, never an
    *  email or an id. */
   account?: { label: string; plan: string; active: boolean };
+  /** Set on a row for an account the person added here (not a plugin's): its
+   *  id, label and the NAME of the source it reads. Never a credential. */
+  ownAccount?: { id: string; label: string; source?: string };
   /** Where the numbers come from, in the provider's own words. OpenCode Go says
    *  "this PC": its windows are computed from the turns agentglass ran here,
    *  which under-read the console's own count. */
@@ -393,6 +396,11 @@ export interface TmuxWindow {
   name: string;
   active: boolean;
   flags: string;
+  /** The name agentglass gave this window, pinned in `@agx-given`; a rename by
+   *  hand changes `name` and leaves this. */
+  given?: string;
+  /** The card this window was opened for, pinned in `@agx-card`. */
+  card?: string;
   /** tmux's own description of how the window is split (`#{window_layout}`),
    *  kept so a restore brings it back split the same way. */
   layout?: string;
@@ -471,19 +479,33 @@ export interface TmuxWindow {
    */
   dead?: boolean;
   exit?: number;
+  /** The signal that killed it (`pane_dead_signal`), when one did; `exit` is then 0 and says nothing. */
+  signal?: number;
   diedAt?: number;
   /**
    * Rebuilt by the last restore after a reboot and not yet acted on. The pane
    * is a plain shell with the old scrollback; nothing was started for it.
    * `was` names the agent the pane was running before (its title), `resume`
    * the conversation id a Resume would continue, and `restoredAt` stamps the
-   * restore so a dismissal can never outlive the next one. All cleared by
-   * the `restored` command (Resume, Plain shell, Not now).
+   * restore so a dismissal can never outlive the next one. The mark is cleared
+   * by Resume and Plain shell; Not now puts it away with `restoredDismissed`
+   * and leaves it, so the window keeps its card.
    */
   restored?: boolean;
   was?: string;
   resume?: string;
   restoredAt?: number;
+  /**
+   * The person put the restore banner away. The mark and its card stay; the
+   * desk is simply not announced again until the next restore.
+   */
+  restoredDismissed?: boolean;
+  /**
+   * A project's orchestrator seat is sitting in this window right now —
+   * joined server-side on the seat's `adoptedPane` via `windowOfPane`, not a
+   * field tmux reports. Absent, rather than false, when nobody is seated here.
+   */
+  seat?: boolean;
 }
 
 /**
@@ -709,7 +731,7 @@ export type PtyClientFrame =
   /** Start work on an issue in a window of the user's tmux. `agent` opens the
    *  CLI in it, `yolo` buys exactly one flag, and `title` is data that
    *  `sessionTitle` sanitises before it reaches an argv array. */
-  | { t: "tmux"; cmd: "issue"; n?: number; cwd: string; name?: string; prompt?: string; agent?: boolean; yolo?: boolean; mode?: LaunchMode; title?: string; model?: string; effort?: string; kind?: string; reuse?: boolean }
+  | { t: "tmux"; cmd: "issue"; n?: number; cwd: string; name?: string; prompt?: string; agent?: boolean; yolo?: boolean; mode?: LaunchMode; title?: string; model?: string; effort?: string; kind?: string; reuse?: boolean; cardId?: string; subject?: string }
   /** The tab strip's four window commands, plus take-over. Kept in step with
    *  `TmuxAction` in server/src/tmuxctl.ts, which is what runs them. */
   /** `fit` sizes the tmux window to THIS client — see tmuxctl.ts, and the
@@ -763,9 +785,9 @@ export type PtyClientFrame =
      and the strip they came from is one choice away. */
   /* `group` sets or clears a window's `@agx-group` (no `name` clears it);
      `pin` sets or clears `@agx-pin`, switched by `after`. */
-  | { t: "tmux"; cmd: "select" | "new" | "kill" | "rename" | "move" | "takeover" | "fit" | "session" | "endsession" | "locksession" | "group" | "pin" | "restored" | "reopen" | "restart"; window?: string; name?: string;
-      /** `restored` only: "resume" starts the agent the window was running, "dismiss" drops the card. */
-      how?: "resume" | "dismiss";
+  | { t: "tmux"; cmd: "select" | "new" | "kill" | "rename" | "move" | "takeover" | "fit" | "session" | "endsession" | "locksession" | "group" | "pin" | "restored" | "reopen" | "restart"; window?: string; name?: string; given?: string; card?: string;
+      /** `restored` only: "resume" starts the agent the window was running, "dismiss" drops the card, "notnow" puts the banner away and keeps every card. */
+      how?: "resume" | "dismiss" | "notnow";
       /** `fit` only: the asking panel's own grid. Range-checked on the server —
        *  it ends up in a `resize-window`, so it is a number to validate rather
        *  than to trust. */
@@ -1243,8 +1265,53 @@ export interface LaneRow {
   as?: string;
   container: "private" | "shared" | "named" | "ephemeral";
   name?: string;
+  /** Signed in from the login vault: the box's name as Settings shows it ("Zen — Ubuntu"). */
+  vault?: string;
+  /** The same vault's internal id, for anything that reads it. */
+  vaultId?: string;
   created: number;
   lastAsk: number;
+}
+
+/** A lane's one tab, as Electron main reads it off the lane's window. */
+export interface LaneTab { id: string; url: string; title: string }
+
+/** Guide mode, relay and observer to panel: what to draw for a guided tab.
+ *  The relay sends `start`, each `point` (or `wait` for a wait-click step) and
+ *  `end` with the ask it forwards, as `args.activity`; the observer in Electron
+ *  main sends further `point`/`wait` with a new `target.rect` or `clicked`, and
+ *  `navigated` when the page changed under the step. */
+export interface GuideActivity {
+  kind: "guide";
+  tab: string;
+  /** `say`: new words on the card on screen (`guide say`, or a run's lost sentence). */
+  phase: "start" | "point" | "wait" | "say" | "end";
+  step?: { n: number; m: number };
+  /** Only on the relay's `start` and on a `point`/`wait` that begins a step. An
+   *  observer report (`target`, `clicked`, `navigated`) never carries it, and
+   *  the panel never makes a step of one. */
+  say?: string;
+  /** With `say` only: text the card shows with a Copy button, written to the
+   *  clipboard on the person's own click. Plain text, never markup. */
+  copy?: string;
+  /** With `say` only: a draft for the target text field, put there only on the
+   *  person's own click on the card's "Insert suggestion". Plain text. */
+  suggest?: string;
+  /** With `say` only: what the page is about (`point --summary`, a plan's
+   *  summary step), shown on the card before the person acts. Plain text. */
+  summary?: string;
+  waitClick?: boolean;
+  target?: { rect: { x: number; y: number; w: number; h: number } };
+  clicked?: boolean;
+  navigated?: { url: string };
+  /** Only on `start`: who guides (the caller's --as name), shown in the panel. */
+  agent?: string;
+  /** Only on `start`: a `guide run`, so the card offers Resume after a Stop. */
+  run?: boolean;
+  /** With `say`: the step's target is not on this page; the card offers Back and Stop. */
+  lost?: boolean;
+  /** With `lost`: the step only waits for OK, so the card offers Skip (its OK) besides Back and Stop. */
+  skip?: boolean;
 }
 
 export interface BrowserAskFrame {
@@ -1340,6 +1407,8 @@ export interface BrowserAskFrame {
     | "dialog"
     /* Give the tab to the person for a CAPTCHA, a 2FA code or a consent. */
     | "handoff"
+    /* Guide mode: the agent points and talks, the person clicks. */
+    | "guide" | "point"
     /* Measurement as data: web vitals with ratings, and an accessibility scan. */
     | "vitals" | "a11y"
     /* What a page offers an agent (WebMCP), and running one of its tools.
@@ -1825,6 +1894,11 @@ export type MarkOp =
 export type WsFrame =
   | { type: "initial"; data: WatchEvent[]; openTools?: OpenToolCall[] }
   | { type: "browser"; data: BrowserAskFrame }
+  /** The open lanes, pushed whenever one opens, closes or starts working; `show`
+   *  names the lane an agent asked to bring forward in the Browser pane. */
+  | { type: "lanes"; data: { lanes: LaneRow[]; show?: string } }
+  /** A pane's directory or a window may have changed (tmux said so): re-read `pane-dirs` now. */
+  | { type: "panedirs" }
   /** The open-tool list again, with fresh evidence. Pushed on a timer while any
    *  call is open: evidence is a claim about *now*, and one taken at connect
    *  time is worth nothing thirty seconds later. */
@@ -1866,6 +1940,8 @@ export type WsFrame =
    *  read it sent. The open detail and the board take them as their own: the
    *  watch's answer must not be fresher than the screen it sits on. */
   | { type: "prchecks"; data: PrChecksRead }
+  /** A live tab was re-rooted (recwd, enlist, role switch with a cwd): the footer re-reads its pane and repo list now, not on the next poll. */
+  | { type: "tabroot"; data: { paneId: string; name: string; cwd: string } }
   /** Somebody said something on a pull request you have a stake in. One frame
    *  per pull request per poll — the server holds the latch, exactly as it does
    *  for `ci` — and never a bot. See PrTalkNote. */
@@ -1895,6 +1971,8 @@ export type WsFrame =
   | { type: "settings-requests" }
   /** The automatic cleanup started, advanced or finished a pull request: re-read GET /cleanup/auto. */
   | { type: "cleanup-auto" }
+  /** The disk report on the kept scan started, finished or failed: re-read GET /machine/disk-clean/kept. */
+  | { type: "disk-explain" }
   /** The understudy scorecard, recomputed and pushed whole. It reports what
    *  the understudy WOULD have done and how often that matched; it commands
    *  nothing, which is why it rides the same read-only socket. */
@@ -1906,6 +1984,8 @@ export type WsFrame =
    *  the same server. Whole object, not a diff: it is small, and a diff would
    *  need its own merge rule the day two tabs edit at once. */
   | { type: "notify-prefs"; data: NotifyPrefs }
+  /** Desktop DND was set from agentglass (another tab or device included). */
+  | { type: "notify-dnd"; data: { supported: boolean; on: boolean } }
   /** A long plan window reached the alert level. Decided once on the server
    *  (see paceAlert.ts there); each client words it in its own working hours. */
   | { type: "pace-alert"; data: PaceAlert }
@@ -2008,8 +2088,13 @@ export interface CardNote {
   /** The status it left, on a `status` note. */
   was?: string;
   /** Who wrote it, on a `comment` or `mention`. Comments carry an author;
-   *  assignments and status changes do not, so those never claim one. */
+   *  assignments do not, and a ClickUp status change does not, so those never
+   *  claim one. A Jira status change carries the changelog's author. */
   who?: string;
+  /** On a Jira `status` note: whether the connected account made the move. Read
+   *  from the changelog author. Absent when it could not be read, and always
+   *  absent on ClickUp, whose API names nobody for a move. */
+  byMe?: boolean;
   /** What they said, trimmed to a line. */
   said?: string;
   url?: string;
@@ -2076,9 +2161,15 @@ export interface PrWatchFire {
   ok: boolean;
 }
 
-export interface PrChecksRead { repo: string; number: number; checks: PrCheckRollup; all: PrCheck[]; /** The commit these checks belong to. */ sha?: string }
+export interface PrChecksRead { repo: string; number: number; checks: PrCheckRollup; all: PrCheck[]; /** The commit these checks belong to. */ sha?: string; /** When the server read them (ms), so a merge state read earlier can be told apart from this. */ at?: number }
 
 export interface PrWatchState { watches: PrWatch[]; presets: PrWatchPreset[] }
+/** One pull request in a bulk "Tell me when…" (POST /prs/notify-watch/set-many): the card rules it should end with. */
+export interface PrWatchSetItem {
+  number: number; title: string; rules: PrWatchRule[];
+  /** Write this item only if the PR's card rules are exactly these now. Undo sends what Apply set, so a PR changed since is skipped. */
+  expect?: PrWatchRule[];
+}
 
 /** A repo's default rules, applied with one click — and, when `auto`, to each
  *  new PR of yours in that repo. */
@@ -2729,10 +2820,23 @@ export interface DockerDisk {
   volumes: number;
   buildCache: number;
   reclaimable: number;
+  /** `docker system df`'s own count and reclaimable for images specifically —
+   *  unique image IDs, never one row per tag, and never mixed with the other
+   *  types' reclaimable. Optional so older fixtures still type-check; a
+   *  reader without it falls back to summing the images it was given. */
+  imageCount?: number;
+  imageReclaimable?: number;
+  /** Docker's own reclaimable per kind, from the same single `system df` read. */
+  reclaimableBy?: { images: number; containers: number; volumes: number; buildCache: number };
   /** Images tagged for a worktree that no longer exists on disk. Not deleted,
    *  not hidden — named, with their size, because that is the pile nobody
    *  remembers making. */
   orphans: { id: string; tag: string; bytes: number | null; worktree: string }[];
+  /** Every image's shared/unique split, from `system df -v`, keyed by id. A
+   *  tag that shares an id with another row carries the same numbers: they
+   *  are the same image. `created` is Unix seconds when docker gave one —
+   *  0, negative or missing all mean "it did not say", never a real date. */
+  perImage?: { id: string; bytes: number | null; unique: number | null; created?: number | null }[];
   /** Every volume's size, from the same walk. Carried here rather than fetched
    *  per volume: `system df -v` is the expensive call, and asking it once per
    *  row would be thirty of them. */
@@ -2786,6 +2890,7 @@ export interface DockerScope {
   project: string;     // compose project name derived from it
   matched: number;     // containers that belong to it
   showingAll: boolean; // nothing matched, so every container is listed instead
+  hidden?: number;     // containers of other projects left out of the list
 }
 export interface DockerOverview {
   available: boolean;
@@ -2816,6 +2921,16 @@ export interface DockerOverview {
   tookMs?: number;
 }
 export interface DockerActionResult { ok: boolean; error?: string; output?: string; }
+/** One repository's Docker leftovers (server/src/dockerleftovers.ts): what the orphan sweep lists, and the live HEADs the Images view badges against. */
+export interface DockerRepoLeftovers {
+  repo: string;
+  template: string;
+  liveHeads: string[];
+  orphans: { kind: "image" | "volume"; target: string; id?: string; bytes: number | null; reason: string }[];
+  /** The sweep could not read git or docker; shown instead of "no leftovers". */
+  error?: string;
+  autoRemove: boolean;
+}
 
 /**
  * Whether docker is usable, told apart into the three states that need three
@@ -3009,6 +3124,8 @@ export type MergeSessionView = {
   left: string[];
   /** Of those, the ones resolved through this app rather than elsewhere. */
   mine: string[];
+  /** Conflict places (`<<<<<<<` markers) in each still-open file; one pass when the session is read. Files over 2 MB or past the first 200 are left out. */
+  places?: Record<string, number>;
   error?: string;
 };
 
@@ -3297,6 +3414,14 @@ export interface ReviewPerson {
   team?: boolean;
 }
 
+/** Who reviewed, people and bots apart, one entry each with their latest
+ *  standing state. Feeds the board's Human reviewer / Human review / Bot review
+ *  rule fields. See shared/reviewStates.ts. */
+export interface ReviewStates {
+  humans: { login: string; state: "approved" | "changes" | "comment" | "pending" }[];
+  bots: { login: string; state: "approved" | "changes" | "comment" | "pending" }[];
+}
+
 export interface PrSummary {
   number: number;
   title: string;
@@ -3349,6 +3474,11 @@ export interface PrSummary {
     /** The review comment itself, so a press can land on it rather than on the
      *  conversation and a hunt through forty comments. */
     url?: string;
+    /** The review's GraphQL node id — the address its row in the Conversation
+     *  answers to (`[data-node]`). The card carries it so a press lands ON the
+     *  review. Absent on `awaiting`, which has no review yet, and from a server
+     *  older than this field. */
+    nodeId?: string;
     /**
      * Commits landed AFTER the verdict, so it no longer covers the code.
      *
@@ -3380,6 +3510,18 @@ export interface PrSummary {
      */
     people?: ReviewPerson[];
   } | null;
+  /**
+   * THE BOT'S OWN REVIEW, when a bot is the only one that has left a verdict.
+   *
+   * `humanReview` excludes bots on purpose, so its `url` is no help on a pull
+   * request only a bot has reviewed: the card's Review cell opens the
+   * Conversation under Bots and had no row to land on. Just the address — who
+   * said what is `reviewDecision`, which the card already draws. Null when no
+   * bot has a standing verdict, absent from a server older than this field.
+   */
+  botReview?: { nodeId: string } | null;
+  /** People and bots apart, for the rule fields. Absent until the second pass lands. */
+  reviewStates?: ReviewStates;
   /**
    * The tracker card this pull request came from, when we already know it.
    *
@@ -3455,6 +3597,11 @@ export interface PrSummary {
    * learned: see `web/src/lib/prKnownBlock.ts`.
    */
   requiredMissing?: boolean;
+  /**
+   * The base requires this branch to be up to date and it is behind. Detail-only,
+   * overlaid like `requiredMissing`. Being behind alone is a hint, not a blocker.
+   */
+  behindBlocks?: boolean;
   /**
    * The commit `checks` describes — and therefore the only commit a merge
    * started from this row is allowed to land.
@@ -3944,6 +4091,8 @@ export interface PrDetail extends PrSummary {
   /** Armed auto-merge, so the UI can offer to cancel it rather than only arm it. */
   autoMerge?: { enabledBy: string; method: string } | null;
   mergedBy?: string | null;
+  /** Short sha of the commit the merge put on the base branch. */
+  mergeSha?: string | null;
   mergedAt?: string | null;
   closedAt?: string | null;
   createdAt?: string;
@@ -4719,21 +4868,55 @@ export interface DiskCleanLine {
   label: string;
   /** null: could not be measured without root. */
   bytes: number | null;
+  /** With a null `bytes`: the exact command the person can run themselves to size it. Agentglass never runs it. */
+  sizeCommand?: string;
   verdict: DiskCleanVerdict;
   /** Why that verdict, in plain words. */
   why: string;
   /** Set only on a `safe` line. */
   target: DiskCleanTarget | null;
 }
+/** One item of the report the engine wrote about a scan: safe / check / keep, why, and what brings it back. */
+export type DiskExplainVerdict = "safe" | "check" | "keep";
+export interface DiskExplainItem { id: string; verdict: DiskExplainVerdict; why: string; regen: string }
+/** The background report about a kept scan. Paths, sizes and kinds went in; no file contents ever did. */
+export interface DiskExplain {
+  status: "running" | "ready" | "error";
+  /** The scan (`DiskCleanReport.at`) this report is about. */
+  scanAt: number;
+  startedAt: number;
+  /** How many items were sent, and the rough size of the exchange before it ran. */
+  count: number;
+  estIn: number;
+  estOut: number;
+  items?: DiskExplainItem[];
+  error?: string;
+  costUsd?: number;
+  model?: string;
+}
 export interface DiskCleanMount { mount: string; source: string; size: number; free: number; /** Bytes of `safe` lines living on it. */ safeBytes: number }
+/** Free space of the home filesystem and what it means: ok, low (a quiet badge) or critical (one notification per crossing). */
+export interface DiskSpace { state: "ok" | "low" | "critical"; free: number; total: number }
 export interface DiskCleanReport {
+  /** Home filesystem free space, measured when the scan finished. */
+  space?: DiskSpace;
   lines: DiskCleanLine[];
   mounts: DiskCleanMount[];
   /** Total of the `safe` lines: the plan. */
   safeBytes: number;
   at: number;
+  /** When the scan behind this report finished. Null while the first one runs. */
+  generatedAt?: number | null;
+  /** `scanning`: nothing has finished yet, so ask again in a few seconds. */
+  state?: "ready" | "scanning";
+  /** What to say when there is no report yet. */
+  note?: string;
   /** Things that could not be read (Docker missing, gh signed out...), in plain words. */
   problems: string[];
+  /** Set only on a kept scan read back on open: why it should not be trusted (a clean ran since, or it is too old). */
+  staleWhy?: string | null;
+  /** The engine's report on this scan, kept with it. Absent until one is asked for. */
+  explain?: DiskExplain;
 }
 export interface DiskCleanLineResult {
   id: string;

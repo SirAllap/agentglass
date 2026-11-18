@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""The commit door (`agentglass-agent commit`) as an MCP server, stdio.
+
+One tool: commit. It takes `message` and commits the staged changes onto the
+branch the app recorded when it started this worker, and no other. The app does
+the ref move with its own process; a worker's sandbox shuts every ref path and
+has no route to the app, but this server runs outside it. The call carries the
+worker's own credential (AGENTGLASS_TOKEN, minted for this worker at start),
+never the app token. Only builder roles are given this server.
+"""
+import importlib.machinery
+import importlib.util
+import json
+import os
+import sys
+
+NAME = "agentglass-commit"
+
+
+def _load(file, modname):
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), file)
+    loader = importlib.machinery.SourceFileLoader(modname, path)
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    mod = importlib.util.module_from_spec(spec)
+    sys.dont_write_bytecode = True
+    loader.exec_module(mod)
+    return mod
+
+
+def tools():
+    return [{
+        "name": "commit",
+        "description": "Commit the staged changes (git add first) onto this worker's own branch, the one the app started it on. Takes message. Never pushes.",
+        "inputSchema": {"type": "object", "properties": {"message": {"type": "string"}}, "required": ["message"]},
+    }]
+
+
+def run(name, args):
+    if name != "commit":
+        return {"content": [{"type": "text", "text": f"{name} is not a tool here."}], "isError": True}
+    msg = (args or {}).get("message")
+    if not isinstance(msg, str) or not msg.strip():
+        return {"content": [{"type": "text", "text": "message is a non-empty string."}], "isError": True}
+    r = _load("agentglass-agent", "agentglass_agent").call("/agents/commit", {"message": msg}, timeout=60)
+    ok = bool(r.get("ok"))
+    text = f"committed {r.get('sha', '')} on {r.get('branch', '')}" if ok else (r.get("error") or "refused")
+    return {"content": [{"type": "text", "text": text}], "isError": not ok}
+
+
+def handle(msg):
+    i, m = msg.get("id"), msg.get("method")
+    if i is None:
+        return None
+    if m == "initialize":
+        return {"jsonrpc": "2.0", "id": i, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": NAME, "version": "1.0.0"}}}
+    if m == "tools/list":
+        return {"jsonrpc": "2.0", "id": i, "result": {"tools": tools()}}
+    if m == "tools/call":
+        p = msg.get("params") or {}
+        try:
+            r = run(p.get("name", ""), p.get("arguments"))
+        except SystemExit:
+            r = {"content": [{"type": "text", "text": "the app could not be reached"}], "isError": True}
+        except Exception as e:  # one bad call must not end the session
+            r = {"content": [{"type": "text", "text": f"the tool failed: {type(e).__name__}"}], "isError": True}
+        return {"jsonrpc": "2.0", "id": i, "result": r}
+    if m == "ping":
+        return {"jsonrpc": "2.0", "id": i, "result": {}}
+    return {"jsonrpc": "2.0", "id": i, "error": {"code": -32601, "message": f"method not found: {m}"}}
+
+
+def main():
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out = handle(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+        if out is not None:
+            sys.stdout.write(json.dumps(out) + "\n")
+            sys.stdout.flush()
+
+
+if __name__ == "__main__":
+    main()

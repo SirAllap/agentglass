@@ -596,6 +596,16 @@ def t_orphans(args):
     return fit({"orphans": rows}, ["orphans"], "ask again after stopping some, or read the panel")
 
 
+def t_memory(args):
+    # mem-watch, from the server (GET /machine/scopes): pressure always, and the
+    # top RSS per scope only above 80 % — below it nothing is walked, which is
+    # why an empty list is the ordinary answer and not a broken one.
+    d = _need(get("/machine/scopes"))
+    rows = [_scalars(s) for s in (d.get("scopes") or []) if isinstance(s, dict)]
+    return fit({"pressure": d.get("pressure"), "over": d.get("over"), "scopes": rows}, ["scopes"],
+               "ask again above 80 % pressure; below it the server does not walk the scopes")
+
+
 def t_accounts(args):
     # The accounts a plugin says each provider has (GET /usage/accounts): ids,
     # labels, plan names and which one is active, never a credential. The labels
@@ -605,6 +615,19 @@ def t_accounts(args):
              "accounts": [_scalars(a) for a in (p.get("accounts") or []) if isinstance(a, dict)]}
             for p in (d.get("providers") or []) if isinstance(p, dict)]
     return fit({"providers": rows}, ["providers"], "ask again after removing accounts, or read the popover")
+
+
+def t_status(args):
+    # "How are we": card | role | state | next, for one project's board rows
+    # (GET /seat/status, server/src/agentStatus.ts). Read-only; the flow's
+    # order is this app's own, never decided here.
+    project = _str(args, "project")
+    if not project:
+        raise Refused("project is required: a project root, as cockpit_manifest lists it")
+    d = _need(get("/seat/status", {"root": project, "format": "json"}))
+    rows = [{k: r.get(k) for k in ("card", "role", "state", "next")}
+            for r in (d.get("status") or []) if isinstance(r, dict)]
+    return fit({"status": rows}, ["status"], "the table is one row per card already")
 
 
 def t_manifest(args):
@@ -700,6 +723,16 @@ _TOOLS = [
           "that has gone on for hours. Each says why in plain "
           "words (`reasons`), where it ran, its age and CPU. Read-only: stopping one is a person's click in "
           "the Resources panel."),
+    _tool("cockpit_memory", t_memory,
+          "Memory pressure as a share of RAM, and — only above 80 % — the resident bytes each systemd scope "
+          "holds, biggest first (an app copy, a worker scope). Below the threshold the list is empty on "
+          "purpose: nothing was walked. Read-only; nothing here stops a scope."),
+    _tool("cockpit_status", t_status,
+          "One row per card with a worker on it, for one project: card, role, state, and next — the "
+          "project's flow's own next step after that role, 'waiting on person' when the worker needs one, "
+          "or 'done' past the end. Read-only, read on demand off the same board cockpit_agents reads.",
+          {"project": {"type": "string", "description": "a project root, as cockpit_manifest lists it"}},
+          ("project",)),
     _tool("cockpit_manifest", t_manifest,
           "What landed on this machine's trunk, what is running and what waits for the person's verdict: "
           "the open projects and how many rows wait for a sign-off, or one project's first-parent trunk "

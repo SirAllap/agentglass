@@ -79,6 +79,7 @@ Env:
 """
 import argparse
 import base64
+import hashlib
 import io
 import json
 import os
@@ -145,6 +146,28 @@ def _default_server(host):
     return f"http://{host}:{port}"
 
 
+def _port_override_note():
+    """AGENTGLASS_PORT set on purpose (an isolated server) loses to the port
+    file, by design: a pane can inherit a stale one. Say so once on stderr,
+    with the way out, instead of quietly reaching the live app."""
+    env = os.environ.get("AGENTGLASS_PORT", "").strip()
+    if not env or os.environ.get("AGENTGLASS_SERVER"):
+        return
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    path = os.path.join(base, "agentglass", "port")
+    try:
+        with open(path, encoding="utf-8") as f:
+            port = f.read().strip()
+    except OSError:
+        return
+    if port.isdigit() and 0 < int(port) < 65536 and port != env:
+        print(f"{os.path.basename(sys.argv[0]) or 'agentglass'}: using :{port} from {path}, not AGENTGLASS_PORT={env}. "
+              f"A pane can inherit a stale one, and then nothing is wrong. "
+              f"Only if you started a test server on :{env}, set AGENTGLASS_SERVER=http://127.0.0.1:{env}",
+              file=sys.stderr)
+
+
+_port_override_note()
 SERVER = _server_or_die((os.environ.get("AGENTGLASS_SERVER") or _default_server("localhost")).rstrip("/"))
 STATE_DIR = os.environ.get("AGENTGLASS_BROWSER_STATE_DIR") or os.path.expanduser("~/.cache/agentglass-browser")
 
@@ -233,8 +256,65 @@ TOKEN_PATH = os.path.join(
 # Set by the app on a window it handed no credential. The refusal is the whole
 # contract: without it the CLI reads the person's token file and drives as them.
 BROWSER_OFF = (os.environ.get("AGENTGLASS_BROWSER_OFF") or "").strip().lower() not in ("", "0", "false")
-OFF_REFUSAL = ("browser access is off for this worker: the app handed it no credential, "
-               "and this command does not fall back to the person's")
+# The app computes WHY at mint time (server/src/browseraccess.ts, agentWindowEnv)
+# and hands it over here, naming the exact row of Settings > Browser that is
+# off. Printed as-is: it already says "this command does not fall back to the
+# person's" is implied by refusing at all, and a made-up generic sentence used
+# to claim a "seat row" control that did not exist in the UI.
+OFF_REASON = (os.environ.get("AGENTGLASS_BROWSER_OFF_REASON") or "").strip()
+# Only when the app set the marker with no reason at all (an older window, or a
+# window opened for a command that is not an agent CLI at all): there is no
+# setting to name, so saying there is one would be a lie. This is the one case
+# access may really be on and the credential still missing — a bug, not a
+# setting, and the sentence says that plainly instead of pointing at Settings.
+BUG_REFUSAL = ("browser access is off for this worker, and the app gave no reason — if Settings > "
+               "Browser already allows it, the missing credential is a bug, not a setting. "
+               "Restart the tab, or Settings ▸ Browser ▸ \"Who may drive the browser\" can re-issue it.")
+
+SEAT_CRED_SOCKET = os.path.join(
+    os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "agentglass", "seat-cred", "seat-cred.sock")
+
+
+def _ask_seat_credential():
+    """A pane adopted as a project's seat before this fix shipped carries
+    AGENTGLASS_BROWSER_OFF=1 forever: its environment was fixed at exec and
+    tmux cannot change it. So when OFF is set, ask the server over its
+    private seat-credential socket instead of refusing outright.
+
+    Nothing is claimed on this end — no pane id, no project, nothing from
+    the environment. The server decides purely from the kernel's own
+    SO_PEERCRED of this socket connection and a /proc ancestry walk from
+    that PID, which this process cannot forge. A worker's sandbox blocks
+    unix sockets outright, so a worker never reaches this function's own
+    connect() in the first place; that refusal, not this one, is its fence.
+
+    On success this sets AGENTGLASS_TOKEN and AGENTGLASS_PROFILE in this
+    process's own environment and returns True. Any failure (no socket, no
+    match, a timeout) returns False silently — OFF_REASON (or BUG_REFUSAL) is
+    still what the caller prints.
+    """
+    import socket as _socket
+    try:
+        with _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM) as s:
+            s.settimeout(3)
+            s.connect(SEAT_CRED_SOCKET)
+            s.sendall(b"seat-credential\n")
+            s.shutdown(_socket.SHUT_WR)
+            chunks = []
+            while True:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        res = json.loads(b"".join(chunks).decode("utf-8") or "{}")
+    except (OSError, ValueError):
+        return False
+    if not res.get("ok") or not res.get("token"):
+        return False
+    os.environ["AGENTGLASS_TOKEN"] = res["token"]
+    if res.get("profile"):
+        os.environ["AGENTGLASS_PROFILE"] = res["profile"]
+    return True
 
 
 def _token_on_disk():
@@ -249,13 +329,15 @@ def _token_on_disk():
 
     Reading the file does not widen anything. The app writes it 0600 under the
     person's own config directory, and this CLI runs as that person — anything
-    that can run this can already read it. What the server deliberately does
-    NOT do is put the token in tmux's global environment (see the note at
-    `set-environment -g -u AGENTGLASS_TOKEN` in server/src/index.ts), so that a
-    pane nobody handed it does not inherit one; a file read on a 401 leaves
-    that exactly as it was. The alternative people reach for when this fails is
-    digging the value out of `/proc/<pid>/environ`, which is worse in every
-    way.
+    that can run this can already read it. What the server does NOT do is hand
+    tmux a client that carries the token: every client it spawns is stripped
+    (`withoutBrowserWindowVars` in server/src/browseraccess.ts), and the sweep
+    in `stripGlobalBrowserCredentials` (server/src/tmuxpane.ts, and its twin in
+    tmuxctl.ts) takes it out of a server that was already running — once per
+    server, again whenever the server is reborn. So a pane nobody handed it
+    does not inherit one; a file read on a 401 leaves that exactly as it was.
+    The alternative people reach for when this fails is digging the value out
+    of `/proc/<pid>/environ`, which is worse in every way.
     """
     try:
         with open(TOKEN_PATH) as f:
@@ -280,38 +362,83 @@ def wait_for_slot(op, body, res, seconds):
     return res
 
 
+def handoff_seconds(a):
+    """--timeout as the handoff keeps it: 1 to 3600 s."""
+    return max(1, min(a.timeout, 3600))
+
+
 def wait_for_person(a, body, armed):
     """The banner is up; now wait. Each check waits up to 20 s inside the page,
     so no request is held open for minutes, and the loop ends on the person's
     Done, on --until, on a navigation, or on --timeout (which takes the banner
-    down again rather than leave it on a page nobody is answering for)."""
+    down again rather than leave it on a page nobody is answering for).
+
+    THE DEADLINE IS A WALL, not a hope. A check that raised (a socket timeout
+    is not a URLError, so it went past `call` as a traceback) left the banner
+    up and the glass lifted; now any failure is retried until the deadline and
+    the banner is always taken down on the way out. The panel keeps the same
+    deadline (`timeoutMs` on the arm), so even a CLI that is killed gives the
+    page back."""
     open_browser_view()
     print(f"handoff: waiting for the person — {body['reason']}", file=sys.stderr)
-    end = time.time() + max(1, min(a.timeout, 3600))
-    res = armed
+    end = time.monotonic() + handoff_seconds(a)
+    timed_out = {"ok": False, "value": {"state": "timeout"},
+                 "error": f"nobody answered the handoff in {a.timeout} s; the banner was taken down"}
     # The same addressing as the request that armed it: this tab, this caller.
-    same = {k: v for k, v in body.items() if k not in ("reason", "until")}
+    same = {k: v for k, v in body.items() if k not in ("reason", "until", "timeoutMs")}
     try:
-        while time.time() < end:
-            res = call("handoff", stamped(a, {**same, "check": True, "waitMs": int(max(200, min(20000, (end - time.time()) * 1000)))}))
+        while True:
+            left = end - time.monotonic()
+            if left <= 0:
+                return timed_out
+            try:
+                res = call("handoff", stamped(a, {**same, "check": True, "waitMs": int(max(200, min(20000, left * 1000)))}),
+                           timeout=min(120, left + 30))
+            except Exception as e:  # a socket timeout, a reset: the deadline decides, not the error
+                print(f"handoff: check failed ({e}); asking again", file=sys.stderr)
+                time.sleep(min(1.0, max(0.0, end - time.monotonic())))
+                continue
             state = ((res.get("value") or {}).get("state")) if res.get("ok") else "error"
             if state == "error":
                 # A transient refusal (the view is remounting) is retried; a real one ends it.
-                if "view is not open" in (res.get("error") or "") and time.time() < end:
-                    time.sleep(1)
+                if "view is not open" in (res.get("error") or ""):
+                    time.sleep(min(1.0, max(0.0, end - time.monotonic())))
                     continue
-                call("handoff", stamped(a, {**same, "cancel": True}))
                 return res
+            if state == "timeout":
+                # The panel's own deadline came first: the same answer, the same exit.
+                return timed_out
+            if state == "takenover":
+                # The person pressed Take over: the handoff is over and the tab is theirs.
+                return {"ok": False, "value": {**(res.get("value") or {}), "takenOver": True},
+                        "error": "the person took this tab over, which ended the handoff; ask them before acting on it again"}
             if state != "waiting":
                 return res
-    except KeyboardInterrupt:
-        call("handoff", stamped(a, {**same, "cancel": True}))
-        raise
-    call("handoff", stamped(a, {**same, "cancel": True}))
-    return {"ok": False, "error": f"nobody answered the handoff in {a.timeout} s; the banner was taken down"}
+    finally:
+        # Every way out, Done included (a no-op then): the banner must not outlive the wait.
+        try:
+            call("handoff", stamped(a, {**same, "cancel": True}), timeout=10)
+        except Exception:
+            pass
 
 
-def call(op, body):
+def wait_for_guide(a, body, res):
+    """`guide next` until the person answers: each call waits up to 20 s in
+    the panel, so no request is held open for minutes. Ends on an event (OK,
+    Back, Stop, a click on the target, the page moving) or on --timeout, which
+    leaves the guide on: silence is not an answer, so nothing is guessed."""
+    end = time.time() + max(1, min(a.timeout, 3600))
+    while True:
+        v = res.get("value") if isinstance(res.get("value"), dict) else {}
+        if not res.get("ok") or not v.get("pending"):
+            return res
+        left = end - time.time()
+        if left <= 0:
+            return {"ok": True, "timedOut": True, "value": v}
+        res = call("guide", stamped(a, {**body, "waitMs": int(max(200, min(20000, left * 1000)))}))
+
+
+def call(op, body, timeout=120):
     def send(token):
         req = urllib.request.Request(
             f"{SERVER}/browser/{op}",
@@ -326,7 +453,7 @@ def call(op, body):
         )
         if token:
             req.add_header("Authorization", f"Bearer {token}")
-        with urllib.request.urlopen(req, timeout=120) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read() or b"{}")
 
     sent = os.environ.get("AGENTGLASS_TOKEN")
@@ -500,6 +627,12 @@ SHARED_KEY = "(default)"
 # The role ids are the four in shared/workerRoles.ts; this CLI is standalone
 # and cannot import them.
 WORKER_ROLE_IDS = frozenset({"scout", "builder", "reviewer", "verifier"})
+# What a worker may send to the person's tab under a guide grant. Mirrors
+# GUIDE_READ_VERBS in server/src/browserGuideGrants.ts, plus guide and point.
+GUIDE_GRANT_VERBS = frozenset({
+    "guide", "point", "observe", "read", "tabs", "markdown", "links", "forms",
+    "interactive", "attr", "shot",
+})
 
 
 def is_shared_identity(who):
@@ -583,8 +716,26 @@ class _map_lock:
         return False
 
 
+def _tab_key(name):
+    """The map key for `name`: the name, plus which credential holds it.
+
+    A worker's credential lives as long as the worker. The relay forgets the
+    pages of a name when that credential ends, so an entry written by a worker
+    that was stopped is a page its successor under the same name does not own;
+    naming it is a refusal, and the new worker never got to open its own. The
+    key carries a short digest of the worker credential (never the credential),
+    so a restarted worker starts with no entry and the same one keeps its own.
+    The person's own token, and no token, keep the bare name.
+    """
+    tok = os.environ.get("AGENTGLASS_TOKEN") or ""
+    if name and tok.startswith("wk_"):
+        return f"{name}#{hashlib.sha256(tok.encode()).hexdigest()[:8]}"
+    return name
+
+
 def my_tab(name):
     """The tab this identity opened, if it still has one."""
+    name = _tab_key(name)
     try:
         with open(_tabs_path()) as f:
             return (json.load(f) or {}).get(name) or None
@@ -613,6 +764,7 @@ def remember_tab(name, tab_id):
     """
     if not name or not tab_id:
         return
+    name = _tab_key(name)
     try:
         with _map_lock():
             os.makedirs(STATE_DIR, exist_ok=True)
@@ -640,6 +792,7 @@ def forget_tab(name):
     a refusal the caller cannot act on, and pruning is what makes the next
     `open` self-heal.
     """
+    name = _tab_key(name)
     try:
         with _map_lock():
             with open(_tabs_path()) as f:
@@ -1161,6 +1314,10 @@ def stamped(a, body, who=None):
         body.setdefault("as", who)
     if getattr(a, "page", None):
         body["pageExplicit"] = True
+    # A worker's `--shared` under a guide grant: said on the wire, so the
+    # relay reads the ask as the person's tab and answers with the grant rule.
+    if getattr(a, "guide_shared", False):
+        body["shared"] = True
     # In the one place every request passes, so the verbs that return early (the
     # screencast's watch, session, cdp, do) reach the lane too and not the
     # person's window.
@@ -1223,8 +1380,8 @@ def addressed(a, cmd=None):
 RELAY_REFUSED_VERBS = frozenset({
     "addInitScript", "audit", "call-tool", "cdp", "checkup", "clipboard", "clock",
     "cookies", "coverage", "debug", "dialog", "done", "download", "drag", "emulate",
-    "eval", "expose", "exposed", "fake", "handoff", "har", "headers", "intercept",
-    "listeners", "pdf", "permission", "permissions", "profiles", "record", "region",
+    "eval", "expose", "exposed", "fake", "guide", "handoff", "har", "headers", "intercept",
+    "listeners", "pdf", "permission", "permissions", "point", "profiles", "record", "region",
     "save", "scrape", "screencast", "script", "session", "settings", "storage",
     "template", "throttle", "tools", "trace", "upload",
 })
@@ -1245,6 +1402,20 @@ def unusable_refusal(verb):
     )
 
 
+WORKER_PERSON_TAB_HINT = (
+    "The person's own tab is out of reach for a worker by design: ask the "
+    "orchestrator (seat) to run a guide there, or open your own container with "
+    "`--as <name>`."
+)
+
+
+def _worker_shell():
+    """A worker's shell, by the same test `request` uses to keep it off the
+    machine token: a minted `wk_` credential, or the role the app set."""
+    return bool(re.match(r"wk_", os.environ.get("AGENTGLASS_TOKEN") or "")) \
+        or bool(os.environ.get("AGENTGLASS_ROLE"))
+
+
 def no_tab_refusal(who, verb):
     """THE ONE SENTENCE, said in one place.
 
@@ -1253,7 +1424,13 @@ def no_tab_refusal(who, verb):
     `--shared` became the person's own container, so the refusal was sending
     people at the very call that drives another agent's page. A refusal is the
     only thing a stuck caller reads; it does not get to be out of date.
+
+    A worker is never pointed at `--shared open`: the relay refuses the
+    person's container to its credential, so that line would send it at the
+    very call that is refused.
     """
+    if who == SHARED_KEY and _worker_shell():
+        return f"{verb}: {WORKER_PERSON_TAB_HINT}"
     return (
         f'{verb}: "{who}" has no tab open, so this would have gone to whichever tab is '
         f"in front — which may belong to another agent.\n"
@@ -2506,8 +2683,8 @@ def _refuse_locked_abbrev(ap, argv):
 
 def main():
     # Every verb, before argparse builds a request or `call` reads a file.
-    if BROWSER_OFF:
-        print(f"agentglass-browser: {OFF_REFUSAL}", file=sys.stderr)
+    if BROWSER_OFF and not _ask_seat_credential():
+        print(f"agentglass-browser: {OFF_REASON or BUG_REFUSAL}", file=sys.stderr)
         return 2
     ap = argparse.ArgumentParser(prog="agentglass-browser", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -2589,6 +2766,8 @@ def main():
     p.add_argument("url")
     p.add_argument("--wait-slot", dest="waitSlot", type=float, default=None, metavar="SECONDS",
                    help="when 12 pages are already awake, queue for a free slot this long instead of refusing")
+    p.add_argument("--vault", help="the vault a first visit of this site signs your own container in from, when the answer said the site is in several: "
+                                   "the name Settings shows. Never your person's own container (--shared)")
     p = sub.add_parser("read", help="the page's url, title and visible text")
     # The structured readers — the page as an agent needs it, not as the DOM
     # markets it. Each is MAX_TEXT-capped on the page side, then "--max-tokens"
@@ -2915,6 +3094,63 @@ def main():
     p.add_argument("reason", help="one line: what the person is needed for")
     p.add_argument("--until", help="also done when this CSS selector exists, or the url contains this (starts with / or http)")
     p.add_argument("--timeout", type=int, default=300, help="give up after this many seconds (default 300, max 3600)")
+    p = sub.add_parser(
+        "guide",
+        help="walk the person through a page step by step: you point and say, THEY click",
+        description=(
+            "Guide mode, for a step the person must do with their own hand (a risky change on a production "
+            "page). `guide start` puts the tab in guide mode: from then on every act on it (click, fill, type, "
+            "press, open, eval…) is refused for every agent, you included; reading still works. Point at each "
+            "step with `point`, then `guide next` waits for the person: OK, Back, Stop, or their click on the "
+            "target. `guide end` lifts the lock and returns the audit: every step, what the person pressed or "
+            "clicked and when, and any act of yours that was refused.\n\n"
+            "  guide start 'Rotate the orbit-ci key' --page t3\n"
+            "  point 'role=link[name=\"API keys\"]' --say 'Open API keys in the left menu.' --step 1/3\n"
+            "  guide next            # prints {\"event\": \"ok\"} (or back, stop, click, navigated)\n"
+            "  point e14 --say 'Click Rotate key on the orbit-ci row.' --wait-click --step 2/3\n"
+            "  guide next --timeout 900\n"
+            "  guide end             # the audit, as JSON\n\n"
+            "`guide next` exits 3 with {\"timeout\": true} when --timeout runs out with no answer; the guide stays "
+            "on, so call it again or end it.\n\n"
+            "A whole guide at once: `guide run --page t3 --why 'Post a reply' plan.json`. The plan is a JSON list of "
+            "steps, each {\"target\": \"<selector>\", \"text\": \"<label among matches>\", \"say\": \"…\", "
+            "\"wait\": \"ok|click|nav|input|submit\", \"copy\": \"…\"}. The server points each step and moves on by "
+            "itself when the person does the step's wait; each `guide next` returns the run's next event in order "
+            "(step, back, navigated, input, submit, lost, resumed, run-done with the summary). A plan only points "
+            "and waits: it never acts on the page.\n"
+            "  guide say 'Click Reply under the first comment.'   # new words on the card on screen"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("action", choices=["start", "run", "say", "next", "end"], help="start a guide, run a plan, change the card's words, wait for the person's answer, or end it")
+    p.add_argument("why", nargs="?", help="with start: one line saying what the person is being walked through; with run: the plan's JSON file (- for stdin); with say: the card's new words")
+    p.add_argument("--why", dest="why_flag", help="with run: one line saying what the person is being walked through")
+    p.add_argument("--timeout", type=int, default=600, help="with next: give up waiting after this many seconds (default 600, max 3600); exits 3")
+    p.add_argument("--suggest", dest="guideSuggest", metavar="DRAFT", help="with say: a new draft for the card's text field, in place of the old one (the answer to a regenerate event). At most 2000 characters")
+    p = sub.add_parser(
+        "point",
+        help="in guide mode: point at an element and say what the person should do there",
+        description=(
+            "One step of a guide (see `guide`). Draws a ring on the element and a speech bubble under the agent's "
+            "pointer with --say, over the page and never inside it. Without --wait-click the person answers with "
+            "OK (or Back / Stop); with it, their click on the element is the answer. Then `guide next`."
+        ),
+    )
+    p.add_argument("selector", help="an id from an observation, a locator (role=button[name=\"Save\"]) or CSS")
+    p.add_argument("--say", help="what the person should do there, in their words (needed unless --summary)")
+    p.add_argument("--wait-click", dest="waitClick", action="store_true", help="the person's click on the element is the answer, not OK")
+    w = p.add_mutually_exclusive_group()
+    w.add_argument("--wait-ok", dest="wait", action="store_const", const="ok", help="the card's OK is the answer (the default without --wait-click)")
+    w.add_argument("--wait-nav", dest="wait", action="store_const", const="nav", help="the page navigating is the answer")
+    w.add_argument("--wait-input", dest="wait", action="store_const", const="input", help="the field holding text, 1.5 s after the person's last key, is the answer (clicking it is not)")
+    w.add_argument("--wait-submit", dest="wait", action="store_const", const="submit", help="the person sending the form is the answer")
+    p.add_argument("--text", help="with several matches: point the one whose label holds this text (e.g. '2 comments')")
+    p.add_argument("--step", help="N/M, shown in the bubble as Step N of M")
+    p.add_argument("--copy", help="exact text the person will paste (a command, a reply); the card shows it with a Copy button. At most 2000 characters, may be multi-line")
+    p.add_argument("--suggest", help="a draft for the text field you point at; the card offers Write my own, Suggest another and Use suggestion; only the person's click puts it in the field (never submitted). Suggest another reaches guide next as regenerate with their note: answer with guide say --suggest. At most 2000 characters, may be multi-line")
+    # Its own dest: the global --summary (one line about the answer) is a flag, this is text.
+    p.add_argument("--summary", dest="pageSummary", metavar="TEXT", help="what the page is about, written from your read of it; the card shows it before the person acts and the step ends on their OK. Without --say the card says to read it, then press OK. At most 2000 characters")
+    p.add_argument("--expect", help="CSS that should match after the person's click; guide next then reports expected: true|false")
     p = sub.add_parser("vitals", help="LCP, CLS, INP, TTFB, FCP of this page, each rated good / needs-improvement / poor")
     p = sub.add_parser("a11y", help="what a screen reader would miss: unlabelled controls, images without alt, heading jumps, no lang — with ids to act on")
     p = sub.add_parser("tools", help="the tools the PAGE offers an agent (WebMCP), marked page-supplied; needs AGENTGLASS_BROWSER_WEBMCP=1 on the server")
@@ -3024,14 +3260,32 @@ def main():
                     "with a signed-in page already loaded, seeded in an in-memory jar that never "
                     "touches disk — a task-scoped fork, not the shared private jar `new` alone "
                     "gives you.")
-    p.add_argument("action", choices=["new", "list", "close"])
-    p.add_argument("id", nargs="?", help="the lane to close (from `lane new` or `lane list`)")
+    p.add_argument("action", choices=["new", "list", "close", "vault"])
+    p.add_argument("id", nargs="?", help="the lane to close, or to sign in from the vault (from `lane new` or `lane list`)")
+    p.add_argument("--ephemeral", action="store_true",
+                   help="with `new`: an in-memory lane, gone when it closes. `lane vault` needs one")
+    p.add_argument("--site", help="with `vault`: the one site to sign the lane in to from the login vault, like acme.test")
+    p.add_argument("--vault", help="with `vault`: which vault, when the answer named several. With `new --ephemeral`: the vault a first visit of a site signs the lane in from")
     p.add_argument("--force", action="store_true",
                    help="list every agent's lanes, or close one somebody else opened. "
                         "Read `lane list` first: it is their work")
     p.add_argument("--from-template", dest="fromTemplate", metavar="NAME",
                    help="with `new`: an in-memory lane seeded from this template (see `template save`) "
                         "instead of an empty jar")
+    p = sub.add_parser(
+        "vault",
+        help="sign your ephemeral lane in to one site from the person's login vault",
+        description="The same pull as `lane vault ID --site S`. Make the lane with `lane new "
+                    "--ephemeral` first. You get counts, never the cookie values. A site the "
+                    "person marked sensitive waits for their OK on a card (5 minutes, then no). "
+                    "A site in several vaults answers `ambiguous` with their names: ask the "
+                    "person, then pass --vault. Read-back verbs are refused in that lane after.")
+    p.add_argument("laneId", metavar="LANE", nargs="?", help="your ephemeral lane's id (from `lane new --ephemeral`)")
+    p.add_argument("--site", help="the one site to sign in to, like acme.test")
+    p.add_argument("--vault", help="which vault, when the answer named several: the name Settings shows "
+                                   "(any case, - for the dash) or the id `--list` prints")
+    p.add_argument("--list", action="store_true",
+                   help="list the vault names and how many sites each holds (never a cookie or a value)")
     p = sub.add_parser(
         "whoami",
         help="who you are, whether you still hold a tab, and which container owns the "
@@ -3296,6 +3550,22 @@ def main():
         # keys the worker on: a worker with no --as acts as its own name.
         a.asProfile = worker_own
         who = acting_as(a)
+    # Guide mode on the person's own tab, under a guide grant the person gave
+    # (Settings ▸ Browser ▸ Worker verbs ▸ Guide grants): guide, point and the
+    # reads, each naming the tab with --page. The relay checks the grant (this
+    # worker, the tab's site) and that its own guide runs there; this only
+    # stops refusing the spelling. The ask goes out under the worker's own
+    # name with the tab it typed, so nothing falls through to the tab in front.
+    # `guide start` alone may leave --page out: a worker cannot learn the
+    # person's tab id first, so the relay takes the tab in front, checks the
+    # grant on it, and its answer names the tab for every later --page.
+    guide_start = a.cmd == "guide" and getattr(a, "action", None) == "start"
+    if (worker_own and getattr(a, "shared", False) and a.cmd in GUIDE_GRANT_VERBS
+            and (getattr(a, "page", None) or a.cmd == "tabs" or guide_start)):
+        a.shared = False
+        a.guide_shared = True
+        a.asProfile = worker_own
+        who = acting_as(a)
     if worker_role in WORKER_ROLE_IDS and (
             is_shared_identity(who) or getattr(a, "active", False)):
         print(
@@ -3305,7 +3575,10 @@ def main():
             f"the wire), --profile, AGENTGLASS_PROFILE, any spacing or case of that name, "
             f"and --active, which addresses the person's tab without naming it. "
             f"--page is allowed: the relay serves only a page this worker opened, and "
-            f"refuses another with a sentence. Use your own lane.",
+            f"refuses another with a sentence. Use your own lane. {WORKER_PERSON_TAB_HINT} To guide the person on "
+            f"their own tab, under a guide grant (Settings ▸ Browser ▸ Worker verbs ▸ Guide "
+            f'grants): guide start "<why>" --shared takes the tab in front and its answer '
+            f"names the tab; then point, guide next/end and reads with --shared --page <tab>.",
             file=sys.stderr,
         )
         return 2
@@ -3545,6 +3818,8 @@ def main():
         # naming difference is not worth an hour of somebody's work in the
         # wrong cookie jar.
         body = {"url": a.url}
+        if a.cmd == "open" and getattr(a, "vault", None):
+            body["vault"] = a.vault
     elif a.cmd == "inspect":
         body = {"action": a.action}
         if a.action == "panel":
@@ -3763,13 +4038,46 @@ def main():
         if a.action == "new":
             if getattr(a, "shared", False):
                 body["shared"] = True
+            elif getattr(a, "ephemeral", False):
+                # Before --as: a worker always has asProfile (its own name), and
+                # it would swallow the flag, so `--ephemeral --vault` was refused.
+                body["ephemeral"] = True
+                # `lane new --ephemeral --vault NAME`: the vault a first visit
+                # of this lane signs in from. Dropped here, the server never
+                # learned it and an ambiguous site stayed signed out.
+                if getattr(a, "vault", None):
+                    body["vault"] = a.vault
             elif getattr(a, "asProfile", None):
                 body["profile"] = a.asProfile
+            if getattr(a, "vault", None) and "ephemeral" not in body:
+                print("--vault with `lane new` needs --ephemeral: only an in-memory lane is signed in from the vault",
+                      file=sys.stderr)
+                return 2
+        elif a.action == "vault":
+            if not a.id or not getattr(a, "site", None):
+                print("lane vault needs the lane id and --site (see `lane new --ephemeral`)", file=sys.stderr)
+                return 1
+            body["id"] = a.id
+            body["site"] = a.site
+            if getattr(a, "vault", None):
+                body["vault"] = a.vault
         elif a.action == "close":
             if not a.id:
                 print("lane close needs the lane id (see `lane list`)", file=sys.stderr)
                 return 1
             body["id"] = a.id
+    elif a.cmd == "vault":
+        # Rides the `lane` op: one pull, one code path on the server.
+        a.cmd = "lane"
+        if getattr(a, "list", False):
+            body = {"action": "vaults"}
+        elif not a.laneId or not a.site:
+            print("vault needs the lane id and --site, or --list", file=sys.stderr)
+            return 1
+        else:
+            body = {"action": "vault", "id": a.laneId, "site": a.site}
+        if getattr(a, "vault", None) and body["action"] == "vault":
+            body["vault"] = a.vault
     elif a.cmd == "whoami":
         # No page, no selector, nothing to validate: the whole request is who
         # this shell is, and the answer is composed by the relay out of the tab
@@ -3805,9 +4113,69 @@ def main():
         if a.text is not None:
             body["text"] = a.text
     elif a.cmd == "handoff":
-        body = {"reason": a.reason}
+        body = {"reason": a.reason, "timeoutMs": handoff_seconds(a) * 1000}
         if a.until:
             body["until"] = a.until
+    elif a.cmd == "guide":
+        body = {"action": a.action}
+        if a.why_flag and a.action != "run":
+            print("--why goes with guide run; guide start takes it as text", file=sys.stderr)
+            return 2
+        if a.action == "start":
+            if not a.why:
+                print('guide start needs why: guide start "Rotate the orbit-ci key"', file=sys.stderr)
+                return 2
+            body["why"] = a.why
+        elif a.action == "run":
+            if not a.why_flag or not a.why or not a.page:
+                print("guide run needs --page <tab>, --why '<why>' and the plan file: guide run --page t3 --why 'Post a reply' plan.json", file=sys.stderr)
+                return 2
+            try:
+                raw = sys.stdin.read() if a.why == "-" else open(a.why, encoding="utf-8").read()
+                body["plan"] = json.loads(raw)
+            except (OSError, ValueError) as e:
+                print(f"guide run: cannot read the plan {a.why}: {e}", file=sys.stderr)
+                return 2
+            body["why"] = a.why_flag
+        elif a.action == "say":
+            if not a.why and a.guideSuggest is None:
+                print("guide say needs the card's new words: guide say 'Click Reply under the first comment.' (or --suggest '<new draft>')", file=sys.stderr)
+                return 2
+            if a.why:
+                body["say"] = a.why
+            if a.guideSuggest is not None:
+                body["suggest"] = a.guideSuggest
+        elif a.why:
+            print(f"guide {a.action} takes no text; only guide start, run and say do", file=sys.stderr)
+            return 2
+        if a.action == "next":
+            body["waitMs"] = 20000
+    elif a.cmd == "point":
+        if a.say is None and a.pageSummary is None:
+            print("point needs --say: what the person should do there (or --summary: what the page is about)", file=sys.stderr)
+            return 2
+        body = {"selector": a.selector}
+        if a.say is not None:
+            body["say"] = a.say
+        if a.pageSummary is not None:
+            body["summary"] = a.pageSummary
+        if a.waitClick and a.wait:
+            print("--wait-click and --wait-%s: pick one" % a.wait, file=sys.stderr)
+            return 2
+        if a.waitClick:
+            body["waitClick"] = True
+        if a.wait:
+            body["wait"] = a.wait
+        if a.text:
+            body["text"] = a.text
+        if a.step:
+            body["step"] = a.step
+        if a.copy is not None:
+            body["copy"] = a.copy
+        if a.suggest is not None:
+            body["suggest"] = a.suggest
+        if a.expect:
+            body["expect"] = a.expect
     elif a.cmd == "upload":
         body = {"selector": a.selector, "paths": a.paths}
     elif a.cmd == "permission":
@@ -4188,13 +4556,30 @@ def main():
     # The panel honours `show` on a mint; this is the one place it is written.
     if a.cmd in ("open", "newtab") and a.show:
         body["show"] = True
-        print("--show: the browser pane is brought forward for this tab", file=sys.stderr)
 
     res = call(a.cmd, body)
+    # Said after the answer, not before: a lane's tab lives in a window of its
+    # own, and the relay says whether a Browser pane was there to bring it
+    # forward. Printing the claim before asking is how it came to be false.
+    if body.get("show") and res.get("ok"):
+        val = res.get("value") if isinstance(res.get("value"), dict) else {}
+        if val.get("marked"):
+            print(f"--show: {val.get('why') or 'marked in the Browser overview'}", file=sys.stderr)
+        elif val.get("shown") is False:
+            print(f"--show: not brought forward: {val.get('why') or 'the Browser pane could not be told'}", file=sys.stderr)
+        else:
+            print("--show: the browser pane is brought forward for this tab", file=sys.stderr)
     if getattr(a, "waitSlot", None):
         res = wait_for_slot(a.cmd, body, res, a.waitSlot)
     if a.cmd == "handoff" and res.get("ok"):
         res = wait_for_person(a, body, res)
+    if a.cmd == "guide" and a.action == "next" and res.get("ok"):
+        res = wait_for_guide(a, body, res)
+        if res.get("timedOut"):
+            print(json.dumps({"timeout": True, "seconds": a.timeout}))
+            print(f"guide next: no answer from the person in {a.timeout} s; the guide is still on — "
+                  "call guide next again, or guide end", file=sys.stderr)
+            return 3
     # A tab of ours that is gone stops being ours, so the next call opens a
     # fresh one instead of addressing a ghost forever.
     if body.get("page") and str(res.get("error") or "").startswith("no tab called"):

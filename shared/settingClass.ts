@@ -42,8 +42,12 @@
  */
 
 import { DOOR_IDS, doorNarrows, raisesToLive, type DoorId } from "./polaris.ts";
+import { mcpModesOf } from "./mcpReadonly.ts";
 import { roundsNarrows, secondNarrows, whoNarrows } from "./reviewSettings.ts";
 import { browserWorkersNarrow } from "./browserWorkers.ts";
+import { ENV_LIMITS } from "./envLimits.ts";
+import { SWITCHABLE_COMMANDS } from "./workerRoles.ts";
+import { allowListNarrows, verbGroupsNarrow } from "./browserLimits.ts";
 
 export type SettingClass = "low" | "escalation" | "personOnly" | "secret";
 
@@ -64,6 +68,15 @@ export const REQUEST_TTL_MS = 30 * 60_000;
 /** What the window answers for an escalation it will not apply without the person. */
 export const NEEDS_APPROVAL = "needs the person's approval";
 
+/** A memory size as systemd takes it (`20G`, `512M`); NaN for anything else, "" (automatic) included. */
+const SIZE_UNIT: Record<string, number> = { K: 2 ** 10, M: 2 ** 20, G: 2 ** 30, T: 2 ** 40 };
+const sizeOf = (v: unknown): number => {
+  const m = /^([1-9]\d{0,6})([KMGT]?)$/i.exec(typeof v === "string" ? v.trim() : "");
+  return m ? Number(m[1]) * (SIZE_UNIT[(m[2] ?? "").toUpperCase()] ?? 1) : NaN;
+};
+/** A smaller ceiling is the safer direction. Automatic ("") is a size this file cannot know, so leaving it is never a narrowing. */
+const sizeNarrows = (prev: unknown, next: unknown) => sizeOf(next) < sizeOf(prev);
+const RANK_SOCKETS = (v: unknown): number => (v === "all" ? 1 : 0);
 const LOW = (why = "a preference of the window: changes nothing an agent may do"): ClassRow => ({ class: "low", why });
 
 /** Turning it off is the safer direction (`on` = widening). */
@@ -80,6 +93,25 @@ const items = (v: unknown): string[] =>
 const subsetNarrows = (prev: unknown, next: unknown) => { const p = new Set(items(prev)); return items(next).every((x) => p.has(x)); };
 /** The new list only gains members (a deny list). */
 const supersetNarrows = (prev: unknown, next: unknown) => { const n = new Set(items(next)); return items(prev).every((x) => n.has(x)); };
+
+/** `workers.mcpServers`: Off < Read-only < All, per server name. `mcpModesOf`
+ *  reads an old-shaped `prev` (the plain list this setting stored before
+ *  per-server modes existed) as each name at "all" — exactly what that
+ *  project had — so a stored `["atlassian"]` moving to `{ atlassian:
+ *  "readOnly" }` narrows, and moving to `{}` narrows too; neither is a
+ *  silent loosening nor a silent drop. */
+const MCP_RANK: Record<string, number> = { off: 0, readOnly: 1, all: 2 };
+const mcpRank = (modes: Record<string, string>, name: string) => MCP_RANK[modes[name] ?? "off"] ?? 0;
+/** Every server's mode is the same or stricter than it was. */
+const mcpNarrows = (prev: unknown, next: unknown) => {
+  const p = mcpModesOf(prev), n = mcpModesOf(next);
+  return [...new Set([...Object.keys(p), ...Object.keys(n)])].every((name) => mcpRank(n, name) <= mcpRank(p, name));
+};
+/** A server reached All that was not already there: the one direction only the person takes. */
+const mcpAllWidened = (prev: unknown, next: unknown) => {
+  const p = mcpModesOf(prev), n = mcpModesOf(next);
+  return Object.entries(n).some(([name, mode]) => mode === "all" && mcpRank(p, name) < MCP_RANK.all!);
+};
 
 const PILOT_RANK: Record<string, number> = { manual: 0, copilot: 1, autopilot: 2 };
 /** Handing the flying to someone less hands-on (autopilot to copilot, copilot to manual) is the safer direction. */
@@ -102,6 +134,12 @@ const modeNarrows = (prev: unknown, next: unknown) =>
 const POWER_RANK: Record<string, number> = { speak: 0, nudge: 1, assign: 2 };
 const powerNarrows = (prev: unknown, next: unknown) =>
   typeof prev === "string" && typeof next === "string" && prev in POWER_RANK && next in POWER_RANK && POWER_RANK[next]! < POWER_RANK[prev]!;
+/** A worker's turn with nobody at the pane (headless.ts): unset behaves exactly
+ *  like `dontAsk` (refuses rather than prompting), so it ranks the same;
+ *  `bypassPermissions` skips the ask step too and is the one looser mode. */
+const PERM_RANK: Record<string, number> = { "": 0, dontAsk: 0, bypassPermissions: 1 };
+const permNarrows = (prev: unknown, next: unknown) =>
+  typeof prev === "string" && typeof next === "string" && prev in PERM_RANK && next in PERM_RANK && PERM_RANK[next]! <= PERM_RANK[prev]!;
 
 type BudgetLike = { root?: unknown; model?: unknown; period?: unknown; limit?: unknown };
 const budgetKey = (b: BudgetLike) => `${String(b.root ?? "")}\u0000${String(b.model ?? "")}\u0000${String(b.period ?? "")}`;
@@ -135,22 +173,76 @@ export const SETTING_CLASSES: Readonly<Record<string, ClassRow>> = {
   "appearance.mode": LOW(), "appearance.theme": LOW(), "appearance.accent": LOW(),
   "appearance.density": LOW(), "appearance.fontSize": LOW(), "appearance.translucent": LOW(), "appearance.reduceMotion": LOW(),
   "diff.split": LOW(), "diff.wrap": LOW(), "diff.syntaxTheme": LOW(),
+  "diff.groupBy": LOW(), "diff.showIgnored": LOW(), "diff.showOutside": LOW(),
   "terminal.renderer": LOW(), "terminal.font": LOW(), "terminal.fontSize": LOW(), "terminal.lineHeight": LOW(),
   "terminal.cursor": LOW(), "terminal.focusFollowsMouse": LOW(), "terminal.paneBar": LOW(), "terminal.paneBarMarker": LOW(), "terminal.copyOnSelect": LOW(),
-  "terminal.noteEditor": LOW(), "terminal.benchButton": LOW(), "terminal.tabGroups": LOW(), "terminal.tabGroupRules": LOW(), "terminal.scrollback": LOW(),
+  "terminal.noteEditor": LOW(), "terminal.benchButton": LOW(), "terminal.benchLinks": LOW(), "terminal.otherLinks": LOW(), "terminal.tabGroups": LOW(), "terminal.tabGroupRules": LOW(), "terminal.scrollback": LOW(),
   "terminal.wordSeparators": LOW(),
   "rail.place.*": LOW(), "rail.badge.*": LOW(), "tasks.source.*": LOW(), "keys.binding.*": LOW(),
   "notifications.quiet": LOW("only quiets what is not stopped: an agent blocked on the person still interrupts"),
   "notifications.volume": LOW("how loud the app's own sounds and banners are, from silent to loud: it never hides an agent blocked on the person and widens nothing an agent may do"),
   "notifications.ciOnlyApproved": LOW(), "notifications.talk": LOW(),
-  "browser.searchEngine": LOW(), "tasks.landing": LOW(),
+  "browser.searchEngine": LOW(),
+  "browser.agentsWithoutScreen": LOW("only whether an agent's tab loads in the background or in the open pane: it reaches no site and no session the agent could not already reach"),
+  "tasks.landing": LOW(),
   "prefs.diskWarn": LOW("only when the machine panel draws its quiet low-disk badge: it never deletes or notifies"),
   "usage.bar.*": LOW("hides a chip from the usage strip: it changes no reading and costs nothing"),
-  "about.autoCheck": LOW("only whether this window asks the release feed on a timer"), "clickup.statusSpaces.counted": LOW(), "jira.statusUnits.counted": LOW(), "jira.tree.shapes": LOW("only how this window draws the Jira sidebar: nothing an agent may do changes"),
+  "about.autoCheck": LOW("only whether this window asks the release feed on a timer"), "clickup.statusSpaces.counted": LOW(), "jira.statusUnits.counted": LOW(), "jira.syncFavourites": LOW("only whether this window's Jira sidebar also lists your favourite filters: nothing on the site changes"), "jira.tree.shapes": LOW("only how this window draws the Jira sidebar: nothing an agent may do changes"), "jira.board.confirmMoves": LOW("only whether the board waits for a yes before a drag writes to Jira: nothing an agent may do changes"),
   "plugins.sessionReads.repos": { class: "escalation", why: "lets review plugins read the authoring session of more repositories", narrows: subsetNarrows },
 
   // ── the server (server/src/serverSettings.ts) ──
   "orchestration.policy": { class: "escalation", why: `which engine and model every worker and the chair run on, and when that changes: ${COST}` },
+  "workers.unixSockets": {
+    class: "escalation", why: "which Unix sockets a worker's shell can reach: a socket is a door out of the sandbox, so only the person or an approved card opens it",
+    narrows: (prev, next) => RANK_SOCKETS(next) < RANK_SOCKETS(prev),
+  },
+  ...Object.fromEntries(["agentglass-agent", "agentglass-ui", "agentglass-cockpit-mcp"].map((door): [string, ClassRow] => [`workers.appDoors.${door}`, {
+    class: "escalation", why: `whether a worker's shell may run ${door}, one of this app's own doors, which its lock denies: opening it is only the person's`,
+    narrows: offNarrows,
+    personOnlyWhen: { when: (_prev, next) => next === true, why: `opening ${door} to a worker's shell is only the person's: do it from Settings` },
+  }])),
+  ...Object.fromEntries(SWITCHABLE_COMMANDS.map((cmd): [string, ClassRow] => [`workers.commands.${cmd.replace(/ /g, "-")}`, {
+    class: "escalation", why: `whether a worker's shell may run ${cmd}: open by default, anyone may close it, re-opening it is only the person's`,
+    narrows: offNarrows,
+    personOnlyWhen: { when: (_prev, next) => next === true, why: `opening ${cmd} to a worker's shell is only the person's: do it from Settings` },
+  }])),
+  /* Limits the environment used to hold alone. None is an agent's to move in either direction: a limit an
+     agent could tighten today it could loosen tomorrow, and the one the person set is the one that holds. */
+  ...Object.fromEntries(ENV_LIMITS.map((l): [string, ClassRow] => [l.id, {
+    class: "personOnly", why: `${l.label}: a limit on what this app and its agents may do, only the person's to move (also held by ${l.env} when that is set)`,
+  }])),
+  "workers.gitInternals": {
+    class: "escalation", why: "whether a worker's shell may write the directory core.hooksPath names and submodule git dirs: a hook it plants there runs, outside the sandbox, on the next git command, so only the person opens it",
+    narrows: offNarrows,
+    personOnlyWhen: { when: (_prev, next) => next === true, why: "opening the hooks directory and submodule git dirs to a worker's shell is only the person's: do it from Settings" },
+  },
+  "workers.unwalledEngines": {
+    class: "escalation", why: "whether an engine with no sandbox (Hermes) may run as a worker: its shell can read the app's own token and anything else the person can, so only the person turns it on",
+    narrows: offNarrows,
+    personOnlyWhen: { when: (_prev, next) => next === true, why: "letting a worker run with no read wall is only the person's: do it from Settings" },
+  },
+  "workers.memoryMax": {
+    class: "escalation", why: "how much memory one worker's process tree may hold before the kernel stops it: a bigger ceiling lets a runaway worker take more of the machine, so only the person or an approved card raises it",
+    narrows: sizeNarrows,
+  },
+  "agents.permissionMode": {
+    class: "escalation", why: "the permission mode every worker role turn starts in: bypass skips the ask step, so only the person or an approved card turns it on",
+    narrows: permNarrows,
+  },
+  "workers.claudeConfigDir": {
+    class: "escalation", why: "which Claude Code account a project's agents act as: another folder is another login, with its own limits and history, so only the person picks it",
+    personOnlyWhen: { when: () => true, why: "choosing which Claude account a project's agents use is only the person's: do it from Settings" },
+  },
+  "workers.projectSkills": LOW("whether a worker role's turn loads the checkout's own .claude/skills and .claude/commands: text staged into a session-only plugin, never its hooks, MCP servers or permissions.allow"),
+  "workers.noClaude": LOW("which engine a worker role runs on: on, a role set to Claude starts on the project's other engine; it widens nothing a worker may do"),
+  "workers.mcpServers": {
+    class: "escalation", why: "which of the person's configured MCP servers a worker turn is given, and whether each one is read-only or may write: each one acts with the person's own account", narrows: mcpNarrows,
+    personOnlyWhen: { when: mcpAllWidened, why: "letting a worker's chosen MCP server write (All) is only the person's: do it from Settings" },
+  },
+  "workers.mcpServers.available": LOW("read-only: the MCP servers configured in ~/.claude.json, for the Settings page to list — nothing here is written"),
+  "workers.plannerWrite": {
+    class: "escalation", why: "whether the built-in scout (planner) may write its own worktree and .agx-tmp instead of only answering in its last message", narrows: offNarrows,
+  },
   "agents.role.*": { class: "escalation", why: `the engine and model a worker role starts with: ${COST}` },
   // The chair reading code or running tests is the widest part of this row: an
   // agent's ask for a wider answer always waits, whatever the trust switch says.
@@ -171,6 +263,9 @@ export const SETTING_CLASSES: Readonly<Record<string, ClassRow>> = {
     narrows: browserWorkersNarrow,
     askAlways: { when: () => true, why: "widening who may drive the browser is one request: it waits for the person, and is never applied by the agent that asked" },
   },
+  "browser.origins.allow": { class: "escalation", why: `the origins a worker's browser may be pointed at: a longer list ${MORE_POWER}`, narrows: allowListNarrows },
+  "browser.profiles.allow": { class: "escalation", why: `the named profiles a worker's browser may use: a longer list ${MORE_POWER}`, narrows: allowListNarrows },
+  "browser.workerVerbs": { class: "escalation", why: `which groups of browser verbs a worker may run (devtools, cookies, eval go beyond reading and acting): a group turned on ${MORE_POWER}`, narrows: verbGroupsNarrow },
   /* The first run, one value for the app. An agent does not answer for the person
      whether the setup is finished, what was read in the tutorial, or which agent
      starts a terminal. */
@@ -219,14 +314,20 @@ export const SETTING_CLASSES: Readonly<Record<string, ClassRow>> = {
   },
   "flightPlan.preflight.model": { class: "escalation", why: `the model a Preflight reviews with: ${COST}` },
   "flightPlan.preflight.costCapUsd": { class: "escalation", why: "the most one Preflight may spend: a higher cap spends more", narrows: lowerNarrows },
+  "flightPlan.preflight.fileCapBytes": {
+    class: "escalation", why: "bytes a plan-named file with no cited line is sent whole up to: 0 is no cap, sending every such file whole",
+    narrows: (prev, next) => typeof prev === "number" && typeof next === "number" && (next === 0 ? Infinity : next) < (prev === 0 ? Infinity : prev),
+  },
   // Polaris: Settings > Orchestration. One id per door, each with its own row.
   "polaris.enabled": {
     class: "escalation", why: "turns Polaris on: its doors then read and draft on pull requests", narrows: offNarrows,
     personOnlyWhen: { when: (_prev, next) => next === true, why: "turning Polaris on is the person's alone, from Settings" },
   },
   ...Object.fromEntries(DOOR_IDS.map((d) => [`polaris.door.${d}`, doorRow(d)])),
+  "polaris.botReviewers": { class: "escalation", why: "which bot logins Polaris reads a review from: a longer list reads and reports more", narrows: subsetNarrows },
   "cleanup.config": { class: "escalation", why: "which containers, databases and folders a post-merge cleanup may remove: a wider list deletes more" },
   "cleanup.mode": { class: "escalation", why: "whether leftovers of a finished pull request are removed on their own: ask is stricter than at merge, and at merge than automatic", narrows: (prev, next) => typeof prev === "string" && typeof next === "string" && prev in CLEANUP_RANK && next in CLEANUP_RANK && CLEANUP_RANK[next]! < CLEANUP_RANK[prev]! },
+  "cleanup.orphanAutoRemove": { class: "escalation", why: "removes leftover images and volumes by itself", narrows: (prev, next) => next === false },
   "cleanup.autoCleanDays": { class: "escalation", why: "cleans merged pull requests by itself once they are this old: 0 is never, fewer days is sooner", narrows: (prev, next) => typeof prev === "number" && typeof next === "number" && (next === 0 || (prev !== 0 && next > prev)) },
   "cleanup.evidenceRoots": { class: "escalation", why: "folders a cleanup may remove evidence from: a longer list removes more", narrows: subsetNarrows },
   "cleanup.otherFolders": { class: "escalation", why: "folder patterns a cleanup may remove checkouts and folders by: a longer list removes more", narrows: subsetNarrows },
@@ -234,6 +335,8 @@ export const SETTING_CLASSES: Readonly<Record<string, ClassRow>> = {
   "seat.model": { class: "escalation", why: `the chair's model: ${COST}` },
   "seat.kind": { class: "escalation", why: `the chair's engine: ${COST}` },
   "seat.powers": { class: "escalation", why: `what the chair may do to other agents: ${MORE_POWER}`, narrows: powerNarrows },
+  // Only the person lets the seat do a flow's jobs itself: an agent turning this off would unmake the rule that binds it.
+  "flow.delegationGuard": { class: "personOnly", why: "whether the seat may spawn a Claude subagent for work a worker block of its flow owns: turning it off unmakes the rule that refuses the seat", narrows: onNarrows },
   "seat.change": { class: "escalation", why: `stands the chair down and seats it again on its stored engine: ${COST}` },
   "seat.wakeHours": { class: "escalation", why: "how often the chair is woken when nothing changes: a shorter floor spends more", narrows: higherNarrows },
   "hooks.gate": { class: "escalation", why: `the gate holds a tool call until a person decides: off ${MORE_POWER}`, narrows: onNarrows },
@@ -255,8 +358,16 @@ export const SETTING_CLASSES: Readonly<Record<string, ClassRow>> = {
   "jira.writes.link": JIRA_KIND("link pull requests to cards"),
   "jira.writes.assign": JIRA_KIND("assign people to cards"),
   "privacy.retentionDays": { class: "personOnly", why: "a shorter time deletes history at the next sweep, which nothing brings back: only the person chooses it" },
+  "privacy.clickupCardDays": { class: "personOnly", why: "a shorter time evicts cached ClickUp cards at the next sweep, which nothing brings back: only the person chooses it" },
+  "terminal.relay": LOW("moves terminal bytes to a process of their own at the next app start: loopback only, behind a one-use ticket, and it changes nothing an agent may do"),
+  "privacy.ledgerStubDays": { class: "personOnly", why: "a shorter time deletes ledger rows at the next sweep, which nothing brings back: only the person chooses it" },
   "clickup.writes": { class: "escalation", why: "lets agentglass write to ClickUp with the person's account", narrows: offNarrows },
   "clickup.includeSubtasks": { class: "escalation", why: "a heavier read against a rate-limited token the person also works with", narrows: offNarrows },
+  "tracker.choice": {
+    class: "escalation", why: "which tracker a repository's cards live in: pinning one to ClickUp turns its ClickUp writes back on",
+    narrows: (_prev, next) => next !== "clickup",
+  },
+  "tracker.clickupWrites": { class: "escalation", why: "lets agentglass change the ClickUp cards of a repository whose work moved to Jira, with the person's account", narrows: offNarrows },
   "secrets.keyring": {
     class: "escalation",
     why: "moves every stored token between the files and the system keyring; turning it off is the person's alone",
@@ -264,6 +375,18 @@ export const SETTING_CLASSES: Readonly<Record<string, ClassRow>> = {
     personOnlyWhen: { when: (_prev, next) => next === false, why: "turning the keyring off moves every stored token back into plain files, so only the person does it, from Settings" },
   },
   "agents.changeWithoutAsking": { class: "personOnly", why: "decides whether agents are asked at all: only the person turns it on, from Settings", narrows: offNarrows },
+  "flow.agentEdit": { class: "personOnly", why: "whether a project's orchestrator may edit its own flow and roster: only the person turns it on, from Settings", narrows: offNarrows },
+  "flow.sessionStart.move": { class: "escalation", why: "turns on an automatic Jira write (a move) at the start of every worker's first turn, with the person's account", narrows: offNarrows },
+  "flow.sessionStart.moveStatus": LOW("only which status a session-start move lands on; the move itself still needs its own switch above and the Jira move door"),
+  "flow.autoContinue": { class: "escalation", why: "turns on an automatic worker start (the flow's next role) the moment one worker ends with no question, no person in between", narrows: offNarrows },
+  "flow.enforce": LOW("only makes the server refuse a worker's hand-off when the step before it is not done: it widens nothing an agent may do and never holds the person"),
+  "flow.notifyPrReviews": LOW("tells the seat about a bot review on an open pull request; reads nothing new and writes nothing"),
+  "flow.notifyPrReviews.bots": LOW("only which extra logins count as a bot for that notice; the notice itself still needs its own switch above"),
+  "flow.nextCard.enabled": { class: "escalation", why: "turns on an automatic worker start (a scout) for every unclaimed card a saved filter shows, with no person in between", narrows: offNarrows },
+  "flow.nextCard.filterId": LOW("only which saved filter is read; the start itself still needs its own switch above"),
+  "flow.nextCard.cap": LOW("only the most scouts this ever runs at once for the filter; the start itself still needs its own switch above"),
+  "cleanup.moveCard": { class: "escalation", why: "turns on an automatic Jira write (a move) as one more step of a merge's cleanup plan, with the person's account", narrows: offNarrows },
+  "cleanup.moveCardStatus": LOW("only which status a merge's cleanup move lands on; the move itself still needs its own switch above and the Jira move door"),
   "remote.serve": { class: "personOnly", why: "publishing this machine to the tailnet and pairing devices are the person's, on the Remote page" },
   "jira.token": { class: "secret", why: "a credential" },
   "clickup.token": { class: "secret", why: "a credential" },

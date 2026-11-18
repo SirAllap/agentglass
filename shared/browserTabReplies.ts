@@ -31,9 +31,25 @@ export function closedReply(rows: TabRow[]): { ok: true; value: TabRow[] } {
   return { ok: true, value: rows };
 }
 
-/** `open`/`newtab`: the mint, with the list folded in beside it. */
+/**
+ * `open`/`newtab`: the tab it made, named at the top, with the list of ITS
+ * container folded in beside it.
+ *
+ * It used to fold in the whole window's list and say nothing else about the
+ * new tab but its id. The list is read before the panel's selection reaches
+ * it, so `active` still marks the tab that was in front — and a reader looking
+ * for "the page I just opened" found the person's own tab there: `open --as
+ * vault-test --show <url>` answered with the person's repositories page while
+ * the new tab sat on a sign-in form. It also handed an agent the title and url
+ * of every tab in every other container. So the answer names the made tab's
+ * url, title and container itself, and lists only tabs in that container.
+ */
 export function openedReply(
   made: { id: string }, rows: TabRow[],
-): { ok: true; value: { id: string; tabs: TabRow[] } } {
-  return { ok: true, value: { ...made, tabs: rows } };
+): { ok: true; value: { id: string; url?: string; title?: string; profile?: string; tabs: TabRow[] } } {
+  const mine = rows.find((r) => r.id === made.id);
+  if (!mine) return { ok: true, value: { ...made, tabs: [] } };
+  const box = mine.profile || "default";
+  const tabs = rows.filter((r) => (r.profile || "default") === box);
+  return { ok: true, value: { ...made, url: mine.url, title: mine.title, profile: mine.profile, tabs } };
 }

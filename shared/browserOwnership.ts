@@ -77,6 +77,26 @@ export function resolveAskTab(
  * looking at. Two exceptions and no more: an empty window has to show the tab
  * it just made, and a caller that asked to be shown gets what it asked for.
  */
-export function mintTakesThePane(o: { existing: number; show: boolean }): boolean {
+export function mintTakesThePane(o: { existing: number; show: boolean; agent?: boolean }): boolean {
+  /* An agent's container never becomes the person's view, `--show` or an
+     empty window included: measured, a worker's `open --show` into a window
+     whose own tabs were all closed put the pane in `agent:<name>` with the
+     person's "You are here" on it, and the next `--shared open` followed it
+     there. A worker that wants to be watched has a lane, which sits beside. */
+  if (o.agent) return false;
   return o.show || o.existing === 0;
+}
+
+/**
+ * Which container a minted tab goes in.
+ *
+ * `wanted` is what the ask said: `""` is the person's own container
+ * (`--shared`), a name is that container (already resolved to `resolved`), and
+ * nothing at all is "where the person is", which is `front`. The empty string
+ * fell through `resolved ?? front` with the other two, so `--shared open`
+ * landed in whatever container was in front — an agent's, when one was.
+ */
+export function mintContainer(wanted: string | undefined, resolved: string | undefined, front: string): string {
+  if (wanted === "") return "";
+  return resolved ?? front;
 }

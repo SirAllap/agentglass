@@ -55,7 +55,9 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -108,6 +110,28 @@ def _default_server(host):
     return f"http://{host}:{port}"
 
 
+def _port_override_note():
+    """AGENTGLASS_PORT set on purpose (an isolated server) loses to the port
+    file, by design: a pane can inherit a stale one. Say so once on stderr,
+    with the way out, instead of quietly reaching the live app."""
+    env = os.environ.get("AGENTGLASS_PORT", "").strip()
+    if not env or os.environ.get("AGENTGLASS_SERVER"):
+        return
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    path = os.path.join(base, "agentglass", "port")
+    try:
+        with open(path, encoding="utf-8") as f:
+            port = f.read().strip()
+    except OSError:
+        return
+    if port.isdigit() and 0 < int(port) < 65536 and port != env:
+        print(f"{os.path.basename(sys.argv[0]) or 'agentglass'}: using :{port} from {path}, not AGENTGLASS_PORT={env}. "
+              f"A pane can inherit a stale one, and then nothing is wrong. "
+              f"Only if you started a test server on :{env}, set AGENTGLASS_SERVER=http://127.0.0.1:{env}",
+              file=sys.stderr)
+
+
+_port_override_note()
 SERVER = _server_or_die((os.environ.get("AGENTGLASS_SERVER") or _default_server("localhost")).rstrip("/"))
 
 
@@ -206,6 +230,102 @@ def emit(res):
     return 0 if res.get("ok") else 1
 
 
+def _client_pane():
+    """The pane of the tmux client this runs in; empty when there is no tmux."""
+    try:
+        r = subprocess.run(["tmux", "display-message", "-p", "#{pane_id}"],
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def adopt_pane(given=None, env=None, client=None):
+    """`--pane`, else $TMUX_PANE, else the pane of the client this runs in.
+
+    A hook, or a program started with `env -u TMUX_PANE`, has no $TMUX_PANE and
+    is still in a pane the app can use. When even that fails, the answer names
+    the flag rather than asking the person to guess.
+    """
+    env = os.environ if env is None else env
+    pane = (given or env.get("TMUX_PANE", "")).strip()
+    if not pane:
+        pane = ((client or _client_pane)() or "").strip()
+    if not pane:
+        return "", "no pane: pass --pane %N, the pane your agent runs in (`tmux display-message -p '#{pane_id}'` prints it)"
+    return pane, None
+
+
+def _adopt_card_listed(pane):
+    """Whether this caller's own list still shows the adoption card for `pane`.
+
+    True, False, or None where the read itself failed: a failed read is not an
+    answer, and a card still waiting is not a decline.
+    """
+    listed = call("/settings/requests", method="GET", timeout=30)
+    rows = listed.get("requests")
+    if not listed.get("ok") or not isinstance(rows, list):
+        return None
+    for card in rows:
+        if card.get("setting") != "seat.adopt":
+            continue
+        # The pane is the card's arrow line: "pane: %3" or "pane: %2 -> %3".
+        if any(str(line).split()[-1:] == [pane] for line in (card.get("diff") or [])):
+            return True
+    return False
+
+
+def _seat_approved(root, pane):
+    state = call("/seat?root=" + urllib.parse.quote(root), method="GET", timeout=30)
+    seat = (state.get("seat") or {}) if state.get("ok") else {}
+    return seat.get("adoptedPane") == pane and bool(seat.get("adoptedApproved"))
+
+
+def _wait_for_adopt(root, pane, body, res):
+    """Wait for the person's click, and stop as soon as the card is gone.
+
+    The only exit used to be an approval, so a decline cost the full deadline and
+    then blamed a card the person had already answered. A decline deletes the
+    card and writes nothing to the row, so that absence is the answer.
+    """
+    deadline = time.time() + 180
+    seen = False
+    while True:
+        if _seat_approved(root, pane):
+            return emit(call("/seat/adopt", body, timeout=60))
+        listed = _adopt_card_listed(pane)
+        if listed is True:
+            seen = True
+        elif listed is False:
+            # A decide deletes the card before it writes an approval, so read
+            # the row once more before saying the person said no.
+            time.sleep(1)
+            if _seat_approved(root, pane):
+                return emit(call("/seat/adopt", body, timeout=60))
+            if seen:
+                return emit({"ok": False, "applied": False, "declined": True, "waiting": False,
+                             "pending": res.get("pending"),
+                             "error": "the person declined the adoption card, so the seat is not adopted; "
+                                      "run adopt again to ask them once more"})
+            return emit({"ok": False, "applied": False, "declined": False, "waiting": False,
+                         "pending": res.get("pending"),
+                         "error": "the adoption card is not listed for this caller and the seat is not adopted: "
+                                  "it was declined, or this caller cannot read the project's cards; "
+                                  "run adopt again once the person has clicked"})
+        if time.time() >= deadline:
+            break
+        time.sleep(2)
+    if seen:
+        # Not a failure: the card is still on their screen, and the click adopts
+        # a minute later if they get to it.
+        return emit({"ok": False, "applied": False, "waiting": True, "pending": res.get("pending"),
+                     "error": "the adoption card is still waiting for the person's click; "
+                              "approve it in the app and run adopt again"})
+    return emit({"ok": False, "applied": False, "waiting": False, "pending": res.get("pending"),
+                 "error": "the seat is not adopted: the card could not be read back, so the CLI cannot tell a "
+                          "decline from a wait; run adopt again once the person has clicked"})
+
+
 def main():
     ap = argparse.ArgumentParser(prog="agentglass-agent", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -217,11 +337,15 @@ def main():
     p.add_argument("--kind", default=None, help="which CLI: claude (default), codex, ...")
     p.add_argument("--role", choices=["scout", "builder", "reviewer", "verifier"],
                    help="a worker role: the CLI and model Settings pick for it, locked against push, commit and merge")
-    p.add_argument("--plan", metavar="FP_ID", help="with --role: the flight plan this worker's result counts for (a step the flow marks required)")
-    p.add_argument("--engine", help="with --role: which engine of the policy's chain runs it (the policy decides the choices)")
+    p.add_argument("--flow-role", metavar="ID",
+                   help="a role id from this project's Flow: it runs that role's own prompt and chain, and the Flow counts the worker on its block")
+    p.add_argument("--plan", metavar="FP_ID", help="with a role: the flight plan this worker's result counts for (a step the flow marks required)")
+    p.add_argument("--card", metavar="KEY|URL",
+                   help="a Jira key (ORBIT-1042) or a Jira or ClickUp card address: the server reads the card and appends it to the brief, because a worker has no network")
+    p.add_argument("--engine", help="with a role: which engine of its chain runs it (the policy decides the choices)")
     p.add_argument("--model", help="with --engine: which model of that chain entry")
     p.add_argument("--allow", action="append", metavar="network|commit|docker",
-                   help="with --role: widen the worker's envelope by one thing, up to the project's ceiling (repeatable or comma-separated)")
+                   help="with a role: widen the worker's envelope by one thing, up to the project's ceiling (repeatable or comma-separated)")
     p.add_argument("--yolo", action="store_true", help="skip permissions, if Settings allow it")
     p.add_argument("--remote-control", metavar="NAME", help="Claude's --remote-control NAME")
     p.add_argument("--prompt", default="", help="a first message on the command line (prefer `prompt` after `start`)")
@@ -234,7 +358,15 @@ def main():
     p.add_argument("name")
     p.add_argument("text", nargs="?", default="", help="the message, as ONE quoted argument")
     p.add_argument("--file", help="read the message from this file instead")
+    p.add_argument("--flow-role", metavar="ID",
+                   help="for a headless worker between turns: switch it into this role of the project's Flow for its next turn — same session id and checkout, but that role's own prompt, envelope and chain")
+    p.add_argument("--cwd", metavar="DIR",
+                   help="with --flow-role: run the new role in this worktree of the same repo (refused for any other directory)")
     p.add_argument("--timeout", type=int, default=10000, help="ms to wait for the paste to land and be taken")
+
+    p = sub.add_parser("recwd", help="move a live tab to a worktree of its own repo without killing it: footer, branch, pull request and card follow")
+    p.add_argument("name")
+    p.add_argument("dir", help="the worktree (an absolute path or ~/…); it must be a checkout of the tab's own repo")
 
     p = sub.add_parser("own", help="take an agent nobody owns (an enlisted tab, one from before owners): a seat reaches only the agents it owns")
     p.add_argument("name")
@@ -261,6 +393,10 @@ def main():
     p.add_argument("--kill", action="store_true",
                    help="kill the window even for a tab you only enlisted: you mean the tab, not the registration")
 
+    p = sub.add_parser("place", help="put a tab's window in a session without changing what anyone is looking at (default: its project's session)")
+    p.add_argument("name")
+    p.add_argument("--session", default="", help="an existing tmux session; never creates one")
+
     p = sub.add_parser("schedule", help="start an agent later: at a clock time, a date-time, or after a delay")
     p.add_argument("name")
     p.add_argument("--cwd", required=True, help="the checkout it will run in")
@@ -278,6 +414,9 @@ def main():
     p = sub.add_parser("say", help="the orchestrator's one line for this round (run it from the project's checkout)")
     p.add_argument("line", help="what a person should read: who needs them, what changed")
     p.add_argument("--root", help="the project this is about (default: the current directory)")
+
+    p = sub.add_parser("commit", help="commit the staged changes onto YOUR branch (a worker's sandbox cannot move refs; the server does it, for this worktree's own branch only)")
+    p.add_argument("-m", "--message", required=True, help="the commit message")
 
     p = sub.add_parser("enlist", help="take a tab you opened yourself under the app's hand, so broadcast, prompt and read reach it")
     p.add_argument("name", help="what you will call it from now on")
@@ -332,9 +471,16 @@ def main():
     p.add_argument("--powers", choices=["speak", "nudge", "assign"], help="what the chair may do (default: what the project already had, else speak)")
     p.add_argument("--model", help="which model to seat (default: what this build calls cheapest-capable)")
 
-    p = sub.add_parser("adopt", help="tell the app that YOU are already this project's orchestrator (keeps your session and your context)")
+    p = sub.add_parser(
+        "adopt",
+        help="tell the app that YOU are already this project's orchestrator (keeps your session and your context)",
+        description="The person approves the adoption on one card; this waits up to 180 s for that click, "
+                    "then asks again for the credential, and stops at once when they decline it. Once "
+                    "approved, the pane the row holds takes the credential back without asking: a pane id "
+                    "is not a secret from the same user, so a re-attach proves which pane is the chair, not "
+                    "which process runs in it.")
     p.add_argument("--project", help="the project's checkout (default: the current directory)")
-    p.add_argument("--pane", help="your tmux pane (default: $TMUX_PANE)")
+    p.add_argument("--pane", help="your tmux pane (default: $TMUX_PANE, else the pane of the tmux client this runs in)")
     p.add_argument("--session", default="", help="your session id, if you know it")
     p.add_argument("--powers", choices=["speak", "nudge", "assign"], help="what the chair may do")
 
@@ -344,6 +490,11 @@ def main():
     p.add_argument("--as", dest="who", help="your name (default: $AGENTGLASS_AGENT_NAME, else the tmux window)")
     p.add_argument("--project", help="the project (default: the current directory)")
 
+    p = sub.add_parser("can", help="ask before you try: is this command allowed, refused or ask for a worker, and which layer says so")
+    p.add_argument("worker", help="the worker's name")
+    p.add_argument("command", help="the command line, as ONE quoted argument")
+    p.add_argument("--project", help="the project (default: the current directory)")
+
     p = sub.add_parser("dismiss", help="clear stale blockers from the project's tray (their words stay in the record); ids come from `inbox --peek`")
     p.add_argument("ids", help="comma-separated report ids")
     p.add_argument("--project", help="the project (default: the current directory)")
@@ -351,6 +502,10 @@ def main():
     p = sub.add_parser("field", help="who is working in this project, what state, and since when — a few lines")
     p.add_argument("--project", help="the project (default: the current directory)")
     p.add_argument("--json", action="store_true", help="the rows as JSON instead of the readout")
+
+    p = sub.add_parser("status", help="one row per card with a worker on it: card, role, state, next")
+    p.add_argument("--project", help="the project (default: the current directory)")
+    p.add_argument("--json", action="store_true", help="the rows as JSON instead of the table")
 
     p = sub.add_parser("inbox", help="every unread report, in one call, and marks them read")
     p.add_argument("--project", help="the project (default: the current directory)")
@@ -389,8 +544,12 @@ def main():
             body["kind"] = a.kind
         if a.role:
             body["role"] = a.role
+        if a.flow_role:
+            body["flowRole"] = a.flow_role
         if a.plan:
             body["plan"] = a.plan
+        if a.card:
+            body["card"] = a.card
         if a.engine:
             body["engine"] = a.engine
         if a.model:
@@ -409,7 +568,14 @@ def main():
                 text = f.read()
         if not text.strip():
             return emit({"ok": False, "error": "nothing to send: pass the text or --file"})
-        return emit(call("/agents/named/prompt", {"name": a.name, "text": text, "timeout": a.timeout}))
+        body = {"name": a.name, "text": text, "timeout": a.timeout}
+        if a.flow_role:
+            body["flowRole"] = a.flow_role
+        if a.cwd:
+            body["cwd"] = os.path.abspath(os.path.expanduser(a.cwd))
+        return emit(call("/agents/named/prompt", body))
+    if a.cmd == "recwd":
+        return emit(call("/agents/named/recwd", {"name": a.name, "dir": os.path.abspath(os.path.expanduser(a.dir))}, timeout=30))
     if a.cmd == "own":
         return emit(call("/agents/named/own", {"name": a.name}, timeout=30))
     if a.cmd == "wait":
@@ -424,6 +590,8 @@ def main():
         return emit(call("/agents/named/keys", {"name": a.name, "key": a.key}, timeout=30))
     if a.cmd == "stop":
         return emit(call("/agents/named/stop", {"name": a.name, "kill": bool(a.kill)}, timeout=30))
+    if a.cmd == "place":
+        return emit(call("/agents/named/place", {"name": a.name, **({"session": a.session} if a.session else {})}, timeout=30))
     if a.cmd == "schedule":
         text = a.prompt
         if a.file:
@@ -447,6 +615,10 @@ def main():
         # as, then the tmux window you are in, then the checkout you are in.
         who = a.who or os.environ.get("AGENTGLASS_AGENT_NAME") or os.environ.get("TMUX_WINDOW_NAME") or os.path.basename(root)
         return emit(call("/seat/report", {"root": root, "agent": who, "text": text}, timeout=30))
+    if a.cmd == "can":
+        root = os.path.abspath(os.path.expanduser(a.project)) if a.project else os.getcwd()
+        r = call("/seat/can", {"root": root, "worker": a.worker, "command": a.command}, timeout=30)
+        return emit(r)
     if a.cmd == "dismiss":
         root = os.path.abspath(os.path.expanduser(a.project)) if a.project else os.getcwd()
         ids = [int(x) for x in a.ids.split(",") if x.strip().isdigit()]
@@ -461,6 +633,14 @@ def main():
         ok, out = text_call("/seat/field?" + q)
         print(out)
         return 0 if ok else 1
+    if a.cmd == "status":
+        root = os.path.abspath(os.path.expanduser(a.project)) if a.project else os.getcwd()
+        q = urllib.parse.urlencode({"root": root, **({"format": "json"} if a.json else {})})
+        if a.json:
+            return emit(call("/seat/status?" + q, method="GET", timeout=30))
+        ok, out = text_call("/seat/status?" + q)
+        print(out)
+        return 0 if ok else 1
     if a.cmd == "inbox":
         root = os.path.abspath(os.path.expanduser(a.project)) if a.project else os.getcwd()
         return emit(call("/seat/inbox", {"root": root, "peek": bool(a.peek)}, timeout=30))
@@ -471,13 +651,20 @@ def main():
         return emit(call("/agents/named/broadcast", body, timeout=630))
     if a.cmd == "adopt":
         root = os.path.abspath(os.path.expanduser(a.project)) if a.project else os.getcwd()
-        pane = a.pane or os.environ.get("TMUX_PANE", "")
-        if not pane:
-            return emit({"ok": False, "error": "no pane: run this from inside your tmux pane, or pass --pane %N"})
+        pane, why = adopt_pane(a.pane)
+        if why:
+            return emit({"ok": False, "error": why})
         body = {"root": root, "pane": pane, "session": a.session}
         if a.powers:
             body["powers"] = a.powers
-        return emit(call("/seat/adopt", body, timeout=60))
+        res = call("/seat/adopt", body, timeout=60)
+        # The chair's credential is the person's to hand out. The row naming
+        # this pane is NOT the click: the app re-links it by window name before
+        # anybody approves. `adoptedApproved` is the click, and the card going
+        # away without one is the person saying no.
+        if res.get("ok") and res.get("applied") is False:
+            return _wait_for_adopt(root, pane, body, res)
+        return emit(res)
     if a.cmd == "orchestrate":
         root = os.path.abspath(os.path.expanduser(a.project)) if a.project else os.getcwd()
         body = {"root": root}
@@ -526,6 +713,8 @@ def main():
     if a.cmd == "finish":
         root = os.path.abspath(os.path.expanduser(a.root)) if a.root else os.getcwd()
         return emit(call("/seat/task/finish", {"root": root, "id": a.id, "outcome": a.outcome}, timeout=30))
+    if a.cmd == "commit":
+        return emit(call("/agents/commit", {"message": a.message}, timeout=60))
     if a.cmd == "say":
         # The seat runs IN its project's checkout, so the default root is the
         # working directory: one less thing for a prompt to get wrong, and a

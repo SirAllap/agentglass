@@ -30,8 +30,8 @@ export const LAUNCH_MODE_BADGE: Record<LaunchMode, string> = {
 export const isLaunchMode = (v: unknown): v is LaunchMode =>
   typeof v === "string" && (LAUNCH_MODES as readonly string[]).includes(v);
 
-/** What a fresh install denies everywhere: merging and releasing stay a person's. */
-export const DEFAULT_LAUNCH_DENY: readonly string[] = ["Bash(gh pr merge:*)", "Bash(gh release:*)"];
+/** What a fresh install denies everywhere: merging, releasing and pushing to the trunk stay a person's. */
+export const DEFAULT_LAUNCH_DENY: readonly string[] = ["Bash(gh pr merge:*)", "Bash(gh release:*)", "Bash(git push origin main:*)", "Bash(git push origin master:*)", "Bash(rm -rf /)", "Bash(rm -rf ~)", "Bash(git push -u origin main:*)", "Bash(git push -u origin master:*)", "Bash(git push origin HEAD:main:*)", "Bash(git push origin HEAD:master:*)"];
 
 /**
  * One deny rule: a tool name, optionally with a pattern in parentheses —

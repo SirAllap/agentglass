@@ -164,6 +164,11 @@ look        observe · read · markdown · text · html (--clean: scripts/styles
             interactive · forms · attr
 page        resize · zoom (the one Ctrl+/Ctrl- move) · emulate · throttle
 handoff     handoff "why" [--until sel|/path] — the person does the CAPTCHA/2FA/consent, you continue
+guide       guide start "why" · point <sel> --say "…" [--wait-click|--wait-nav|--wait-input|--wait-submit|--wait-ok] [--text "<label>"] [--step N/M] [--summary "<what the page is about>"] · guide say "…" · guide next · guide end
+            guide run --page <tab> --why "why" plan.json   (the server walks the plan; guide next = its events)
+            — you point and talk, the PERSON clicks (a risky step on a production page)
+            --copy "<text>" puts the exact words to paste on the card with a Copy button (≤2000 chars)
+            --suggest "<draft>" on a text field: the card offers Write my own, Suggest another, Use suggestion; only the person's click fills it, never submits (≤2000 chars). Suggest another: guide next gives {"event":"regenerate","note":"…"}; answer guide say --suggest "<new draft>" (plans: "suggest" on a step with a target)
 act         click · type (also rich editors: contenteditable) · select · check · fill · hover · dblclick · rightclick
             focus · blur · press · scroll · drag · upload · dialog (answer the next confirm/prompt)
 wait        wait · waitfor (--until network-idle | no-timers) · events
@@ -248,6 +253,36 @@ real right-click would open the app's own menu.
 `handoff` ends only on the person's own click on its Done button, on `--until`
 (a selector, or a path judged on the URL's pathname, never its query), or on a
 navigation (`navigated`); a page cannot end it by itself.
+`guide start` locks the tab: every act on it (click, fill, type, press, open,
+eval…) is refused for every agent, you included, until `guide end`; reads still
+work. `guide next` returns only on an event (ok, back, stop, click, navigated);
+with no answer it exits 3 at `--timeout` (default 600 s) and the guide stays on.
+`guide end` returns the audit: each step, what the person did, and when.
+A worker guides the person's own tab only under a guide grant (one agent, one
+site, 2 h: Settings ▸ Browser ▸ Worker verbs ▸ Guide grants). Start with
+`guide start "<why>" --shared`: it takes the tab in front, checks the grant on
+it, and its answer names the tab. Then `point`, `guide next/end` and reads
+(observe, read, shot…) go with `--shared --page <tab>`; reads need your own
+guide running there, acts stay refused, and leaving the site ends it.
+`guide run --page <tab> --why "…" plan.json` declares the whole guide: a JSON
+list of `{target, text?, say, wait, copy?, summary?}`. `target` is a selector (never an
+observe id: the pages do not exist yet); `text` picks among several matches;
+`wait` is ok | click | nav | input | submit (default click with a target, ok
+without). The server points each step and moves on when the person does the
+wait, with no call from you: `input` is text in the field and 1.5 s since the
+last key, so clicking a text box is not "done". N is fixed. Back goes one step
+back, Stop ends it, and a Stop leaves Resume on the card for 10 minutes. A
+target missing for 2 s tells the person "Can't find … here. Back?" and you get
+`lost`. Call `guide next` again and again: one event each, in order (step,
+back, navigated, input, submit, lost, resumed, run-done); run-done carries one
+row per step visit `{n, visit, waited, endedBy, seconds, url, clicks}`. The
+answer warns about a `say` with no literal and no verb with a concrete object:
+the person reads only the card. `guide say "…"` changes the card on screen.
+A say with no words ("…", "''": a lost quote, an empty variable) is refused.
+`--summary` (plan: `summary`) is a step that shows what the page is about,
+written from your read of it, before the person acts; it ends on OK, and with
+no say the card tells them to read it, then press OK. `guide end` gives each
+step its `seconds` and the last `url` the page moved to.
 Raw `cdp Input.*` stays refused: it lands in the app's own window.
 
 **Stable ids beat invented selectors.** Every node in an `observe` comes with an
@@ -284,6 +319,13 @@ of one, so "Save" is not confused with "Save draft". Only what is on screen
 matches (`upload` also finds a hidden file input). None or several is refused, and
 the refusal lists ids to use next (`e4 button "Save"`), the hidden matches,
 and what of that kind IS there.
+
+**Observe last, then act.** Run `observe` right before you act, and prefer the
+ids from that latest observe over a locator: an id names one node. A `loc=`
+locator must be unique. If it matches more than one element, nothing is done:
+the refusal gives the count and the first 3 candidates (text and id), and you
+repeat the call with one of those ids or a narrower locator. It never picks the
+first match for you.
 
 **A failure explains itself.** It comes back with the console errors and failed
 requests from just before it, and a screenshot. `selector matched 3 elements`
@@ -512,6 +554,9 @@ your identity's tab do not apply in it.
 
 ## Starting a lane already signed in
 
+From the person's vault: `lane new --ephemeral [--vault NAME]`, then `open <url> --lane ID`. The first visit of a site signs it in, and `open` answers `vault: {signedIn, site, why}`.
+Only an ephemeral lane is signed in this way. Your `--as` container is not (it is saved on disk, and a login there would outlive the task): its first `open` of a site says so in `vault.why`.
+
 A task that needs a real login costs the 40-minute magic-link dance every time
 `lane new` gives it an empty jar. Save the session once, spend it on every fork:
 
@@ -641,6 +686,11 @@ recording on load — `permission grant microphone --origin http://localhost:800
 first; it holds for your container and that site until the app closes.
 `permission --list` (or `permissions` with no origin) shows what is held and
 what you answered. Location and clipboard reads are not yours to grant.
+
+**An isolated server takes `AGENTGLASS_SERVER`, not `AGENTGLASS_PORT`.** The CLI reads the
+running app's port file before `AGENTGLASS_PORT`, so `AGENTGLASS_PORT=4713 agentglass-browser …`
+still lands in the person's own app (it says so on stderr). Use
+`AGENTGLASS_SERVER=http://127.0.0.1:4713 agentglass-browser …`.
 
 `AGENTGLASS_BROWSER_ORIGINS` limits where the browser may be pointed.
 `AGENTGLASS_BROWSER_READONLY=1` allows observing and refuses acting — a verb

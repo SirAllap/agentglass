@@ -19,13 +19,14 @@
 
 import { stuckDetail, type GithubProblem } from "./githubStatus.ts";
 import type { PrCheck, PrCheckRollup, PrMergeGate, PrMergeState } from "./types.ts";
+import { HELD_RUNS_DETAIL, heldRunsTitle } from "./heldRuns.ts";
 
 export type BlockerWeight = "blocks" | "waits" | "warns";
 
 export type BlockerKind =
   | "draft" | "locked" | "no-permission" | "restricted" | "merge-queue" | "conflicts"
   | "required-failing" | "required-missing" | "changes-requested" | "review-required" | "threads"
-  | "behind" | "unexplained" | "computing" | "awaiting" | "required-pending" | "pending"
+  | "behind" | "unexplained" | "checking" | "computing" | "awaiting" | "required-pending" | "pending"
   | "optional-failing" | "hooks" | "unseen";
 
 export interface MergeBlocker {
@@ -67,6 +68,11 @@ export interface BlockerInput {
   prLagging?: boolean;
   /** Set by `trustHead`: the reading is not about the commit the pull request is on. */
   checking?: { sha: string };
+  /** The checks were read after this merge state was (see mergeReadOwed): what
+   *  looks blocked may only be an older answer, not a verdict. */
+  mergeStale?: boolean;
+  /** Workflow runs GitHub holds for a maintainer's approval (shared/heldRuns.ts). */
+  heldRuns?: number;
 }
 
 /** What to say while GitHub has not decided mergeability. Updating a branch
@@ -211,7 +217,11 @@ export function mergeBlockers(i: BlockerInput): MergeBlocker[] {
        others gets its check run only when it starts. Measured on a pull
        request whose required summary job was absent from the rollup while two
        checks it waits on were still going. */
-    out.push(i.awaitingChecks
+    /* Held for a maintainer: nothing runs until somebody with the rights
+       approves, so "push, or run it by hand" would send the wrong person. */
+    out.push((i.heldRuns ?? 0) > 0
+      ? { kind: "required-missing", weight: "blocks", title: heldRunsTitle(i.heldRuns!), detail: HELD_RUNS_DETAIL }
+      : i.awaitingChecks
       ? { kind: "required-missing", weight: "waits", title: `${names} not reported yet — required`, detail: "The branch just moved; GitHub creates the runs a few seconds after the push." }
       : pending.length > 0
       ? { kind: "required-missing", weight: "waits", title: `${names} not started yet — required`, detail: "It may be waiting on the checks still running; a job that depends on others starts when they finish." }
@@ -287,7 +297,12 @@ export function mergeBlockers(i: BlockerInput): MergeBlocker[] {
   const explained = out.some((b) => b.weight === "blocks"
     || b.kind === "required-pending" || b.kind === "required-missing" || b.kind === "awaiting" || b.kind === "computing"
     || (b.kind === "pending" && !knowsRequired(i)));
-  if (blocked && !explained) {
+  if (blocked && !explained && i.mergeStale) {
+    out.push({
+      kind: "checking", weight: "waits", title: "Checking…",
+      detail: "The checks were read after this merge state was, so it is being read again before this page calls it blocked.",
+    });
+  } else if (blocked && !explained) {
     const maybe: string[] = [];
     if (!g || !g.protectionVisible) maybe.push("a locked branch (a deploy freeze, say)");
     if (g?.signatures) maybe.push("an unsigned commit");

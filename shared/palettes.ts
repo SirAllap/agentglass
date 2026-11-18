@@ -110,8 +110,8 @@ export const PANE: Record<Polarity, Palette> = {
     // disabled ink and is not used for anything somebody has to read.
     text: "#e8ecf1", text2: "#a6b0bd", text3: "#838d9a", text4: "#6b7683",
     border: "#232833", border2: "#2f3540",
-    // Replaced by the chosen accent — see paletteFor. These are what the shipped
-    // one resolves to, so a palette read before a choice is made is not blue.
+    // Replaced by the chosen accent — see paletteFor. These only show through
+    // for an accent id this build does not know, and must not be the desk's blue.
     primary: "#4dd6c1", primaryHover: "#7ce4d4",
     success: "#3fb950", warning: "#d9a441", error: "#f0776c", info: "#6aa9f5",
   },
@@ -147,12 +147,12 @@ export const ACCENTS: Accent[] = [
   { id: "amber", name: "Amber", primary: "#f59e0b", hover: "#fbbf24" },
   { id: "rose", name: "Rose", primary: "#f43f5e", hover: "#fb7185" },
   { id: "cyan", name: "Cyan", primary: "#06b6d4", hover: "#22d3ee" },
-  /* Teal is the phone's default and is not cyan with a nudge: cyan is a blue
+  /* Teal is the phone's own seventh and is not cyan with a nudge: cyan is a blue
      that has warmed up, and against a near-black ground it reads as another
      GitHub blue. This one is far enough round the wheel to be its own colour,
      and far enough from `success` green that a filled button is never mistaken
      for a passing check — the one confusion an accent on this app must not
-     have. */
+     have. Violet is the shipped default; see SHIPPED in mobile/src/theme.ts. */
   { id: "teal", name: "Teal", primary: "#4dd6c1", hover: "#7ce4d4" },
 ];
 

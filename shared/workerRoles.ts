@@ -45,6 +45,16 @@ export interface WorkerRole {
   default: RoleChoice;
   /** Command prefixes this role may run on top of the floor (`NEVER_LIFTABLE` aside). */
   allow?: readonly string[];
+  /** May call the Agent tool: a flow role's own `mayStartSubagents`, carried
+   *  onto the role so `allowedToolsFor` (agents/headless.ts) sees it. No
+   *  built-in role sets this; it only ever comes from a flow role's lock. */
+  mayStartSubagents?: boolean;
+  /** The built-in role a custom flow role runs as (its own `policyRole`), so
+   *  `DOORS_FOR_ROLE` (agents/envelope.ts) can be read off a role this app
+   *  knows even when `id` is the flow's own string. Absent for a built-in
+   *  role (whose `id` already is one) and for a flow role with no
+   *  `policyRole`, which then opens no door, same as `scout`. */
+  base?: RoleId;
 }
 
 export const WORKER_ROLES: WorkerRole[] = [
@@ -90,31 +100,51 @@ export const RESULT_ROLES: readonly RoleId[] = ["builder", "reviewer", "verifier
 export const owesResult = (id: unknown): boolean => (RESULT_ROLES as readonly unknown[]).includes(id);
 
 /**
- * The commands no worker runs, whatever its role: anything that publishes,
- * rewrites history or moves the checkout under the person, the network
- * clients, and the two that reach past the worktree. The integration is the
- * caller's; a worker's work stops at the diff.
+ * The floor: the only commands no worker runs, because the seat must not run
+ * them either. `sudo` is root. The four worktree subcommands rewrite or pin
+ * ANOTHER worktree's gitdir (`repair` can point it anywhere). Nothing else is
+ * on it: a worker does what its seat does, and what a person wants kept from
+ * both lives in the agent rules (`agentglass-ui rules`: never push to master,
+ * never merge a PR, ask before sudo or `rm -rf /`).
  *
- * `rm` is on it because a delete is the one edit no diff review can undo, and
- * that has a price: a builder cannot delete a file, and says so in its report
- * for the caller to do. The signal senders follow it — `kill`, `pkill`,
- * `killall`, sysvinit's `killall5` and `xkill`: same effect outside the tree.
+ * A prefix lock cannot say "`rm -rf /` but not `rm -rf /tmp/x`", so that one is
+ * a base rule, not a floor entry.
  */
 export const DENIED_COMMANDS: readonly string[] = [
+  "git worktree lock", "git worktree move", "git worktree repair", "git worktree unlock", "sudo",
+];
+
+/** The floor entries no role may ever be granted. Same list: the floor has no grant. */
+export const NEVER_LIFTABLE: readonly string[] = DENIED_COMMANDS;
+
+/** The floor entries with no switch anywhere. */
+export const FIXED_COMMANDS: readonly string[] = DENIED_COMMANDS;
+
+/**
+ * The commands a seat or a project may CLOSE to workers. Open by default; a
+ * per-project switch (`workers.commands.<cmd>`) closes one, and the envelope
+ * flags close the git, network and docker groups at start (see envelope.ts
+ * `LIFTS`). These were the old floor; closing is narrowing, never the default.
+ */
+/**
+ * The floor as it was before a worker had its seat's powers. An engine that does
+ * not run the person's hooks (OpenCode, Codex) keeps it, so the powers apply only
+ * where the seat's own safety hooks run beside the worker.
+ */
+export const LEGACY_FLOOR: readonly string[] = [
   "git push", "git commit", "git merge", "git rebase", "git reset", "git checkout",
-  "git switch", "git stash", "git tag", "git remote", "git worktree", "git clean",
+  "git switch", "git stash", "git tag", "git remote", "git clean",
+  "git worktree add", "git worktree lock", "git worktree move", "git worktree repair", "git worktree unlock",
+  "git worktree remove", "git worktree prune", "git worktree list",
   "gh", "curl", "wget", "ssh", "scp", "docker", "aws", "sudo", "rm",
   "kill", "pkill", "killall", "killall5", "xkill",
 ];
 
-/**
- * The floor entries no role may ever be granted: publishing, reaching another
- * machine, and the two that end something outside the tree. A flow role's
- * `allow` is subtracted from the floor for that role alone, and never here.
- */
-export const NEVER_LIFTABLE: readonly string[] = [
-  "git push", "gh", "ssh", "scp", "sudo", "rm",
-  "kill", "pkill", "killall", "killall5", "xkill",
+/* Every command a project may close to its workers, open by default: a missing value is open, a stored false is closed. The ones that left the
+   floor (publish, the network clients, the cloud CLI, docker, history rewrites) are here so a project can pin them shut. */
+export const SWITCHABLE_COMMANDS: readonly string[] = [
+  "ssh", "scp", "rm", "kill", "pkill", "killall", "killall5", "xkill",
+  "git push", "gh", "curl", "wget", "aws", "docker", "git rebase", "git stash", "git tag", "git remote",
 ];
 
 /** The flags that leave a worker's own tab (`--shared`, `--active`), at their

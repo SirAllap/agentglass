@@ -36,6 +36,7 @@ import { MIN_SAMPLES, runKey } from "./checkBaseline.ts";
 import { stuckMinutes, type GithubProblem } from "./githubStatus.ts";
 import { mergeBlockers, computingDetail, staleApproval, type MergeBlocker } from "./mergeBlockers.ts";
 import { UNSTICK_LABEL } from "./unstick.ts";
+import { APPROVE_ANYWAY_LABEL, APPROVE_RUNS_LABEL, HELD_RUNS_DETAIL, heldRunsTitle } from "./heldRuns.ts";
 import { approvalsNeed, buildRoster, guardLines, mergeGuard, rosterCounts, type MergeGuard, type ReviewerState, type RosterEntry } from "./reviewRoster.ts";
 
 export type Mover = "you" | "author" | "reviewer" | "team" | "ci" | "wait" | "other" | "fyi" | "done";
@@ -49,12 +50,12 @@ export const MOVER_LABEL: Record<Mover, string> = {
 export type RowKind =
   | "draft" | "locked" | "no-permission" | "restricted" | "conflicts"
   | "check-failing" | "check-running" | "check-queued" | "check-cancelled" | "required-missing"
-  | "changes" | "review-required" | "threads" | "behind" | "unexplained" | "computing" | "awaiting"
+  | "changes" | "review-required" | "threads" | "behind" | "unexplained" | "checking" | "computing" | "awaiting"
   | "note" | "approved";
 
 export type ActionId =
   | "merge" | "open-log" | "rerun" | "go-thread" | "go-review" | "history" | "mark-ready"
-  | "resolve-conflicts" | "open-github" | "update-branch" | "arm-auto" | "ask-review" | "unstick";
+  | "resolve-conflicts" | "open-github" | "update-branch" | "arm-auto" | "ask-review" | "unstick" | "approve-runs";
 
 export interface PathAction {
   id: ActionId;
@@ -194,6 +195,9 @@ export interface MergePathInput {
   awaitingChecks?: boolean;
   autoArmed?: boolean;
   now?: number;
+  /** When the checks were read after this merge state was (see mergeReadOwed):
+   *  BLOCKED with green checks is then "not read yet", not a verdict. */
+  mergeStale?: boolean;
   /** When this app first saw mergeability UNKNOWN for this pull request. */
   unknownSince?: number | null;
   /** GitHub's own status, asked only once UNKNOWN has lasted. */
@@ -204,6 +208,10 @@ export interface MergePathInput {
   unstickOffer?: boolean;
   /** Typical duration in ms by `workflow\u0001name`, when a caller has a history. */
   typical?: Record<string, number>;
+  /** Workflow runs GitHub holds for a maintainer's approval (shared/heldRuns.ts). */
+  heldRuns?: number;
+  /** heldRunsWarnings: CI files changed, or the file list was cut short. Any line makes the button "Approve anyway". */
+  heldRunsWarn?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -351,6 +359,7 @@ export function mergePath(i: MergePathInput): MergePath {
     state: i.state, mergeState: i.mergeState, mergeable: i.mergeable, isDraft: i.isDraft,
     reviewDecision: i.reviewDecision, checks: i.checks, checksAll: all, baseRefName: i.baseRefName,
     gate, openThreads, conflicted, awaitingChecks: i.awaitingChecks, behind: i.behind, stuckMin, githubProblem: i.githubProblem, prLagging: i.prLagging,
+    mergeStale: i.mergeStale, heldRuns: i.heldRuns,
   });
   const rows: Omit<PathRow, "n" | "moverLabel">[] = [];
   const add = (r: Omit<PathRow, "n" | "moverLabel" | "counted"> & { counted?: boolean }) =>
@@ -511,6 +520,9 @@ export function mergePath(i: MergePathInput): MergePath {
       case "unexplained":
         add({ id: "unexplained", kind: "unexplained", stage: "merge", title: bl.title, why: bl.detail, mover: "other" });
         break;
+      case "checking":
+        add({ id: "checking", kind: "checking", stage: "merge", title: bl.title, why: bl.detail, mover: "wait" });
+        break;
       case "computing":
         add({ id: "computing", kind: "computing", stage: "merge", title: bl.title, why: bl.detail, mover: "wait", ...unstickAction });
         break;
@@ -550,16 +562,18 @@ export function mergePath(i: MergePathInput): MergePath {
 
   // Required checks that are not through, each one on its own row.
   const missing = (gate?.requiredContexts ?? []).filter((n) => !new Set(all.map((c) => c.name)).has(n));
+  const held = i.heldRuns ?? 0;
   for (const name of missing) {
-    const waiting = i.awaitingChecks || all.some((c) => !c.done);
+    const waiting = !held && (i.awaitingChecks || all.some((c) => !c.done));
     add({
       id: `missing:${name}`, kind: "required-missing", stage: "required", title: name, pill: "required",
-      why: i.awaitingChecks
+      // Held for a maintainer: the viewer's move, whoever wrote the change.
+      why: held ? HELD_RUNS_DETAIL : i.awaitingChecks
         ? "The branch just moved; GitHub creates the runs a few seconds after the push."
         : waiting
         ? "Not started yet: a job that depends on others starts when they finish."
         : "GitHub is waiting for it and nothing is running. If the workflow did not trigger, push or run it by hand.",
-      mover: waiting ? "ci" : authorMover,
+      mover: held ? "you" : waiting ? "ci" : authorMover,
     });
   }
   const shownGated = gated.filter((c) => c.state !== "success" && c.state !== "skipped" && c.state !== "neutral");
@@ -668,9 +682,13 @@ export function mergePath(i: MergePathInput): MergePath {
   }
 
   // Order: what needs a person, then a reviewer, then time. Stable inside.
+  const heldFirst = (r: { kind: string }) => (held && r.kind === "required-missing" ? 1 : 0);
   const ordered = rows
     .map((r, idx) => ({ r, idx }))
     .sort((a, c) => (a.r.counted === c.r.counted ? 0 : a.r.counted ? -1 : 1)
+      /* Held workflows first: until they run there are no checks to review
+         against, and approving them is the one move nobody else can make. */
+      || heldFirst(c.r) - heldFirst(a.r)
       || rankOf(a.r.mover) - rankOf(c.r.mover)
       || STAGE_ORDER.indexOf(a.r.stage) - STAGE_ORDER.indexOf(c.r.stage)
       || a.idx - c.idx)
@@ -917,6 +935,10 @@ export function mergePath(i: MergePathInput): MergePath {
         });
       }
       case "required-missing":
+        if (held) {
+          const warn = i.heldRunsWarn?.length ? i.heldRunsWarn : undefined;
+          return mk([t(`${heldRunsTitle(held)}.`)], { sub: f.why, primary: { id: "approve-runs", label: warn ? APPROVE_ANYWAY_LABEL : APPROVE_RUNS_LABEL }, secondary: github, ...(warn ? { warnings: warn } : null) });
+        }
         return mk([em(f.title), t(f.mover === "ci" ? " has not reported yet. It is required." : " never reported. GitHub is waiting for it and nothing is running.")], {
           sub: f.why, primary: f.mover === "ci" ? undefined : github,
         });
@@ -1000,6 +1022,8 @@ export function mergePath(i: MergePathInput): MergePath {
         return mk([t(i.prLagging ? "The pull request has not caught up with its branch." : stuckMin != null ? `GitHub has not said whether it can merge for ${stuckMin} min.` : "GitHub is still working out whether it can merge.")], {
           sub: f.why, ...(stuckMin != null ? stuckActions(github) : null),
         });
+      case "checking":
+        return mk([t("Checking the merge state again…")], { sub: f.why });
       case "awaiting":
         return mk([t("Waiting for the checks to start.")], { sub: f.why });
       default: {
