@@ -22,6 +22,9 @@ import {
 import { MANIFEST_NOTE_MAX, type ManifestProject, type ManifestSummaryProject } from "../../../shared/manifest.ts";
 import { ManifestIcon } from "./workspace/icons.tsx";
 import { RefreshButton } from "./workspace/Chrome.tsx";
+import { EmptyState } from "./ui/EmptyState.tsx";
+import { StateError } from "./tasks/BoardState.tsx";
+import { useVisibleInterval } from "../lib/visibleInterval.ts";
 
 /** The whole view's data, drawn or wired. */
 export interface ManifestScreenProps {
@@ -195,17 +198,33 @@ function RowBody({ row, note, onNote, onSaveNote, limitOver, signable }: {
   }
   return (
     <div className="mv-rbody">
+      {row.steps.length === 0 && (
+        <p className="mv-nosteps">The builder did not write the steps for this one. The verdict still counts: try it, then sign off.</p>
+      )}
+      {row.steps.length > 0 && (
+        <ol className="mv-steps" aria-label="Test steps">
+          {row.steps.map((st, i) => (
+            <li key={i}>
+              <b className="mv-step-k">{st.kind.toUpperCase()}</b>
+              <span>{st.text}</span>
+              {st.command && (
+                <button type="button" className="mv-mini" onClick={() => { void navigator.clipboard?.writeText(st.command!).catch(() => {}); }}>Copy</button>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
       <div className="mv-note">
         <input
           className="mv-note-in"
           value={note}
           onChange={(e) => onNote(e.target.value)}
-          placeholder="Test it, then sign off with a note"
+          placeholder={row.steps.length === 0 ? "Write the steps yourself, or a note for the builder" : "Test it, then sign off with a note"}
           aria-label="Note"
         />
         {/* The verdict press carries the note, so Save is the seat of the rule
             "a note is saved only with a verdict": quiet, and it says why. */}
-        <button type="button" className="mv-mini" disabled title="Pick Tested or Failed first" onClick={onSaveNote}>Save</button>
+        <button type="button" className="mv-mini" disabled data-tip="Pick Tested or Failed first" onClick={onSaveNote}>Save</button>
       </div>
       {limitOver ? (
         <span className="mv-note-help over">500 characters at most</span>
@@ -243,6 +262,8 @@ export function ManifestScreen(p: ManifestScreenProps) {
   const ready = useMemo(() => rows.filter((r) => r.group === "ready"), [rows]);
   const inProgress = project?.inProgress ?? [];
   const emptyWindow = !!project && project.trunk && rows.length === 0;
+  /** A quiet week: nothing to test, nothing running, nothing done. One calm line stands for the three groups. */
+  const quietWeek = toTest.length === 0 && inProgress.length === 0 && done.length === 0;
   const drawn = p.toTestLimit === 0 ? [] : toTest.slice(0, p.toTestLimit);
   const older = Math.max(0, toTest.length - drawn.length);
 
@@ -257,7 +278,7 @@ export function ManifestScreen(p: ManifestScreenProps) {
         {verdictLine(row.verdict!, row.at)}
       </span>
       <button type="button" className="mv-undo" onClick={(e) => { e.stopPropagation(); p.onUndo(row); }}
-        disabled={!maySign || p.busy != null} title="Undo removes the verdict and its note">Undo</button>
+        disabled={!maySign || p.busy != null} data-tip="Undo removes the verdict and its note">Undo</button>
     </>
   );
   const verdictButtons = (row: ManifestRowRef) => {
@@ -284,7 +305,7 @@ export function ManifestScreen(p: ManifestScreenProps) {
   const toggle = (sha: string) => p.onOpenRow(p.openRow === sha ? null : sha);
 
   const counter = (cls: "ok" | "live" | "wait", n: number | null, label: string, hint?: string) => (
-    <div className={`mv-count ${cls}`} title={hint}>
+    <div className={`mv-count ${cls}`} data-tip={hint}>
       <span className="mv-bar" />
       <div className="mv-n">{n == null ? "–" : n}</div>
       <div className="mv-l">{label}</div>
@@ -302,7 +323,7 @@ export function ManifestScreen(p: ManifestScreenProps) {
           <div className="mv-vtitle">
             <h1>Manifest</h1>
             <p>
-              {name ? <><button type="button" className="mv-project" onClick={p.onProject} title="Open another project">{name}</button><span> · {stateLine}</span></> : <span>{stateLine}</span>}
+              {name ? <><button type="button" className="mv-project" onClick={p.onProject} data-tip="Open another project">{name}</button><span> · {stateLine}</span></> : <span>{stateLine}</span>}
             </p>
           </div>
           <div className="mv-tools">
@@ -310,7 +331,7 @@ export function ManifestScreen(p: ManifestScreenProps) {
             {project?.trunk ? (
               <button type="button" className="mv-btn mv-startbtn" onClick={p.onStartAsk}
                 disabled={p.startBusy || !maySign}
-                title={maySign ? "Count only commits after the trunk's current commit" : "Only the desk moves the start line"}>
+                data-tip={maySign ? "Count only commits after the trunk's current commit" : "Only the desk moves the start line"}>
                 Start from zero now
               </button>
             ) : null}
@@ -334,7 +355,7 @@ export function ManifestScreen(p: ManifestScreenProps) {
               onClick={() => p.onScope(ALL_PROJECTS)}>All</button>
             {(p.summary ?? []).map((proj) => (
               <button key={proj.root} type="button" role="tab" className="agx-seg-b"
-                aria-selected={p.scope === proj.root} title={proj.root}
+                aria-selected={p.scope === proj.root} data-tip={proj.root}
                 onClick={() => p.onScope(proj.root)}>{proj.name}</button>
             ))}
           </div>
@@ -367,17 +388,13 @@ export function ManifestScreen(p: ManifestScreenProps) {
         ) : null}
 
         {p.error !== null ? (
-          <div className="mv-errbox">
-            <span className="mv-erric"><Cross size={ICON.lg} /></span>
-            <h3>This machine did not answer</h3>
-            <p>
-              {p.error
-                ? p.error
-                : `The view could not read the checkout at ${name || "this project"}. Nothing was lost; the verdicts you already gave are on the server.`}
-            </p>
-            <button type="button" className="mv-btn" onClick={p.onRefresh}>Try again</button>
+          <StateError
+            title="This machine did not answer"
+            cause={p.error ? p.error : `The view could not read the checkout at ${name || "this project"}. Nothing was lost; the verdicts you already gave are on the server.`}
+            onRetry={p.onRefresh}
+          >
             {p.readAt == null ? null : <span className="mv-last">read {ageWords(Math.max(0, p.now - p.readAt))} · the last answer this window got</span>}
-          </div>
+          </StateError>
         ) : null}
 
         {!project && !p.loading && p.error === null ? (
@@ -414,7 +431,8 @@ export function ManifestScreen(p: ManifestScreenProps) {
             </div>
           ) : (
             <>
-              <Group
+              {quietWeek ? <div className="mv-quiet"><EmptyState>Nothing to test, nothing running, nothing done this week.</EmptyState></div> : null}
+              {quietWeek ? null : <Group
                 className="mv-to-test"
                 icon={<Check size={ICON.sm} />}
                 title="To test"
@@ -431,7 +449,7 @@ export function ManifestScreen(p: ManifestScreenProps) {
                     return (
                       <article key={row.sha} className={`mv-row ${isOpen ? "open" : ""}`}>
                         <div className="mv-rh">
-                          <button type="button" className="mv-openarea" aria-expanded={isOpen} onClick={() => toggle(row.sha)} title={row.subject}>
+                          <button type="button" className="mv-openarea" aria-expanded={isOpen} onClick={() => toggle(row.sha)} data-tip={row.subject}>
                             <Tile signed={row.verdict} />
                             <span className="mv-rtext">
                               <span className="mv-title">{row.subject}</span>
@@ -441,7 +459,7 @@ export function ManifestScreen(p: ManifestScreenProps) {
                                 <span className="mv-pill mono">{row.sha.slice(0, 7)}</span>
                                 <span className="mv-pill hollow">committed {clock(row.time * 1000)}</span>
                                 {stale ? <span className="mv-pill hollow">read {ageWords(Math.max(0, p.now - (p.readAt ?? p.now)))}</span> : null}
-                                <span className="mv-pill warn"><i />no steps — ask the builder</span>
+                                {row.steps.length === 0 ? <span className="mv-pill warn"><i />no steps — ask the builder</span> : null}
                               </span>
                             </span>
                           </button>
@@ -466,12 +484,12 @@ export function ManifestScreen(p: ManifestScreenProps) {
                       </article>
                     );
                   })}
-                  {toTest.length === 0 ? <div className="mv-quiet">Nothing waiting for your eyes right now.</div> : null}
+                  {toTest.length === 0 ? <EmptyState>Nothing waiting for your eyes right now.</EmptyState> : null}
                 </div>
                 {older > 0 ? (
                   <div className="mv-more"><button type="button" className="mv-mini" onClick={p.onShowOlder}>Show {older} older</button></div>
                 ) : null}
-              </Group>
+              </Group>}
 
               {inProgress.length ? (
                 <Group className="mv-live" icon={<Live size={ICON.sm} />} title="In progress" count={inProgress.length} say="read from this machine · nothing to sign off">
@@ -500,8 +518,8 @@ export function ManifestScreen(p: ManifestScreenProps) {
                     ))}
                   </div>
                 </Group>
-              ) : (
-                <div className="mv-quiet">{merged ? "Nothing is running in any of these projects." : "Nothing is running on this project."}</div>
+              ) : quietWeek ? null : (
+                <div className="mv-quiet"><EmptyState>{merged ? "Nothing is running in any of these projects." : "Nothing is running on this project."}</EmptyState></div>
               )}
 
               {project.boundary === "build" && ready.length ? (
@@ -535,7 +553,7 @@ export function ManifestScreen(p: ManifestScreenProps) {
                 </Group>
               ) : null}
 
-              <section className="agx-card mv-grp mv-done-group">
+              {quietWeek ? null : <section className="agx-card mv-grp mv-done-group">
                 <div className="mv-gh">
                   <span className="mv-gpic"><DoneBox size={ICON.sm} /></span>
                   <h2>Done this week</h2>
@@ -548,12 +566,12 @@ export function ManifestScreen(p: ManifestScreenProps) {
                 </div>
                 {p.doneOpen ? (
                   <div className="mv-rows">
-                    {done.length === 0 ? <div className="mv-quiet">Nothing has moved out of To test yet this week.</div> : null}
+                    {done.length === 0 ? <div className="mv-quiet"><EmptyState>Nothing has moved out of To test yet this week.</EmptyState></div> : null}
                     {done.map((row) => {
                       const isOpen = p.openRow === row.sha;
                       return (
                         <div key={row.sha} className="mv-done-wrap">
-                          <button type="button" className={`mv-donerow ${isOpen ? "open" : ""}`} aria-expanded={isOpen} onClick={() => toggle(row.sha)} title={row.subject}>
+                          <button type="button" className={`mv-donerow ${isOpen ? "open" : ""}`} aria-expanded={isOpen} onClick={() => toggle(row.sha)} data-tip={row.subject}>
                             <span className={`mv-tile small ${row.verdict ?? ""}`}>{row.verdict === "tested" ? <Check size={ICON.xs} /> : row.verdict === "failed" ? <Cross size={ICON.xs} /> : <Tray size={ICON.xs} />}</span>
                             <span className="mv-donetitle">{row.subject}</span>
                             {merged ? <span className="mv-pill">{row.projectName}</span> : null}
@@ -585,7 +603,7 @@ export function ManifestScreen(p: ManifestScreenProps) {
                     })}
                   </div>
                 ) : null}
-              </section>
+              </section>}
             </>
           )
         ) : null}
@@ -596,7 +614,7 @@ export function ManifestScreen(p: ManifestScreenProps) {
 
 /* ── the wiring ────────────────────────────────────────────────────────── */
 
-export function ManifestView({ active, onOpenProject }: { active: boolean; onOpenProject: () => void }) {
+export function ManifestView({ active, onOpenProject, onTerminal }: { active: boolean; onOpenProject: () => void; onTerminal: () => void }) {
   const summary = useSyncExternalStore(subscribeSummary, summarySnapshot, summarySnapshot);
   const roots = useMemo(() => (summary ?? []).map((p) => p.root), [summary]);
   // Keyed by the set, not the array: the summary is a fresh object every minute
@@ -673,12 +691,8 @@ export function ManifestView({ active, onOpenProject }: { active: boolean; onOpe
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, [active, load]);
-  useEffect(() => {
-    if (!active) return;
-    setNow(Date.now());
-    const id = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(id);
-  }, [active]);
+  useEffect(() => { if (active) setNow(Date.now()); }, [active]);
+  useVisibleInterval(() => setNow(Date.now()), 30_000, active);
   // A project read is never polled: only opening, Refresh, and focus.
   useEffect(() => { setToTestLimit(50); setNow(Date.now()); }, [rootKey]);
   useEffect(() => { setToTestLimit(50); }, [scope]);
@@ -745,11 +759,14 @@ export function ManifestView({ active, onOpenProject }: { active: boolean; onOpe
     if (!row.paneId) return;
     try {
       const answer = await api.focusPane({ sessionId: "", windowId: "", paneId: row.paneId });
-      if (!answer.ok) setRowErrors((cur) => ({ ...cur, [`pane:${row.paneId}`]: answer.error || "tmux would not go there — the pane may be gone" }));
+      // tmux moving was only half of it: the terminal view has to come forward
+      // too, or the pane is selected behind the Manifest where nobody sees it.
+      if (answer.ok) onTerminal();
+      else setRowErrors((cur) => ({ ...cur, [`pane:${row.paneId}`]: answer.error || "tmux would not go there — the pane may be gone" }));
     } catch {
       setRowErrors((cur) => ({ ...cur, [`pane:${row.paneId}`]: "tmux would not go there — the pane may be gone" }));
     }
-  }, []);
+  }, [onTerminal]);
 
   return (
     <ManifestScreen

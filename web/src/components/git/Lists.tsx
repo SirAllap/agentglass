@@ -415,7 +415,7 @@ export function commitRows(
     picked: ctx.picked.has(l.hash!),
     pickMark: ctx.numbers?.get(l.hash!),
     run: (id) => ctx.run(id, l.hash!, l.subject ?? ""),
-    title: <span title={l.subject} style={{ fontFamily: "var(--font-sans)" }}>{l.subject}</span>,
+    title: <span data-tip={l.subject} style={{ fontFamily: "var(--font-sans)" }}>{l.subject}</span>,
     /* The refs come BEFORE the subject, one chip each, in a cluster capped at 45% of the row
        (`.chip-ref`): this is the one place whose text is a list of branch names, and on a busy
        commit it is longer than the subject it sits beside. */
@@ -427,7 +427,7 @@ export function commitRows(
     ) : undefined,
     facts: [
       <CommitAvatar key="by" author={l.author} size={ICON.lg} />,
-      <span key="t" title={l.date}>{shortAgo(l.date)}</span>,
+      <span key="t" data-tip={l.date}>{shortAgo(l.date)}</span>,
       <span key="h" style={{ color: "var(--text4)" }}>{l.hash}</span>,
     ],
   }));

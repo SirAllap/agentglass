@@ -3,8 +3,8 @@
  * kept, and says whose problem it is only on a fact. It never asks for a log.
  */
 import { describe, expect, it } from "bun:test";
-import { failureHint, jobIdOf } from "../src/lib/prFailureHint.ts";
-import { fileInLane, board } from "../src/lib/prLanes.ts";
+import { failureHint, jobIdOf } from "../../shared/prFailureHint.ts";
+import { fileInLane, board } from "../../shared/prLanes.ts";
 import type { CheckFailureSummary, PrCheck, PrSummary } from "../../shared/types.ts";
 
 const chk = (job: string, name = "build"): PrCheck => ({ name, workflow: "CI", state: "failure", done: true, url: `https://github.com/acme/orbit/actions/runs/9/job/${job}` });

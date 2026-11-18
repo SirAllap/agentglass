@@ -111,9 +111,9 @@ describe("the snapshot", () => {
 });
 
 describe("the settings are the engine's", () => {
-  test("scopes: the mode, the reviews, the model, the per-run cap and the two ask rules are per project; the rest is the machine's", () => {
+  test("scopes: the mode, the reviews, the model, the per-run cap, the file cap and the two ask rules are per project; the rest is the machine's", () => {
     const project = Object.entries(PILOT_KEYS).filter(([, k]) => k.scope === "project").map(([f]) => f).sort();
-    expect(project).toEqual(["askOnLarge", "askOnSensitive", "costCapUsd", "model", "pilot", "reviews"]);
+    expect(project).toEqual(["askOnLarge", "askOnSensitive", "costCapUsd", "fileCapBytes", "model", "pilot", "reviews"]);
   });
   test("a model is any one word the engine takes, not only the three the picker offers", () => {
     expect(decode("model", "opus")).toBe("opus");
@@ -186,7 +186,7 @@ describe("The builder never", () => {
   test("Leaves its worktree carries its note on the chip and in a visible line", async () => {
     const src = await Bun.file(new URL("../src/components/flightPlan/SettingsTab.tsx", import.meta.url)).text();
     expect(src).toContain('["Leaves its worktree", "File edits enforced, shell checked, scripts by brief."]');
-    expect(src).toContain("title={note ?");
+    expect(src).toContain("data-tip={note ?");
     expect(src).toContain('className="ps-never-note"');
   });
 });

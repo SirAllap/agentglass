@@ -100,7 +100,7 @@ export function NameList({ can, cannot }: { can: readonly string[]; cannot: read
     <div>
       <div className="text-[10px] uppercase tracking-[0.11em] mb-1" style={{ color: "var(--text3)" }}>{label} ({names.length})</div>
       <ul className="agx-scroll m-0 p-0 list-none overflow-y-auto rounded-lg px-2 py-1" style={{ maxHeight: 8 * 20 + 8, background: wash("--text", 5) }}>
-        {names.map((n) => <li key={n} className="text-[11px] truncate" style={{ lineHeight: "20px", fontFamily: MONO, color: "var(--text2)" }} title={n}>{n}</li>)}
+        {names.map((n) => <li key={n} className="text-[11px] truncate" style={{ lineHeight: "20px", fontFamily: MONO, color: "var(--text2)" }} data-tip={n}>{n}</li>)}
       </ul>
     </div>
   );

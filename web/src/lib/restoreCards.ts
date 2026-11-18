@@ -25,7 +25,9 @@ export interface RestoredBanner {
 }
 
 export function restoredBanner(windows: readonly TmuxWindow[]): RestoredBanner | null {
-  const back = windows.filter((w) => w.restored);
+  /* A desk the person already put away is not announced again: the mark and
+     the window's own card stay, the pill does not. */
+  const back = windows.filter((w) => w.restored && !w.restoredDismissed);
   if (!back.length) return null;
   const agents = back.filter((w) => w.was).length;
   const head = `Back after the reboot. ${plural(back.length, "window", "windows")} restored with their scrollback.`;
@@ -48,6 +50,13 @@ export function ageText(ms: number): string {
   return `${Math.round(s / 86400)} d`;
 }
 
+/** SIGKILL is named for what usually sends it here: systemd-oomd or the kernel's out-of-memory killer. */
+export function deadTitle(w: Pick<TmuxWindow, "exit" | "signal">): string {
+  if (w.signal === 9) return "This process was killed (signal 9, often the out-of-memory guard)";
+  if (w.signal) return `This process was killed by signal ${w.signal}`;
+  return `This process exited with status ${w.exit ?? 0}`;
+}
+
 export type PaneCard =
   | { kind: "resume"; title: string; body: string; primary: string; secondary: string }
   | { kind: "dead"; title: string; body: string; primary: string; secondary: string };
@@ -63,7 +72,7 @@ export function paneCard(w: TmuxWindow, where: string | null, now: number): Pane
     const ago = w.diedAt ? `${name} stopped ${ageText(now - w.diedAt)} ago.` : `${name} stopped.`;
     return {
       kind: "dead", primary: "Restart here", secondary: "Close window",
-      title: `This process exited with status ${w.exit ?? 0}`,
+      title: deadTitle(w),
       body: `${ago} The text above is what it left. Restart opens a fresh shell in ${where ?? "the same folder"}.`,
     };
   }

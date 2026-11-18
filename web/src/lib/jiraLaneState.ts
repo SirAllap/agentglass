@@ -10,7 +10,7 @@ import { useSyncExternalStore } from "react";
 import type { LaneSort } from "../components/jira/list/laneModel.ts";
 
 const STORE_KEY = "agentglass.jira.laneSort";
-const SORTS = new Set<string>(["rank", "key", "priority", "due"]);
+const SORTS = new Set<string>(["rank", "key", "priority", "due", "agent"]);
 
 const at = (view: string, lane: string): string => `${view}|${lane}`;
 let sorts: Record<string, LaneSort> | null = null;

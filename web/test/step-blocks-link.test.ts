@@ -8,8 +8,8 @@ import { expect, test } from "bun:test";
 import { BLOCK_INFO, blockInfoFor, blockRefusal, blocksProblem, hasExtras, planOf } from "../../shared/stepBlocks.ts";
 import type { StepBlock } from "../../shared/providers.ts";
 
-test("Jira offers the link and no custom field; ClickUp's list is untouched", () => {
-  expect(blockInfoFor("jira").map((b) => b.type)).toEqual(["move", "unassign", "assign", "comment", "link"]);
+test("Jira offers the link and the custom field; ClickUp's list is untouched", () => {
+  expect(blockInfoFor("jira").map((b) => b.type)).toEqual(["move", "unassign", "assign", "comment", "field", "link"]);
   expect(blockInfoFor("clickup")).toBe(BLOCK_INFO);
   expect(BLOCK_INFO.map((b) => b.type)).not.toContain("link");
 });
@@ -18,7 +18,8 @@ test("a tracker without the kind refuses it by name, and one block of a kind is 
   expect(blockRefusal("move", [], "link")).toBe("“link” is not a block.");
   expect(blockRefusal("move", [], "link", "jira")).toBeNull();
   expect(blockRefusal("move", [{ type: "link" }], "link", "jira")).toMatch(/Already in this step/);
-  expect(blockRefusal("move", [], "field", "jira")).toBe("“field” is not a block.");
+  expect(blockRefusal("move", [], "field", "jira")).toBeNull();
+  expect(blockRefusal("move", [{ type: "field", field: "Team", value: "Blue" }], "field", "jira")).toMatch(/Already in this step/);
   for (const t of ["move", "menu", "merge"] as const) expect(blockRefusal(t, [], "link", "jira")).toBeNull();
 });
 

@@ -14,28 +14,26 @@
  * as the key and is opened by its number, as any other.
  */
 import { api } from "./api.ts";
+import { forgetPrefix, load, peek } from "./remoteStore.ts";
 import type { CardDev, CardDevPr } from "../../../shared/providers.ts";
 import { prAddress } from "../../../shared/taskref.ts";
 import type { JiraLink } from "./jiraLinks.ts";
 
 const TTL_MS = 60_000;
-const held = new Map<string, { at: number; dev: CardDev | null }>();
-const pending = new Map<string, Promise<CardDev | null>>();
+const K = (issueId: string) => `jira-dev:${issueId}`;
+/** `CardDev | null` wrapped, since `remoteStore` treats `undefined` as "never loaded" and a site with nothing connected answers `null`. */
+type Held = { dev: CardDev | null };
 
 /** The card's development data: from memory while fresh, otherwise one request shared by whoever asks meanwhile. */
 export function readJiraDev(issueId: string): Promise<CardDev | null> {
-  const hit = held.get(issueId);
-  if (hit && Date.now() - hit.at < TTL_MS) return Promise.resolve(hit.dev);
-  const going = pending.get(issueId);
-  if (going) return going;
-  const p = api.jiraDev(issueId)
-    .then((r) => (r?.ok && r.dev ? r.dev : null))
-    .catch(() => null)
-    .then((dev) => { held.set(issueId, { at: Date.now(), dev }); pending.delete(issueId); return dev; });
-  pending.set(issueId, p);
-  return p;
+  return load<Held>(K(issueId), () => api.jiraDev(issueId).then((r) => ({ dev: r?.ok && r.dev ? r.dev : null })).catch(() => ({ dev: null })), TTL_MS)
+    .then((h) => h.dev);
 }
-export function forgetJiraDev(): void { held.clear(); pending.clear(); }
+
+/** What is held for a card, without asking. */
+export function peekJiraDev(issueId: string): CardDev | null { return peek<Held>(K(issueId)).value?.dev ?? null; }
+
+export function forgetJiraDev(): void { forgetPrefix("jira-dev:"); }
 
 /** The number a pull request address ends in, for one on a host the app has no pattern for. */
 const numberOf = (url: string): number => Number(/(\d+)\/?$/.exec(new URL(url).pathname)?.[1] ?? 0);

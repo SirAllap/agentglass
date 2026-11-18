@@ -5,7 +5,7 @@
  * detail has concluded it, and keep it there.
  */
 import { afterEach, describe, expect, it } from "bun:test";
-import { fileInLane } from "../src/lib/prLanes.ts";
+import { fileInLane } from "../../shared/prLanes.ts";
 import { noteKnownBlock, withKnownBlock, onKnownBlock, __resetKnownBlock } from "../src/lib/prKnownBlock.ts";
 import type { PrSummary } from "../../shared/types.ts";
 
@@ -64,6 +64,57 @@ describe("the detail's findings reach the board", () => {
   it("a list refresh that says UNKNOWN again does not undo it", () => {
     noteKnownBlock(ROOT, 1042, "aaa111", { conflicted: true, requiredMissing: false });
     expect(withKnownBlock(ROOT, row({ mergeable: "UNKNOWN" })).mergeable).toBe("CONFLICTING");
+  });
+});
+
+describe("board and detail decide alike (acme/orbit #1042)", () => {
+  /* Real shape: approved, all checks green, CLEAN, 7 behind the base, commits after the approval. The list guessed a required check missing. */
+  const stamped = () => row({ requiredMissing: true });
+
+  it("the detail finding nothing blocking cancels the list's guess: Green, ready", () => {
+    expect(fileInLane(withKnownBlock(ROOT, stamped()), MINE).lane).toBe("blocked");
+    noteKnownBlock(ROOT, 1042, "aaa111", { conflicted: false, requiredMissing: false, behindBlocks: false });
+    expect(fileInLane(withKnownBlock(ROOT, stamped()), MINE).lane).toBe("land");
+  });
+
+  it("behind the base alone is a hint: still Green, ready", () => {
+    noteKnownBlock(ROOT, 1042, "aaa111", { conflicted: false, requiredMissing: false, behindBlocks: false });
+    expect(fileInLane(withKnownBlock(ROOT, row()), MINE).lane).toBe("land");
+  });
+
+  it("behind with up-to-date required: not ready", () => {
+    noteKnownBlock(ROOT, 1042, "aaa111", { conflicted: false, requiredMissing: false, behindBlocks: true });
+    const f = fileInLane(withKnownBlock(ROOT, row()), MINE);
+    expect(f.lane).toBe("blocked");
+    expect(f.reason).toContain("up to date");
+  });
+
+  it("a failing required check: Blocked", () => {
+    noteKnownBlock(ROOT, 1042, "aaa111", { conflicted: false, requiredMissing: false, behindBlocks: false });
+    const red = row({ checks: { total: 14, success: 13, failure: 1, skipped: 0, pending: 0, allDone: true, verdict: "red", failing: [{ name: "unit", workflow: "CI", state: "failure", done: true }] } as never });
+    expect(fileInLane(withKnownBlock(ROOT, red), MINE).lane).toBe("blocked");
+  });
+
+  it("the panel hands over the behind verdict", async () => {
+    const src = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
+    expect(src).toContain("behindBlocks: blocksBehind");
+  });
+});
+
+describe("a verdict is stored only once its inputs are loaded", () => {
+  it("'nothing blocks' before the required contexts and merge state arrived does not cancel the list's guess", () => {
+    noteKnownBlock(ROOT, 1042, "aaa111", { conflicted: false, requiredMissing: false, behindBlocks: false, settled: false });
+    expect(fileInLane(withKnownBlock(ROOT, row({ requiredMissing: true })), MINE).lane).toBe("blocked");
+  });
+  it("a block is stored even unsettled; a settled 'nothing' cancels", () => {
+    noteKnownBlock(ROOT, 1042, "aaa111", { conflicted: true, requiredMissing: false, settled: false });
+    expect(withKnownBlock(ROOT, row()).mergeable).toBe("CONFLICTING");
+    noteKnownBlock(ROOT, 1042, "aaa111", { conflicted: false, requiredMissing: false, behindBlocks: false, settled: true });
+    expect(fileInLane(withKnownBlock(ROOT, row({ requiredMissing: true })), MINE).lane).toBe("land");
+  });
+  it("the panel passes what it loaded", async () => {
+    const src = await Bun.file(new URL("../src/components/PrPanel.tsx", import.meta.url)).text();
+    expect(src).toContain('settled: !!d.gate && d.mergeState !== "UNKNOWN"');
   });
 });
 

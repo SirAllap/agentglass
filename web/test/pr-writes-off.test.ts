@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { writeBlock, WRITES_OFF } from "../src/lib/cardWrites.ts";
+import { writeBlock, WRITES_OFF, CLICKUP_READ_ONLY } from "../src/lib/cardWrites.ts";
 
 /*
  * Writes to ClickUp are off until somebody turns them on, and the server
@@ -38,6 +38,24 @@ function enclosing(at: number): { name: string; body: string } {
   const ends = [next, next2].filter((n) => n > -1);
   return { name, body: src.slice(start, ends.length ? Math.min(...ends) : undefined) };
 }
+
+const trackerPage = await Bun.file(new URL("../src/components/settings/pages/later.tsx", import.meta.url)).text();
+const settingsModal = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url)).text();
+
+describe("the read-only sentence names the page", () => {
+  it("says where the switch is, in the words of the pane", () => {
+    expect(CLICKUP_READ_ONLY).toBe("ClickUp is read-only on this repository. Turn it on in Settings > Tasks > Card tracker > ClickUp changes.");
+  });
+
+  it("names a page, a card and a row the Tasks pane really draws", () => {
+    // The row says "<repo>: ClickUp changes" beside the two switches, one row per repo.
+    for (const drawn of ['id: "tasks", label: "Tasks"', ": ClickUp changes`}"]) expect(settingsModal).toContain(drawn);
+    // The card's visible heading is the Section around it; the card itself
+    // carries only an aria-label so the name is not said twice.
+    expect(trackerPage).toContain('<Section id="tracker" title="Card tracker"><CardTrackerSection />');
+    expect(settingsModal).toContain('<SettingsCard label="Card tracker"');
+  });
+});
 
 describe("every ClickUp write in PrPanel", () => {
   const calls = [...src.matchAll(/api\.clickup(?:Card|Status|Comment)\(/g)].map((m) => m.index!);

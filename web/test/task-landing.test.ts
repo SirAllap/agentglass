@@ -8,7 +8,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { globalStubs } from "./stubGlobal";
 import {
-  landingSource, taskLanding, setTaskLanding, lastTaskSource, rememberTaskSource,
+  landingSource, openTaskSource, taskLanding, setTaskLanding, lastTaskSource, rememberTaskSource,
 } from "../src/lib/taskLanding.ts";
 const stubGlobal = globalStubs();
 
@@ -20,6 +20,7 @@ stubGlobal("localStorage", {
 });
 
 const BAR = ["all", "github", "local", "clickup"];
+const BAR_WITH_JIRA = ["all", "jira", "clickup", "local", "github"];
 
 beforeEach(() => { store.clear(); });
 
@@ -74,6 +75,41 @@ describe("where it actually lands", () => {
     setTaskLanding("clickup");
     expect(landingSource(["github"])).toBe("github");
     expect(landingSource([])).toBe("all");
+  });
+});
+
+describe("what wins when the view opens", () => {
+  // The order is explicit target > saved landing > nothing else. The last tab
+  // is where "last used" lands, never something that outranks a saved choice.
+  test("the saved landing, over a stale last-visited tab", () => {
+    setTaskLanding("jira");
+    rememberTaskSource("clickup");
+    expect(openTaskSource({ available: BAR_WITH_JIRA, landing: "jira" })).toBe("jira");
+  });
+
+  test("a landing held while the bar is still being read, not stepped off", () => {
+    // The sources the server has not answered about yet are left off the bar
+    // for a frame. Falling back then is how a pinned Jira opened on All.
+    expect(openTaskSource({ available: ["all", "local", "github"], landing: "jira", settled: false })).toBe("jira");
+  });
+
+  test("the tab you left, on last used", () => {
+    rememberTaskSource("clickup");
+    expect(openTaskSource({ available: BAR, landing: "last" })).toBe("clickup");
+  });
+
+  test("the current tab on last used, while the view stays open", () => {
+    rememberTaskSource("clickup");
+    expect(openTaskSource({ available: BAR, landing: "last", current: "github" })).toBe("github");
+  });
+
+  test("an explicit target over the saved landing", () => {
+    // A card chip is an errand, not a change of mind about where you live.
+    expect(openTaskSource({ available: BAR, landing: "jira", explicit: "clickup" })).toBe("clickup");
+  });
+
+  test("a landing that never arrives still leaves you on a tab that exists", () => {
+    expect(openTaskSource({ available: ["all", "github"], landing: "jira", settled: true })).toBe("all");
   });
 });
 

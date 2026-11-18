@@ -74,3 +74,31 @@ export function addedRoots(open: readonly string[], ticked: readonly string[]): 
 export function skipAction(step: number, last: number): "advance" | "finish" {
   return step > 0 && step < last ? "advance" : "finish";
 }
+
+/**
+ * Step 4's Continue is dead only when there is nothing to carry on with: a
+ * folder that read as no repositories, with nothing ticked and no project open.
+ * With a project already open (an upgrade, or `Run the setup again`) there is
+ * nothing to add and Continue must still move on.
+ */
+export function reposBlocked(viewState: ReposView["state"], tickedN: number, openN: number): boolean {
+  if (viewState === "rows" && tickedN > 0) return false;
+  return openN === 0;
+}
+
+export type Move = "none" | "advance" | "commit" | "finish";
+
+/**
+ * What a press in the footer does. One rule for the button, Ctrl+Enter and
+ * `Skip for now`, so none of them can do what another may not:
+ * - a commit still in the air swallows every press (no second terminal);
+ * - the primary and the key obey `blocked`;
+ * - `Skip for now` / `Not now` never runs the step's write: skipping step 5
+ *   must not open a terminal, skipping step 4 must not add the ticked repos.
+ */
+export function footerMove(o: { via: "primary" | "skip"; step: number; last: number; blocked: boolean; going: boolean }): Move {
+  if (o.going) return "none";
+  if (o.via === "skip") return skipAction(o.step, o.last);
+  if (o.blocked) return "none";
+  return "commit";
+}

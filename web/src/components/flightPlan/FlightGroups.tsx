@@ -22,7 +22,7 @@ export function FlightGroups({ groups, loading, now, busy, error, actRoot, onBut
     <div className="pv-groups">
       {groups.map((g, i) => (
         <section key={g.root} className="pv-proj" aria-labelledby={`pv-p-${i}`}>
-          <h3 className="pv-proj-h" id={`pv-p-${i}`} title={g.root}><FolderIcon size={ICON.sm} />{projectName(g.root)}<span className="n">{plural(g.items.length, "plan")}</span></h3>
+          <h3 className="pv-proj-h" id={`pv-p-${i}`} data-tip={g.root}><FolderIcon size={ICON.sm} />{projectName(g.root)}<span className="n">{plural(g.items.length, "plan")}</span></h3>
           <PilotStrip strip={g.strip} engine={g.engine} busy={busy && g.root === actRoot} error={g.root === actRoot ? error : ""} onButton={(id) => onButton(id, g.root)} onSecondary={() => onSecondary(g.root)} />
           <FlightList items={g.items} loading={loading} snap={g.snap} now={now} scope={`${i}-`} onOpen={onOpen} onCard={onCard} onDo={onDo} onHistory={onHistory} onCompose={onCompose} />
         </section>

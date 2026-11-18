@@ -8,8 +8,7 @@
 // not review, which is the whole reason this file exists.
 import { PluginMark } from "./plugins/PluginMark.tsx";
 import { PluginPreview } from "./plugins/PluginPreview.tsx";
-import { PageHead } from "./plugins/PageHead.tsx";
-import { BackIcon, PlusIcon } from "./browser/icons.tsx";
+import { BackIcon } from "./browser/icons.tsx";
 import { emitControl } from "../lib/controlBus.ts";
 import { closeSettings } from "../lib/openSettings.ts";
 import { clearPluginInstall, pluginInstallRequest, subscribePluginInstall } from "../lib/installPlugin.ts";
@@ -19,14 +18,21 @@ import { PluginDeclaration } from "./plugins/PluginDeclaration.tsx";
 import { UnboxedConsent } from "./plugins/UnboxedConsent.tsx";
 import { envHatchNotice } from "../lib/pluginBoxState.ts";
 import { PluginWhyStopped } from "./plugins/PluginWhyStopped.tsx";
-import { cardBand, pageSummary, permissionChips, PLUGIN_CTRL_H, primaryAction, versionChip, type CardBand } from "../lib/pluginCard.ts";
+import { PluginModal } from "./plugins/PluginModal.tsx";
+import { groupInstalled, pluginHeadChips, pluginState, pluginTallyStore, systemHeadline, tallyInstalled, type PluginTally } from "../lib/pluginList.ts";
+import { cardBand, pageSummary, permissionChips, primaryAction, versionChip, type CardBand } from "../lib/pluginCard.ts";
+import { useReportHead } from "./SettingsPageState.tsx";
+import { BlockedIcon, PlusIcon, SearchIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { rowId } from "../lib/settingsIndex.ts";
+import { UpIcon } from "./browser/icons.tsx";
+import { PuzzleIcon, ShieldIcon } from "./settingsNavIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
-import { useCallback, useEffect, useState, useMemo, useSyncExternalStore } from "react";
-import { SettingRow, Switch } from "./SettingRow.tsx";
-import { EmptyState, Field, SettingsCard, SettingsForm, StatusBadge, type StatusTone } from "./SettingsKit.tsx";
-import { useReportHead } from "./SettingsPageState.tsx";
-import { SearchIcon } from "../lib/glyphIcons.tsx";
+import { useCallback, useEffect, useRef, useState, useMemo, useSyncExternalStore } from "react";
+import { Switch } from "./SettingRow.tsx";
+import { StatusBadge, type StatusTone } from "./SettingsKit.tsx";
+import { FormInput } from "./settings/shell/FormInput.tsx";
+import { Section } from "./settings/shell/Section.tsx";
 import { api } from "../lib/api.ts";
 import { fmtAgo } from "../lib/format.ts";
 import { usePoll } from "../lib/usePoll.ts";
@@ -88,30 +94,20 @@ function AddPluginCard({ onInstalled, open, setOpen, prefill }: {
   if (!open) return null;
 
   return (
-    <SettingRow
-      label="Install a plugin"
-      hint="A local folder or a git URL"
-      detail={{ summary: "Details", body: "A local folder's absolute path, or a git URL. Copies the folder and reads its manifest — nothing in it runs yet." }}
-      below={
-        <SettingsForm label="Install a plugin" onSubmit={() => void install()}>
-          <Field label="Folder path or git URL" htmlFor="plugin-source" error={error}>
-            <input id="plugin-source" value={source} onChange={(e) => setSource(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Escape") setOpen(false); }}
-              placeholder="/path/to/plugin or https://…"
-              disabled={busy}
-              autoFocus
-              className={`t-mono ${INPUT}`}
-              style={INPUT_STYLE} />
-          </Field>
-          <div className="flex items-center gap-2">
-            <Button type="submit" pending={busy} disabled={!source.trim()}>
-              {busy ? "Installing…" : "Install"}
-            </Button>
-            <Button disabled={busy} onClick={() => { setOpen(false); setError(null); }}>Cancel</Button>
-          </div>
-        </SettingsForm>
-      }
-    />
+    <>
+      {/* The mockup's inset form under the install row: one wide field, its hint, Install and Cancel. */}
+      <div className="agx-plug-form" data-row={rowId("Folder path or git URL")}>
+        <FormInput id="plugin-source" aria-label="Folder path or git URL" value={source} onChange={(e) => setSource(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void install(); } if (e.key === "Escape") setOpen(false); }}
+          placeholder="/path/to/plugin or https://…" disabled={busy} autoFocus className={`t-mono ${INPUT}`} style={{ ...INPUT_STYLE, width: "100%" }} />
+        <span className="agx-plug-hint">A local folder's absolute path, or a git URL. Nothing in it runs yet.</span>
+        {error && <div role="alert" className="text-[12px]" style={{ color: "var(--error-ink)" }}>{error}</div>}
+        <div className="flex items-center gap-2">
+          <Button tone="primary" pending={busy} className="agx-plug-w" disabled={!source.trim()} onClick={() => void install()}>{busy ? "Installing…" : "Install"}</Button>
+          <Button className="agx-plug-w" disabled={busy} onClick={() => { setOpen(false); setError(null); }}>Cancel</Button>
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -220,6 +216,22 @@ export function PluginsPane({ open, focus }: {
     setPrefill(askedFor.url);
     setInstalling(true);
   }, [askedFor, plugins]);
+  /* One tally for the whole page: the header chips, the status card, the
+     Installed line and the nav mark all read it, so they cannot disagree. */
+  const hasUpdate = (p: PublicPlugin) => marketUpdate(p, catalogue) !== null;
+  const tally = tallyInstalled(plugins, hasUpdate);
+  useReportHead("plugins", master === null ? null : { chips: pluginHeadChips(tally) });
+  /* The nav mark reads the store, not a page report: a report is withdrawn when
+     the page closes, and the mark then fell back to an approval-only count. */
+  useEffect(() => { if (master !== null) pluginTallyStore.set(tally); });
+  /* Nothing installed: the install box is open on the first read, so the
+     empty page starts at its one next step. Once, so Cancel stays cancelled. */
+  const firstRead = useRef(true);
+  useEffect(() => {
+    if (master === null || !firstRead.current) return;
+    firstRead.current = false;
+    if (plugins.length === 0) setInstalling(true);
+  }, [master, plugins.length]);
   const ql = q.trim().toLowerCase();
   const shown = ql
     ? plugins.filter((p) => `${p.name} ${p.publisher} ${p.description}`.toLowerCase().includes(ql))
@@ -229,8 +241,6 @@ export function PluginsPane({ open, focus }: {
      is the bug that started this: a page for something that is gone used to
      sit in the nav until Settings was closed and opened again. */
   const here = showing ? plugins.find((p) => p.name === showing) : undefined;
-  /* Install is the page's one action, so it is in the header: on the list, not on a plugin's own settings. */
-  useReportHead("plugins", showing && here ? null : { action: { label: "Install a plugin" } }, () => setInstalling(true));
   useEffect(() => {
     if (showing && plugins.length && !plugins.some((p) => p.name === showing)) setShowing(null);
   }, [plugins, showing]);
@@ -255,85 +265,65 @@ export function PluginsPane({ open, focus }: {
 
   return (
     <div className="pb-5">
-      {/* The one thing on this page that IS a setting keeps the settings
-          idiom — a titled card with a row and a switch. Everything about one
-          plugin is a row of the Installed card below, and the market is a card
-          of its own: one idiom for the whole page, where there used to be a
-          board of bordered tiles between two cards. */}
-      <SettingsCard label="Plugin system">
-        <SettingRow
-          onClick={busyMaster ? undefined : toggleMaster}
-          role="switch"
-          ariaChecked={!!master}
-          label={master ? "Plugins are switched on" : "Plugins are switched off"}
-          hint={master
-            ? "Enabled plugins may run. Turning this off stops every one of them immediately."
-            : "Nothing installed runs, no matter what it is enabled to do. Install and review still work."}
-          control={<Switch on={!!master} busy={busyMaster || master === null} />}
-        />
-        {masterError && <SettingRow label="The master switch was not changed" status={<StatusBadge tone="err">Failed</StatusBadge>} hint={masterError} />}
-        {envHatchNotice(envAllowsUnboxed) && (
-          <SettingRow label="Unboxed plugins are allowed here" status={<StatusBadge tone="warn">Environment override</StatusBadge>}
-            hint={envHatchNotice(envAllowsUnboxed)} />
-        )}
-      </SettingsCard>
-
-      {/* Everything installed, one card each in a grid that uses the width.
-          Not inside a settings card: a card holding cards is two borders
-          between the eye and the text. */}
-      <section aria-label="Installed plugins" className="mb-8">
-        <PageHead title="Installed" summary={pageSummary(plugins.length,
-          plugins.filter((p) => marketUpdate(p, catalogue)).length,
-          plugins.filter((p) => cardBand(p, false) === "approval").length)}>
-          {/* The list narrows by name, publisher and description at once, because
-              "the one that watches the cockpit" is as likely a thing to remember
-              as its name. */}
-          <label className="agx-msearch" style={{ flex: "0 1 300px" }}>
-            <SearchIcon size={ICON.sm} />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search plugins"
-              aria-label="Search installed plugins" className={INPUT} style={INPUT_STYLE} />
-          </label>
-          <RefreshButton onRefresh={() => void load()} title="Refresh the installed plugins" />
-        </PageHead>
-        {already && (
-          <p className="m-0 mb-3 text-[12px]" style={{ color: "var(--text2)" }}>
-            <strong>{already} is already installed.</strong> The link you followed asked for this one. It is in the list below; Update re-clones it at the source it came from.
-          </p>
-        )}
-        {plugins.length === 0 && (
-          <EmptyState>Nothing installed yet. Install one from a folder or a git URL, or take one from the market below.</EmptyState>
-        )}
-        <div className="agx-plugin-grid">
-          {shown.map((p) => (
-            <PluginCard key={p.name} plugin={p} masterOn={!!master} envAllowsUnboxed={envAllowsUnboxed} onChanged={load}
-              update={marketUpdate(p, catalogue)} preview={marketEntry(p, catalogue)?.preview} onSettings={() => setShowing(p.name)} />
-          ))}
-          {/* A strip across the row on a laptop, a tile of the grid on a wide screen. While the form is open it
-              takes the tile's place, below, so "install another" is answered where it was asked. */}
-          {!installing && (
-            <button type="button" onClick={() => setInstalling(true)} className="agx-plugin-add">
-              <PlusIcon size={ICON.md} />
-              <b>{plugins.length ? "Install another plugin" : "Install a plugin"}</b>
-              <span>From the market below, a folder, or a git address.</span>
-            </button>
+      <Section id="plugin-system" title="Plugin system" intro="The one switch that decides whether any plugin may run.">
+        {/* The switch sits in the card's head, beside the headline it changes: one card, not a status card and a row under it. */}
+        <SystemStatus tally={tally} known={master !== null}
+          help={master ? "Enabled plugins may run. Turning this off stops every one of them immediately." : "Nothing installed runs. Install and review still work."}
+          control={<Toggle settingId="plugins.master" label="Plugins may run" on={!!master} busy={busyMaster || master === null} onToggle={() => void toggleMaster()} />}>
+          {masterError && <div className="agx-plug-note-row" data-tone="err" role="alert"><WarningIcon size={ICON.xs} /><span><b>The master switch was not changed.</b> {masterError}</span></div>}
+          {envHatchNotice(envAllowsUnboxed) && (
+            <div className="agx-plug-note-row" data-tone="warn"><ShieldIcon size={ICON.xs} /><span><b>Unboxed plugins are allowed here · environment override.</b> {envHatchNotice(envAllowsUnboxed)}</span></div>
           )}
-        </div>
-        {installing && (
-          <div className="mt-4 rounded-xl overflow-hidden" style={{ background: "var(--surface-card)", border: LINE }}>
-            <AddPluginCard onInstalled={load} open={installing} setOpen={setInstalling} prefill={prefill} />
+        </SystemStatus>
+      </Section>
+
+      <Section id="plugins-installed" title="Installed" count={master === null ? undefined : String(tally.total)}
+        intro={plugins.length ? pageSummary(tally.total, tally.update, tally.needsYou) : "Nothing here runs until you switch it on."}>
+        {/* At every count: the search index points here, and Refresh lives in this row. Drawn as the mockup's tool row: one wide field, Refresh beside it. */}
+        <SearchRow agentExempt label="Find a plugin" help="Search by name, publisher or description" value={q} onChange={setQ} onRefresh={() => void load()} />
+        {already && (
+          <div className="px-3 py-2 text-[12px]" style={{ color: "var(--text2)" }}>
+            <strong>{already} is already installed.</strong> The link you followed asked for this one. Update re-clones it at the source it came from.
           </div>
         )}
-        {plugins.length > 0 && shown.length === 0 && (
-          <p className="m-0 text-[12px] t-dim">Nothing installed matches “{q.trim()}”</p>
+        {plugins.length === 0 && (
+          <div className="agx-plug-empty">
+            <span className="agx-plug-empty-pic" aria-hidden><PuzzleIcon size={ICON.rail} /></span>
+            <div className="min-w-0">
+              <b>No plugins yet</b>
+              <p>A plugin adds a panel, a settings page, notes on pull requests or badges in the Inbox. Installing copies its files and runs nothing.</p>
+              <ol className="agx-plug-steps"><li>Install</li><li>Read what it declares</li><li>Switch it on</li></ol>
+            </div>
+          </div>
         )}
-      </section>
+        {groupInstalled(shown, hasUpdate).map((g) => (
+          <div key={g.id} data-plugin-group={g.id}>
+            {plugins.length > 1 && <div className="agx-plug-group"><span>{g.label}</span><span className="tabular-nums">{g.items.length}</span></div>}
+            {g.items.map((p) => (
+              <PluginRows key={p.name} plugin={p} masterOn={!!master} envAllowsUnboxed={envAllowsUnboxed} onChanged={load}
+                update={marketUpdate(p, catalogue)} preview={marketEntry(p, catalogue)?.preview} onSettings={() => setShowing(p.name)} />
+            ))}
+          </div>
+        ))}
+        {plugins.length > 0 && shown.length === 0 && <div className="px-3 py-2 text-[12px]" style={{ color: "var(--text2)" }}>Nothing installed matches "{q.trim()}".</div>}
+        {/* The install row stays while the form is open under it, as in the mockup; only its button goes. */}
+        <div className="agx-plug-add" data-row={rowId(plugins.length && !installing ? "Install another plugin" : "Install a plugin")}>
+          <span className="agx-plug-plus" aria-hidden><PlusIcon size={ICON.xs} /></span>
+          <div className="min-w-0">
+            <div className="agx-plug-add-t">{plugins.length && !installing ? "Install another plugin" : "Install a plugin"}</div>
+            <div className="agx-plug-add-s">From the market below, a folder, or a git address.</div>
+          </div>
+          {!installing ? <Button className="agx-plug-w" onClick={() => setInstalling(true)}>Install…</Button> : <span />}
+        </div>
+        {installing && <AddPluginCard onInstalled={load} open={installing} setOpen={setInstalling} prefill={prefill} />}
+      </Section>
 
       <Market installed={(url) => installedFrom(url, plugins)} onInstalled={load} onLoaded={setCatalogue} onSettings={setShowing} />
     </div>
   );
 }
 
-function PluginCard({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings, update: listed, preview }: {
+function PluginRows({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings, update: listed, preview }: {
   plugin: PublicPlugin; masterOn: boolean; envAllowsUnboxed: boolean; onChanged: () => void;
   /** The picture its market listing carries; a plugin not from the market has none. */
   preview?: string;
@@ -348,6 +338,7 @@ function PluginCard({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings,
   const [updateNote, setUpdateNote] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [dropSettings, setDropSettings] = useState(false);
+  const [viewing, setViewing] = useState(false);
 
   // The one fact the whole trust model rests on: is what is on disk right
   // now the thing a human last looked at, or has it started asking for
@@ -385,6 +376,8 @@ function PluginCard({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings,
     // plugin nobody had approved could never be turned on. It asks once,
     // with what is being approved in front of it.
     if (next && needsReview) {
+      // The approval dialog is its own layer; it cannot open under this one.
+      setViewing(false);
       const ok = await ask({
         title: `Switch on ${plugin.name}?`,
         node: <PluginDeclaration plugin={plugin} />,
@@ -425,188 +418,204 @@ function PluginCard({ plugin, masterOn, envAllowsUnboxed, onChanged, onSettings,
   const hasSettings = (plugin.contributes?.settings?.length ?? 0) > 0;
   const band = cardBand(plugin, listed !== null);
   const lead = primaryAction(band, { enabled: plugin.enabled && running, hasPanel, hasSettings });
-  const h = { height: PLUGIN_CTRL_H };
   const openIt = () => { emitControl({ cmd: "view", to: "plugins" }); emitControl({ cmd: "esc" }); closeSettings(); };
+  const open = hasPanel && plugin.enabled && running;
   return (
-    <>
-    {/* Outside the card: a dialog drawn inside it would sit in the card's flex column. */}
-    {dialog}
-    {/* Four zones, the same in every card so each reads the same way: who it is
-        and how it is, what it is, what matters now, what can be done. The
-        footer is pinned to the bottom, so cards in a row end on one line. */}
-    <article className="flex flex-col min-w-0 rounded-xl overflow-hidden"
-      style={{ background: "var(--surface-card)", border: LINE, boxShadow: "var(--surface-lift)",
-        // The amber top edge of a card waiting on a decision, the same on every theme.
-        ...(band === "approval" ? { borderTopColor: "var(--warning)", borderTopWidth: 2 } : null) }}>
-      <PluginPreview src={preview} name={plugin.name} tint={tint}>
-        <PluginMark name={plugin.name} icon={plugin.icon} color={plugin.color} size={72} stamp={plugin.contentHash} />
-      </PluginPreview>
-      {band && (
-        <Band band={band}>
-          {band === "approval" && (<>
-            <strong>Needs your approval</strong>
-            {reconsent && manifestChanged && (
-              <Note tone="warn">
-                <strong>This plugin is asking for something different now.</strong> What is installed no
-                longer matches what you last approved — the manifest changed since then. It was turned off
-                automatically and stays off until you review the current declaration below and enable it again.
-              </Note>
-            )}
-            {reconsent && !manifestChanged && (
-              <Note tone="warn">
-                <strong>This plugin's code changed since you approved it.</strong> What it declares below is
-                the same as what you approved — same scope, same drawing, same sandbox — but an update can
-                rewrite what the code actually does without touching the manifest at all, so it was turned off
-                automatically anyway. Review it below and enable it again.
-              </Note>
-            )}
-            {!plugin.hadApproval && (
-              <span style={{ color: "var(--text2)" }}>Not reviewed yet. Read what it declares before enabling it.</span>
-            )}
-          </>)}
-          {band === "stopped" && (<><strong>Stopped</strong><PluginWhyStopped plugin={plugin} /></>)}
-          {band === "update" && listed && (<>
-            <strong>Update available</strong>
-            <span style={{ color: "var(--text2)" }}>
-              The market lists <span className="t-mono">{(listed.source.ref ?? "").slice(0, 7)}</span>; this is{" "}
-              <span className="t-mono">{(pinned ?? plugin.resolvedCommit ?? "").slice(0, 7) || "unpinned"}</span>.
-              A changed declaration asks again before it runs.
-            </span>
-          </>)}
-        </Band>
-      )}
-
-      <div className="flex flex-col gap-3 p-4 flex-1 min-w-0">
-        <div className="flex items-center gap-3.5 min-w-0">
-          <PluginMark name={plugin.name} icon={plugin.icon} color={plugin.color} size={44} stamp={plugin.contentHash} />
-          <div className="min-w-0 flex-1">
-            <div className="flex items-baseline gap-2.5 min-w-0">
-              <span className="text-[14px] font-semibold break-words" style={{ color: "var(--text)" }}>{plugin.name}</span>
-              <span className="t-mono text-[10.5px] px-1.5 rounded-md shrink-0 inline-flex items-center" style={{ height: 18, color: "var(--text2)", border: EDGE }}
-                title={plugin.resolvedCommit ?? "no version: this plugin's manifest does not carry one"}>{versionChip(plugin)}</span>
-            </div>
-            <div className="text-[11.5px] t-dim" title={`${formatSource(plugin.source)} · installed ${fmtAgo(plugin.installedAt)}`}>
-              by {plugin.publisher} · {SOURCE_WORD[plugin.source.kind]} · installed {fmtAgo(plugin.installedAt)}
-            </div>
+    <div data-plugin={plugin.name}>
+      {/* Outside the rows: a dialog drawn inside them would sit in the section's column. */}
+      {dialog}
+      {/* Mark, name, then one fixed column each for the state, the switch and View more: no button moves between rows. */}
+      <div className="agx-plug-row" data-off={plugin.enabled ? undefined : "true"}>
+        <PluginMark name={plugin.name} icon={plugin.icon} color={plugin.color} size={40} stamp={plugin.contentHash} />
+        <div className="min-w-0">
+          <div className="agx-plug-top">
+            <span className="agx-plug-name">{plugin.name}</span>
+            <span className="agx-plug-ver t-mono">{versionChip(plugin)}</span>
+            <span className="agx-plug-by">by {plugin.publisher}</span>
           </div>
-          <StatePill enabled={plugin.enabled} running={running} reconsent={reconsent} needsReview={needsReview} pid={plugin.pid} />
-          <button onClick={() => setEnabled(!plugin.enabled)}
-            disabled={busy || (!plugin.enabled && !masterOn)}
-            role="switch" aria-checked={plugin.enabled} aria-label={`${plugin.name} on or off`}
-            title={!plugin.enabled && needsReview ? "Switching it on approves what it declares below" : !plugin.enabled && !masterOn ? "Plugins are switched off" : undefined}
-            className="disabled:cursor-not-allowed inline-flex items-center shrink-0" style={h}>
-            <Switch on={plugin.enabled} busy={busy} />
-          </button>
+          {plugin.description && <div className="agx-plug-desc">{plugin.description}</div>}
         </div>
-
-        <p className="m-0 text-[12.5px]" style={{ color: "var(--text2)" }} title={plugin.description}>{plugin.description}</p>
-
-        {/* Chips, because a plugin is read by its badges before its prose —
-            the scope is the one fact worth knowing before installing anything. */}
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="chip text-[10px]" style={{
-            color: "var(--text2)",
-            background: "color-mix(in srgb, var(--border) 20%, transparent)",
-            borderColor: "color-mix(in srgb, var(--border) 45%, transparent)",
-          }}>
-            {SCOPE_WORD[plugin.scope]}
-          </span>
-          {(plugin.contributes?.panels ?? []).map((p) => (
-            <DrawChip key={p.id} tint={tint} label={`panel · ${p.title}`} />
-          ))}
-          {hasSettings && <DrawChip tint={tint} label="settings" />}
-          {plugin.contributes?.prNotes && <DrawChip tint={tint} label="notes in PRs" />}
+        <div className="min-w-0">
+          <StatePill enabled={plugin.enabled} running={running} pid={plugin.pid} hadApproval={plugin.hadApproval} fingerprint={plugin.fingerprint} approvedFingerprint={plugin.approvedFingerprint} />
         </div>
-
-        {pinned && (
-          <div className="text-[11.5px] t-dim">
-            Pinned to <span className="t-mono" title={pinned}>{pinned.slice(0, 7)}</span> by the market. Update reads the market
-            again and installs the version it lists now.
-          </div>
-        )}
-
-        {/* Written once, in PluginDeclaration: the same component the approval
-            dialog draws, so the card and the dialog cannot describe one plugin
-            two ways. Folded, with a summary that is enough to decide to open it. */}
-        <details className="agx-perm rounded-lg min-w-0" style={{ background: "var(--surface-inset)", border: EDGE }}>
-          <summary className="flex items-center gap-2 px-3 cursor-pointer select-none list-none" style={{ minHeight: 36 }}>
-            <span aria-hidden className="agx-perm-caret t-dim">▸</span>
-            <span className="text-[12px] font-medium" style={{ color: "var(--text)" }}>Permissions</span>
-            <span className="flex flex-wrap items-center gap-1.5 min-w-0">
-              {permissionChips(plugin).map((c) => (
-                <span key={c} className="text-[10.5px] px-1.5 rounded-md inline-flex items-center whitespace-nowrap" style={{ height: 20, color: "var(--text2)", border: EDGE }}>{c}</span>
-              ))}
-            </span>
-          </summary>
-          <div className="px-3 pb-3 pt-2" style={{ borderTop: LINE }}>
-            <PluginDeclaration plugin={plugin} flat />
-          </div>
-        </details>
-
-        {/* Only for a plugin the server refuses to start for lack of a box, or
-            one running on this plugin's own consent — see unboxedControl. */}
-        <UnboxedConsent plugin={plugin} envAllowsAll={envAllowsUnboxed} onChanged={onChanged} />
-
-        {updateError && <Note tone="err">{updateError}</Note>}
-        {updateNote && !updateError && <Note tone="warn">{updateNote}</Note>}
-
-        {/* Kept by default: what was typed into the settings page belongs to
-            the person, and a reinstall picks it back up. */}
-        {confirmRemove && hasSettings && (
-          <label className="flex items-center gap-2 text-[11.5px] cursor-pointer select-none" style={{ color: "var(--text2)" }}>
-            <input type="checkbox" checked={dropSettings} onChange={(e) => setDropSettings(e.target.checked)} disabled={busy} />
-            <span>Also remove its settings <span className="t-dim">— otherwise they are kept on this machine for a reinstall</span></span>
-          </label>
-        )}
+        <button type="button" onClick={() => setEnabled(!plugin.enabled)}
+          disabled={busy || (!plugin.enabled && !masterOn)}
+          role="switch" aria-checked={plugin.enabled} aria-label={`${plugin.name} on or off`}
+          data-tip={!plugin.enabled && !masterOn ? "Plugins are switched off" : !plugin.enabled && needsReview ? "Switching it on approves what it declares" : undefined}
+          className="disabled:cursor-not-allowed inline-flex items-center shrink-0">
+          <Switch on={plugin.enabled} busy={busy} />
+        </button>
+        <Button className="agx-plug-more" onClick={() => setViewing(true)} aria-label={`View more about ${plugin.name}`}>View more</Button>
       </div>
-
-      <div className="mt-auto flex items-center gap-2 flex-wrap px-4 py-3" style={{ borderTop: LINE, background: "color-mix(in srgb, var(--bg) 30%, transparent)" }}>
+      {/* On the list, not in the modal: why it stopped or asks again, and the fix, must show without View more. */}
+      {band && (
+        <div className="agx-plug-bandrow">
+          <Band band={band} action={
+            band === "approval" ? <Button tone="primary" disabled={busy} onClick={() => (masterOn ? void setEnabled(true) : setViewing(true))}>Review and switch on…</Button>
+            : band === "stopped" ? <Button onClick={() => setViewing(true)}>View more</Button>
+            : <Button tone="primary" pending={updating} disabled={busy} onClick={update}>{updating ? "Updating…" : "Update"}</Button>
+          }>
+            {band === "approval" && (<>
+              <strong>Needs your approval</strong>
+              {reconsent && manifestChanged && (
+                <span>This plugin is asking for something different now: the manifest changed since you approved it. It was turned off and stays off until you review what it declares.</span>
+              )}
+              {reconsent && !manifestChanged && (
+                <span>This plugin's code changed since you approved it. What it declares is the same, but an update can change what the code does, so it was turned off until you review it.</span>
+              )}
+              {!plugin.hadApproval && <span>Not reviewed yet. Read what it declares before you switch it on.</span>}
+            </>)}
+            {band === "stopped" && (<><strong>Stopped</strong><span>Switched on, and nothing runs.</span><PluginWhyStopped plugin={plugin} /></>)}
+            {band === "update" && listed && (<>
+              <strong>Update available</strong>
+              <span>
+                The market lists <span className="t-mono">{(listed.source.ref ?? "").slice(0, 7)}</span>; this is{" "}
+                <span className="t-mono">{(pinned ?? plugin.resolvedCommit ?? "").slice(0, 7) || "unpinned"}</span>.
+                A changed declaration asks again before it runs.
+              </span>
+            </>)}
+          </Band>
+        </div>
+      )}
+      {/* An update started from the band answers on the list; the modal says it again when open. */}
+      {!viewing && (updateError || updateNote) && (
+        <div className="agx-plug-bandrow"><div className="agx-plug-note">{updateError ? <Note tone="err">{updateError}</Note> : <Note tone="warn">{updateNote}</Note>}</div></div>
+      )}
+      {viewing && (
+        <PluginModal title={plugin.name} subtitle={[`by ${plugin.publisher}`, versionChip(plugin), SOURCE_WORD[plugin.source.kind], `installed ${fmtAgo(plugin.installedAt)}`].join(" · ")}
+          onClose={() => setViewing(false)}
+          picture={<PluginPreview src={preview} name={plugin.name} tint={tint}><PluginMark name={plugin.name} icon={plugin.icon} color={plugin.color} size={ICON.lg * 2} stamp={plugin.contentHash} /></PluginPreview>}>
+      <div className="px-3 pt-2 pb-1 text-[12px]" style={{ color: "var(--text2)" }}>{plugin.description}</div>
+      <div className="px-3 pb-1 text-[11px] t-mono break-all" style={{ color: "var(--text2)" }}>{formatSource(plugin.source)}</div>
+      <div className="px-3 pb-2.5 flex items-center gap-1.5 flex-wrap">
+        <span className="chip text-[10px]" style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--border) 20%, transparent)", borderColor: "color-mix(in srgb, var(--border) 45%, transparent)" }}>{SCOPE_WORD[plugin.scope]}</span>
+        {(plugin.contributes?.panels ?? []).map((p) => <DrawChip key={p.id} tint={tint} label={`panel · ${p.title}`} />)}
+        {hasSettings && <DrawChip tint={tint} label="settings" />}
+        {plugin.contributes?.prNotes && <DrawChip tint={tint} label="notes in PRs" />}
+      </div>
+      {pinned && (
+        <div className="px-3 pb-2 text-[12px]" style={{ color: "var(--text2)" }}>
+          Pinned to <span className="t-mono" title={pinned}>{pinned.slice(0, 7)}</span> by the market. Update reads the market again and installs the version it lists now.
+        </div>
+      )}
+      <details className="agx-perm px-3 pb-2.5">
+        <summary className="flex items-center gap-2 cursor-pointer select-none list-none" style={{ minHeight: 28 }}>
+          <span aria-hidden className="agx-perm-caret t-dim">▸</span>
+          <span className="text-[12px] font-medium" style={{ color: "var(--text)" }}>Permissions</span>
+          <span className="flex flex-wrap items-center gap-1.5 min-w-0">
+            {permissionChips(plugin).map((c) => (
+              <span key={c} className="text-[11px] px-1.5 rounded-md inline-flex items-center whitespace-nowrap" style={{ height: 20, color: "var(--text2)", border: EDGE }}>{c}</span>
+            ))}
+          </span>
+        </summary>
+        <div className="pt-2"><PluginDeclaration plugin={plugin} flat /></div>
+      </details>
+      {/* Only for a plugin the server refuses to start for lack of a box, or one running on this plugin's own consent. */}
+      <div className="px-3"><UnboxedConsent plugin={plugin} envAllowsAll={envAllowsUnboxed} onChanged={onChanged} /></div>
+      {updateError && <div className="px-3 pb-2"><Note tone="err">{updateError}</Note></div>}
+      {updateNote && !updateError && <div className="px-3 pb-2"><Note tone="warn">{updateNote}</Note></div>}
+      {confirmRemove && hasSettings && (
+        <label className="px-3 pb-2 flex items-center gap-2 text-[12px] cursor-pointer select-none" style={{ color: "var(--text2)" }}>
+          <FormInput type="checkbox" checked={dropSettings} onChange={(e) => setDropSettings(e.target.checked)} disabled={busy} />
+          <span>Also remove its settings. Otherwise they are kept on this machine for a reinstall.</span>
+        </label>
+      )}
+      <div className="px-3 pb-3 flex items-center gap-2 flex-wrap">
         {confirmRemove ? (
           <>
-            <Button tone="danger" style={h} pending={busy} onClick={remove}>{busy ? "Removing…" : "Remove"}</Button>
-            <Button style={h} disabled={busy} onClick={() => { setConfirmRemove(false); setDropSettings(false); }}>Keep it</Button>
+            <Button tone="danger" pending={busy} onClick={remove}>{busy ? "Removing…" : "Remove"}</Button>
+            <Button disabled={busy} onClick={() => { setConfirmRemove(false); setDropSettings(false); }}>Keep it</Button>
           </>
         ) : (
           <>
-            {/* One filled button, chosen by what the card is waiting for; the
-                rest are quiet. */}
-            {lead === "review" && <Button tone="primary" style={h} disabled={busy || !masterOn} onClick={() => void setEnabled(true)}>Review and switch on…</Button>}
-            {lead === "update" && <Button tone="primary" style={h} pending={updating} disabled={busy} onClick={update}>{updating ? "Updating…" : "Update"}</Button>}
-            {lead === "open" && <Button tone="primary" style={h} onClick={openIt}>Open</Button>}
-            {lead === "settings" && <Button tone="primary" style={h} onClick={onSettings}>Settings</Button>}
-            {lead !== "open" && hasPanel && plugin.enabled && running && <Button style={h} onClick={openIt}>Open</Button>}
-            {lead !== "settings" && hasSettings && <Button style={h} onClick={onSettings}>Settings</Button>}
-            {/* A re-fetch that changes the declaration lands on the same
-                re-consent path as a fresh install — see updatePlugin on the
-                server — so this never claims to have "updated" anything
-                itself, only to have gone and looked. */}
+            {lead === "review" && <Button tone="primary" disabled={busy || !masterOn} onClick={() => void setEnabled(true)}>Review and switch on…</Button>}
+            {lead === "review" && !masterOn && <span role="note" className="text-[11.5px] t-dim">Plugins are switched off — turn the plugin system on first</span>}
+            {lead === "update" && <Button tone="primary" pending={updating} disabled={busy} onClick={update}>{updating ? "Updating…" : "Update"}</Button>}
+            {lead === "open" && <Button tone="primary" onClick={openIt}>Open</Button>}
+            {lead === "settings" && <Button tone="primary" onClick={onSettings}>Settings</Button>}
+            {lead !== "open" && open && <Button onClick={openIt}>Open</Button>}
+            {lead !== "settings" && hasSettings && <Button onClick={onSettings}>Settings</Button>}
+            {/* A re-fetch that changes the declaration lands on the same re-consent path as a fresh install. */}
             {updatable && lead !== "update" && (
-              <Button style={h} pending={updating} disabled={busy} onClick={update}
-                title="Re-fetch this plugin at its recorded source. A changed declaration will need review again before it can run.">
+              <Button pending={updating} disabled={busy} onClick={update} title="Re-fetch this plugin at its recorded source. A changed declaration will need review again before it can run.">
                 {updating ? "Checking…" : "Check for update"}
               </Button>
             )}
-            <Button tone="danger" style={h} className="ml-auto" disabled={busy} onClick={() => setConfirmRemove(true)}>Remove</Button>
+            <Button tone="danger" className="ml-auto" disabled={busy} onClick={() => setConfirmRemove(true)}>Remove</Button>
           </>
         )}
       </div>
-    </article>
-    </>
+      </PluginModal>
+      )}
+    </div>
+  );
+}
+
+/** The Installed card's tool row: search the list by name, publisher or description, and Refresh. Listed in gen-settings-index ROW_TAGS so the settings index keeps "Find a plugin"; not the kit's Row, so not named one. */
+function SearchRow({ label, help, value, onChange, onRefresh }: { /** Not a setting: the settings index reads this flag. */ agentExempt?: boolean; label: string; help: string; value: string; onChange: (v: string) => void; onRefresh: () => void }) {
+  return (
+    <div className="agx-plug-tools" data-row={rowId(label)}>
+      <label className="agx-msearch">
+        <SearchIcon size={ICON.sm} />
+        <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={help} aria-label={label} spellCheck={false} className={INPUT} style={INPUT_STYLE} />
+      </label>
+      <RefreshButton onRefresh={onRefresh} title="Refresh the installed plugins" />
+    </div>
   );
 }
 
 const SOURCE_WORD: Record<InstallSource["kind"], string> = { "local-path": "local folder", git: "git", marketplace: "market" };
 
-/** The strip at the top of a card for what matters now. Its own colour per
- *  kind, never the ordinary card colour, so an ask cannot pass for a plain
- *  disabled plugin. */
-function Band({ band, children }: { band: Exclude<CardBand, null>; children: React.ReactNode }) {
-  const hue = band === "stopped" ? "var(--error)" : band === "update" ? "var(--info)" : "var(--warning)";
+/** The box under a row for what matters now, with its one fix inside it. Its
+ *  own colour per kind, never the ordinary card colour, so an ask cannot pass
+ *  for a plain disabled plugin. */
+function Band({ band, action, children }: { band: Exclude<CardBand, null>; action: React.ReactNode; children: React.ReactNode }) {
+  const Icon = band === "stopped" ? BlockedIcon : band === "update" ? UpIcon : WarningIcon;
   return (
-    <div className="flex items-start gap-x-3 gap-y-1 flex-wrap px-4 py-2 text-[12px] min-w-0" data-band={band}
-      style={{ background: `color-mix(in srgb, ${hue} 12%, transparent)`, borderBottom: LINE, color: "var(--text)" }}>
-      {children}
+    <div className="agx-plug-band" data-band={band}>
+      <span className="agx-plug-band-ic" aria-hidden><Icon size={ICON.xs} /></span>
+      <div className="agx-plug-band-tx">{children}</div>
+      <div className="agx-plug-band-act">{action}</div>
     </div>
+  );
+}
+
+/** The master switch, labelled where it sits: in the head of the Plugin system card. Named Toggle so the settings index reads its label and setting (gen-settings-index ROW_TAGS). */
+function Toggle({ settingId, label, on, busy, onToggle }: { settingId: string; label: string; on: boolean; busy: boolean; onToggle: () => void }) {
+  return (
+    <span className="agx-plug-swl" data-row={rowId(label)} data-setting-id={settingId}>
+      <span aria-hidden>{label}</span>
+      <button type="button" role="switch" aria-checked={on} aria-label={label} disabled={busy} onClick={onToggle}><Switch on={on} busy={busy} /></button>
+    </span>
+  );
+}
+
+/** The Plugin system card: the worst thing first with the master switch beside
+ *  it, what the switch does, then the counts and any machine-wide note.
+ *  Running is every live process; the other four are the bins they name. */
+function SystemStatus({ tally, known, help, control, children }: { tally: PluginTally; known: boolean; help: string; control: React.ReactNode; children?: React.ReactNode }) {
+  const head = systemHeadline(tally);
+  const cells: [number, string, "ok" | "off" | "warn" | "err" | "info"][] = [
+    [tally.running, "Running", "ok"], [tally.off, "Off", "off"], [tally.approval, "Needs approval", "warn"],
+    [tally.stopped, "Stopped", "err"], [tally.update, "Update", "info"],
+  ];
+  return (
+    <>
+    <div className="agx-plug-sys" aria-busy={!known || undefined}>
+      <div className="agx-plug-sys-head"><span className="agx-plug-dot" data-tone={head.tone} aria-hidden />{known ? head.text : "Reading plugins…"}</div>
+      {control}
+      <div className="agx-plug-sys-sub">{help}</div>
+      <div className="agx-plug-tally" role="list" aria-label="Plugins by state">
+        {cells.map(([n, label, tone]) => (
+          <div key={label} role="listitem" data-zero={n ? undefined : "true"}>
+            <b><span className="agx-plug-dot" data-tone={n ? tone : "off"} aria-hidden /><span className="tabular-nums">{known ? n : "–"}</span></b>
+            <small>{label}</small>
+          </div>
+        ))}
+      </div>
+    </div>
+    {children}
+    </>
   );
 }
 
@@ -622,17 +631,11 @@ function Note({ tone, children }: { tone: "warn" | "err"; children: React.ReactN
 
 /** Running, off, or waiting on you — a word, not only a dot, because the dot
  *  alone had to be learned and it is the first thing asked of a row. */
-function StatePill({ enabled, running, reconsent, needsReview, pid }: { enabled: boolean; running: boolean; reconsent: boolean; needsReview: boolean; pid: number | null }) {
-  const [label, tone]: [string, StatusTone] = reconsent ? ["Asks again", "warn"]
-    : needsReview && !enabled ? ["Not approved", "warn"]
-    : enabled && running ? ["Running", "ok"]
-    // Switched on and nothing running: the failure a plugin screen exists to
-    // show, and the one an `enabled` flag alone cannot.
-    : enabled ? ["Enabled, not running", "warn"]
-    : ["Off", "off"];
+function StatePill({ enabled, running, pid, hadApproval, fingerprint, approvedFingerprint }: { enabled: boolean; running: boolean; pid: number | null; hadApproval: boolean; fingerprint: string; approvedFingerprint: string | null }) {
+  const [label, tone] = pluginState({ enabled, running, hadApproval, fingerprint, approvedFingerprint });
   return (
-    <span title={running && pid ? `pid ${pid}` : undefined}>
-      <StatusBadge tone={tone}>{label}</StatusBadge>
+    <span data-tip={running && pid ? `pid ${pid}` : undefined} tabIndex={running && pid ? 0 : undefined}>
+      <StatusBadge tone={tone satisfies StatusTone} icon={tone === "warn" ? <WarningIcon size={ICON.xs} /> : tone === "err" ? <BlockedIcon size={ICON.xs} /> : undefined}>{label}</StatusBadge>
     </span>
   );
 }

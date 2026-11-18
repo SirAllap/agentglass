@@ -137,7 +137,7 @@ export function ToolRow({ row, open, onToggle, onCopy }: {
       <span className="setup-tool-what">
         <span className="setup-tool-name">
           {d.title}
-          {row.version && <span className="setup-badge setup-badge-ok" title={row.version}>{row.version}</span>}
+          {row.version && <span className="setup-badge setup-badge-ok" data-tip={row.version}>{row.version}</span>}
         </span>
         <span className="setup-tool-help">{row.help}</span>
       </span>
@@ -152,7 +152,7 @@ export function ToolRow({ row, open, onToggle, onCopy }: {
       {open && row.action?.command && (
         <div className="setup-tool-cmd">
           <div className="setup-cmd">
-            <code title={row.action.command}>{row.action.command}</code>
+            <code data-tip={row.action.command}>{row.action.command}</code>
             <button type="button" className="setup-btn setup-btn-xs" onClick={() => onCopy(row.action!.command!)}>
               <Copy /> Copy
             </button>
@@ -199,7 +199,7 @@ function FixAllSheet({ rows, onClose, onCopy }: {
                 </span>
                 {line ? (
                   <span className="setup-sheet-cmd">
-                    <code title={line}>{line}</code>
+                    <code data-tip={line}>{line}</code>
                     <button type="button" className="setup-btn setup-btn-xs" onClick={() => onCopy(line)}>
                       <Copy /> Copy
                     </button>

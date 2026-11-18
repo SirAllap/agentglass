@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { tipAttr } from "../../lib/tip.ts";
 import { avatarSrc } from "../../lib/avatarSrc.ts";
 import { chipInk } from "../../lib/contrast.ts";
 
@@ -7,9 +8,9 @@ export function Author({ who, initials, avatar, size = 18 }: { who: string; init
   const [broken, setBroken] = useState(false);
   const box = { width: size, height: size, borderRadius: 999 } as const;
   if (avatar && !broken) {
-    return <img src={avatarSrc(avatar)} alt="" title={who} loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)}
+    return <img src={avatarSrc(avatar)} alt="" data-tip={tipAttr({ name: who })} loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)}
       className="shrink-0 object-cover" style={box} />;
   }
-  return <span title={who} className="shrink-0 inline-flex items-center justify-center font-medium"
+  return <span data-tip={tipAttr({ name: who })} className="shrink-0 inline-flex items-center justify-center font-medium"
     style={{ ...box, fontSize: Math.max(9, Math.round(size * 0.36)), background: "var(--bg4)", color: chipInk(null) }}>{initials || "?"}</span>;
 }

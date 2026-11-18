@@ -58,9 +58,35 @@ export const commitCommand = (cardId: string, title: string): string =>
 
 /** The worktree this app would cut for that branch, beside the checkout it is
  *  in — the same shape the rest of the app uses for one. */
-export const worktreeCommand = (repoRoot: string, cardId: string, title: string): string => {
-  const branch = branchName(cardId, title);
+export const worktreeCommand = (repoRoot: string, cardId: string, title: string, branch = branchName(cardId, title)): string => {
   const parent = repoRoot.replace(/\/+$/, "");
   const name = `${parent.split("/").pop() || "repo"}-${cardId.trim() || "work"}`;
   return `git -C "${parent}" worktree add -b "${branch}" "../${name}"`;
 };
+
+/**
+ * Jira's form, as its own Development > Create branch gives it:
+ * `ORBIT-1042-alarm-caller-number-not-found`. The key first, as typed, so the
+ * GitHub integration links the pull request; the summary lowercased and
+ * kebab-cased, cut near 60 characters on a word boundary. Not ClickUp's rule:
+ * that one keeps the case of the words.
+ */
+export function jiraBranchName(key: string, summary: string): string {
+  const id = key.trim();
+  const words = titleSlug(summary).toLowerCase().split("-").filter(Boolean);
+  let out = id;
+  for (const w of words) {
+    const next = out ? `${out}-${w}` : w;
+    if (next.length > 60 && out !== id) break;
+    out = next;
+  }
+  return out;
+}
+
+/** `ORBIT-1042 Alarm caller number not found`: the key, a space, the summary as it reads. */
+export const jiraCommitCommand = (key: string, summary: string): string =>
+  `git commit -m "${key.trim()} ${summary.replace(/"/g, "'").trim()}"`;
+
+/** Pasted inside the checkout: the worktree goes beside it, named after the repo and the key. */
+export const jiraWorktreeCommand = (key: string, summary: string): string =>
+  `git worktree add -b "${jiraBranchName(key, summary)}" "../$(basename "$PWD")-${key.trim()}"`;

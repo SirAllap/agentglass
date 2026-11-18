@@ -21,6 +21,7 @@ import { SbGlyphIcon, type SbGlyph } from "../lib/starboardGlyphs.tsx";
 import { fmtUsd, fmtMs, modelLabelOf, modelColor } from "../lib/format.ts";
 import { Button } from "./workspace/Chrome.tsx";
 import { riskChip, riskTitle } from "../lib/riskView.ts";
+import { CrewDetail } from "./CrewDetail.tsx";
 
 /** The board's rows without the Lantern's own session, which is never counted. */
 export function useBoard(): LanternRow[] {
@@ -74,6 +75,7 @@ export function Crew({ cards, now, scope, onPickSession, onPickWorker }: {
   onPickSession: (session: string) => void; onPickWorker: (worker: string) => void;
 }) {
   const rows = useBoard();
+  const [detail, setDetail] = useState<{ name: string; x: number; y: number; remind: boolean } | null>(null);
   const list = useMemo(() => rows.map((r) => ({ r, ...crewState(r, now) }))
     .sort((a, b) => compareCrew({ ...a, cost: a.r.facts?.cost ?? 0 }, { ...b, cost: b.r.facts?.cost ?? 0 })), [rows, now]);
   const projects = new Set(rows.map((r) => r.project ?? r.worktree ?? "")).size;
@@ -94,7 +96,8 @@ export function Crew({ cards, now, scope, onPickSession, onPickWorker }: {
               <div key={r.name + (r.session ?? "")} className="sb-card" data-st={state} data-sel={picked ? "1" : undefined}
                 data-tip={sessionTip(r, state, age)} tabIndex={0} role={pick ? "button" : undefined} aria-pressed={pick ? picked : undefined}
                 style={pick ? { cursor: "pointer" } : undefined}
-                onClick={pick}
+                onClick={(ev) => { pick?.(); setDetail({ name: r.name, x: ev.clientX, y: ev.clientY, remind: false }); }}
+                onContextMenu={(ev) => { ev.preventDefault(); setDetail({ name: r.name, x: ev.clientX, y: ev.clientY, remind: true }); }}
                 onKeyDown={pick ? (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); pick(); } } : undefined}>
                 <div className="sb-r1">
                   <i className="sb-dot" data-s={DOT[state]} data-ring={state === "quiet" ? "1" : undefined} />
@@ -117,6 +120,8 @@ export function Crew({ cards, now, scope, onPickSession, onPickWorker }: {
           })}
         </div>
       )}
+      {(() => { const d = detail && list.find((x) => x.r.name === detail.name);
+        return d && detail ? <CrewDetail row={d.r} state={d.state} since={d.since} now={now} at={detail} remind={detail.remind} onClose={() => setDetail(null)} /> : null; })()}
     </Panel>
   );
 }

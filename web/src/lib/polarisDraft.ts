@@ -7,7 +7,7 @@ import {
   type DoorId, type DoorValue, type PolarisPresetName, type PresetId, type SettingsAnswer, type StoredPolaris,
 } from "../../../shared/polaris.ts";
 import {
-  doorEdits, effectiveAfter, layerToSave, liveSentence, ownedDoors, patchChanges, withoutDoor, type Effective, type Scope,
+  doorEdits, effectiveAfter, enabledOf, layerToSave, liveSentence, ownedDoors, patchChanges, withoutDoor, type Effective, type Scope,
 } from "./polarisView.ts";
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
@@ -39,7 +39,7 @@ const reseated = (base: SettingsAnswer, scope: Scope, draft: Draft, resets: Read
 
 export const draftState = (a: SettingsAnswer): DraftState => ({
   base: a,
-  draft: { doors: structuredClone(a.doors), preset: a.preset, picked: null, enabled: a.enabled },
+  draft: { doors: structuredClone(a.doors), preset: a.preset, picked: null, enabled: enabledOf(a) },
   resets: new Set(),
 });
 

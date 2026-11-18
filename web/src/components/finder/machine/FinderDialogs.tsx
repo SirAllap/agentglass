@@ -74,7 +74,7 @@ export function PropsDialog({ path, home, pinned, onChmod, onOpen, onRename, onC
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => { let live = true; void api.fsProps(path).then((r) => { if (!live) return; if (r.ok && r.props) setP(r.props); else setErr(r.error ?? "Could not read it"); }); return () => { live = false; }; }, [path]);
   const flip = async (who: Who, bit: 0 | 1 | 2) => { if (!p || !p.mine) return; const mode = toggleMode(p.mode, who, bit); if (await onChmod(mode)) setP({ ...p, mode }); };
-  const row = (k: string, v: string) => <div key={k} className="flex gap-3 py-1.5" style={{ borderBottom: LINE }}><span className="w-24 shrink-0 text-[10.5px] uppercase" style={{ color: "var(--text3)" }}>{k}</span><span className="min-w-0 truncate" title={v}>{v}</span></div>;
+  const row = (k: string, v: string) => <div key={k} className="flex gap-3 py-1.5" style={{ borderBottom: LINE }}><span className="w-24 shrink-0 text-[10.5px] uppercase" style={{ color: "var(--text3)" }}>{k}</span><span className="min-w-0 truncate" data-tip={v}>{v}</span></div>;
   return (
     <Sheet label="Properties" onClose={onClose}>
       {err && <p role="alert" className="m-0" style={{ color: "var(--error-ink)" }}>{err}</p>}
@@ -172,7 +172,7 @@ export function TrashPanel({ home, onRestored, onClose }: { home: string; onRest
             <div key={r.id} role="listitem" className="flex items-center gap-2 px-3 py-1.5" style={{ borderBottom: LINE }}>
               <div className="flex-1 min-w-0">
                 <div className="truncate">{r.name}</div>
-                <div className="flex gap-1.5 text-[10.5px]" style={{ color: "var(--text3)" }} title={r.from}><span className="truncate min-w-0">{shortPath(r.from, home, 44)}</span><span className="shrink-0">· {r.deleted.replace("T", " ")}</span></div>
+                <div className="flex gap-1.5 text-[10.5px]" style={{ color: "var(--text3)" }} data-tip={r.from}><span className="truncate min-w-0">{shortPath(r.from, home, 44)}</span><span className="shrink-0">· {r.deleted.replace("T", " ")}</span></div>
               </div>
               <button className="agx-btn rounded-md px-2" style={{ minHeight: HIT - 6, border: EDGE }} onClick={() => void restore(r)}>Restore</button>
               <button className="agx-btn rounded-md px-2" aria-label={`Delete ${r.name} for good`} style={{ minHeight: HIT - 6, border: EDGE, color: "var(--error-ink)" }} onClick={() => ask([r.id], [r.name])}>Delete</button>

@@ -8,6 +8,7 @@ import { HOLD_MAX_MS, retryDelay, settleHold, startHold, type Hold } from "./usa
 import { noteReadings } from "./usageBarPref.ts";
 import { ageLabel } from "./usageAge.ts";
 import { keyReadDue } from "../../../shared/opencodePanel.ts";
+import { intervalWhileVisible } from "./visibleInterval.ts";
 
 export { ageLabel };
 
@@ -24,7 +25,7 @@ export { ageLabel };
 let snapshot: ProviderUsage[] | null = null;
 let firstFetchDone = false;
 const listeners = new Set<() => void>();
-let poller: ReturnType<typeof setInterval> | null = null;
+let poller: (() => void) | null = null;
 
 /** Five minutes: these are 5-hour and weekly windows, and the fastest of them
  *  moves by a fraction of a percent a minute. Polling harder than this once
@@ -167,13 +168,13 @@ export function subscribeProviderUsage(fn: () => void): () => void {
       .catch(() => { /* offline — keep what we have */ })
       .finally(() => { firstFetchDone = true; for (const l of listeners) l(); });
     load();
-    poller = setInterval(load, EVERY_MS);
+    poller = intervalWhileVisible(load, EVERY_MS);
   } else if (firstFetchDone) {
     queueMicrotask(fn);
   }
   return () => {
     listeners.delete(fn);
-    if (!listeners.size && poller) { clearInterval(poller); poller = null; }
+    if (!listeners.size && poller) { poller(); poller = null; }
   };
 }
 
@@ -315,5 +316,5 @@ export function __resetUsageStore(): void {
   retryAttempt = 0;
   if (retryTimer !== null) clearTimeout(retryTimer);
   retryTimer = null;
-  if (poller) { clearInterval(poller); poller = null; }
+  if (poller) { poller(); poller = null; }
 }

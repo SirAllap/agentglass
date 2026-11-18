@@ -9,6 +9,7 @@
  * `flush` drops the side padding where the note already sits inside a padded box.
  */
 import { CloseButton } from "../CloseButton.tsx";
+import { tipAttr } from "../../lib/tip.ts";
 import { ICON } from "../../lib/iconSize.ts";
 import { EDGE } from "../workspace/Chrome.tsx";
 
@@ -19,10 +20,10 @@ export function EditNote({ note, busy, onUndo, onClose, lines = 1, flush }: {
   return (
     <div className={`${flush ? "" : "px-4 "}pb-2 flex ${lines === 1 ? "items-center" : "items-start"} gap-2 text-[10.5px] min-w-0`} role={note.warn ? "alert" : "status"}
       style={{ color: note.warn ? "var(--warning-ink)" : "var(--success-ink)" }}>
-      <span className={`min-w-0 ${lines === 1 ? "truncate" : "line-clamp-2"}`} title={note.text}>{note.text}</span>
+      <span className={`min-w-0 ${lines === 1 ? "truncate" : "line-clamp-2"}`} data-tip={tipAttr(note.text)}>{note.text}</span>
       {note.undo != null && (
         <button className="agx-btn shrink-0 rounded-md px-1.5 py-0.5" disabled={busy} onClick={onUndo}
-          style={{ color: "var(--text2)", border: EDGE }} title="Put the old value back">Undo</button>
+          style={{ color: "var(--text2)", border: EDGE }} data-tip={tipAttr({ name: "Undo", text: "Put the old value back." })}>Undo</button>
       )}
       <CloseButton size={ICON.xs} onClick={onClose} title="Dismiss" />
     </div>

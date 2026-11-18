@@ -34,7 +34,7 @@ export function CommentEditor({ block, frozen, onChange }: { block: Comment; fro
   );
 }
 
-export function FieldEditor({ block, fields, frozen, onChange }: { block: Field; fields: FieldChoice[] | null; frozen?: boolean; onChange: (b: Field) => void }) {
+export function FieldEditor({ block, fields, frozen, onChange, strict }: { block: Field; fields: FieldChoice[] | null; frozen?: boolean; onChange: (b: Field) => void; /** A name this does not know stops the step, rather than being skipped where a card lacks it. */ strict?: boolean }) {
   const known = fields?.find((f) => f.name.trim().toLowerCase() === block.field.trim().toLowerCase());
   const kind = known ? FIELD_KINDS[known.type] : undefined;
   const [value, setValue] = useState(block.value);
@@ -58,7 +58,7 @@ export function FieldEditor({ block, fields, frozen, onChange }: { block: Field;
           onChange={(e) => setValue(e.target.value)} onBlur={() => commit(value)} onKeyDown={(e) => { if (e.key === "Enter") commit(value); }}
           className={INPUT} style={{ ...INPUT_STYLE, width: 200 }} />
       )}
-      {fields && !known && block.field && hint("Not a field of the lists you work in: it is kept, and skipped where a card's list does not have it.")}
+      {fields && !known && block.field && hint(strict ? "Not one of the site's custom fields: it is kept, and the step is refused where a card does not have it." : "Not a field of the lists you work in: it is kept, and skipped where a card's list does not have it.")}
     </div>
   );
 }

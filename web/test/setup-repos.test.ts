@@ -10,7 +10,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
 import type { SetupRepoRow, SetupRepos } from "../../shared/types.ts";
-import { addedRoots, branchLabel, repoRowsOf, reposView, repoTally, skipAction, tickAll } from "../src/lib/setupRepos.ts";
+import { addedRoots, branchLabel, footerMove, repoRowsOf, reposBlocked, reposView, repoTally, skipAction, tickAll } from "../src/lib/setupRepos.ts";
 import { RepoList, ReposStep } from "../src/components/setup/ReposStep.tsx";
 
 const row = (name: string, branch = "main"): SetupRepoRow => ({ name, root: `/home/acme/code/${name}`, branch });
@@ -80,7 +80,7 @@ describe("the rendered list", () => {
 
   test("one checkbox per repository, in order, with its name", () => {
     expect([...html.matchAll(/type="checkbox"/g)]).toHaveLength(3);
-    expect([...html.matchAll(/setup-reponame" title="([^"]+)"/g)].map((m) => m[1])).toEqual(["orbit", "harbour", "ledger-api"]);
+    expect([...html.matchAll(/setup-reponame" data-tip="([^"]+)"/g)].map((m) => m[1])).toEqual(["orbit", "harbour", "ledger-api"]);
   });
 
   test("only the ticked row is drawn as ticked", () => {
@@ -120,11 +120,38 @@ describe("the step writes nothing until Continue", () => {
 
   test("reading a folder is not a write, and skipping the step is not either", () => {
     expect(src).not.toContain("settingsDoorSet");
-    expect(frame).toContain('skipAction(step, SETUP_STEPS.length - 1) === "advance"');
+    expect(frame).toContain('footerMove({ via, step, last, blocked, going: going.current })');
   });
 
   test("a line the footer names reads the step's own tally", () => {
     expect(frame).toContain("repositories");
     expect(frame).toContain("<ReposStep onFrame={setRepos}");
+  });
+});
+
+describe("footer moves (setup walk Q106)", () => {
+  const o = { step: 4, last: 5, blocked: false, going: false };
+  test("Skip on the first-terminal step moves on without running its write", () => {
+    expect(footerMove({ ...o, via: "skip" })).toBe("advance");
+    expect(footerMove({ ...o, via: "primary" })).toBe("commit");
+  });
+  test("Ctrl+Enter (the primary) obeys blocked; Skip does not need to", () => {
+    expect(footerMove({ ...o, via: "primary", blocked: true })).toBe("none");
+    expect(footerMove({ ...o, via: "skip", blocked: true })).toBe("advance");
+  });
+  test("a commit in the air swallows every press", () => {
+    expect(footerMove({ ...o, via: "primary", going: true })).toBe("none");
+    expect(footerMove({ ...o, via: "skip", going: true })).toBe("none");
+  });
+  test("first and last step skip finishes", () => {
+    expect(footerMove({ ...o, via: "skip", step: 0 })).toBe("finish");
+    expect(footerMove({ ...o, via: "skip", step: 5 })).toBe("finish");
+  });
+  test("Repositories Continue is live with a project open and nothing to add", () => {
+    expect(reposBlocked("notrepo", 0, 1)).toBe(false);
+    expect(reposBlocked("rows", 0, 1)).toBe(false);
+    expect(reposBlocked("rows", 0, 0)).toBe(true);
+    expect(reposBlocked("empty", 0, 0)).toBe(true);
+    expect(reposBlocked("rows", 2, 0)).toBe(false);
   });
 });

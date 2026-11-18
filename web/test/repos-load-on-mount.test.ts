@@ -38,9 +38,13 @@ describe("when the checkout list is read", () => {
        the console's typing guard mean nothing for a view nobody can see. (The
        outside-click listeners of the Commands menu and the pins popover were
        the other two; they moved with those menus to terminal/StripButtons.tsx.)
+       The third is the off-screen write hold: it is about the shells of a view
+       somebody is looking at, and the inactive view has its own hold. The
+       fourth is focus following the focused pane: focusing a terminal nobody
+       can see steals the keys, so it waits for the view to be open.
        This counts them so that "delete the gate" cannot be applied
        wholesale. */
-    expect(src.match(/if \(!open\) return;/g)?.length).toBe(2);
+    expect(src.match(/if \(!open\) return;/g)?.length).toBe(4);
   });
 
   it("drops a remembered checkout that is no longer in the list", () => {

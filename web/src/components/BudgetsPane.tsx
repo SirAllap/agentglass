@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { SettingRow } from "./SettingRow.tsx";
-import { ColumnsIcon } from "./settingsNavIcons.tsx";
-import { ICON } from "../lib/iconSize.ts";
-import { EmptyState, SettingsCard } from "./SettingsKit.tsx";
+import { SettingRow as ShellRow } from "./settings/shell/SettingRow.tsx";
+import { BoardSkeleton } from "./tasks/BoardState.tsx";
+import { EmptyState } from "./SettingsKit.tsx";
 import { Select } from "./Select.tsx";
 import { api } from "../lib/api.ts";
 import { fmtUsd } from "../lib/format.ts";
 import type { GitRepoRef } from "../../../shared/types.ts";
 import type { Budget, BudgetPeriod, BudgetStatus } from "../../../shared/types.ts";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
-import { Button, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
+import { Button, INPUT, INPUT_STYLE, LINE } from "./workspace/Chrome.tsx";
+import { usePageLoading } from "./settings/shell/pageLoad.tsx";
 
 /**
  * A number you chose, instead of one this app picked.
@@ -38,6 +38,7 @@ export function BudgetsPane({ open }: { open: boolean }) {
       .catch(() => setRows([]));
   }, []);
 
+  usePageLoading("budgets", open && rows === null);
   useEffect(() => {
     if (!open) return;
     load();
@@ -64,12 +65,12 @@ export function BudgetsPane({ open }: { open: boolean }) {
     void save((rows ?? []).map((b, n) => (n === i ? { ...b, ...over } : b)));
 
   const card = (children: ReactNode, foot?: ReactNode) => (
-    <SettingsCard title="Spending" icon={<ColumnsIcon size={ICON.sm} />} desc="A ceiling you set, so the insights stop firing on constants.">
+    <>
       {children}
-      {foot && <div className="agx-gb-foot">{foot}</div>}
-    </SettingsCard>
+      {foot}
+    </>
   );
-  if (!rows) return card(<EmptyState>Reading budgets…</EmptyState>);
+  if (!rows) return card(<BoardSkeleton label="Reading budgets…" widths={[70, 50]} dots={false} />);
 
   const statusFor = (b: Budget) =>
     status.find((s) => s.budget.root === b.root && s.budget.model === b.model && s.budget.period === b.period);
@@ -135,18 +136,12 @@ export function BudgetsPane({ open }: { open: boolean }) {
       </div>
     )}
 
-    <SettingRow
-      label="How a budget is counted"
-      hint="What goes into the number."
-      detail={{ summary: "Details", body: <>
-        Counted from the daily rollup as well as live events, so a monthly budget really means a month —
-        raw events are only kept for <span className="t-mono">AGENTGLASS_RETENTION_DAYS</span> (8 by
-        default). You are warned at 80% rather than only when you cross it.
-      </> }} />
+    <p className="px-3 py-2.5 text-[12px]" style={{ color: "var(--text2)", borderTop: LINE }}>
+      Counted from the daily rollup as well as live events, so a monthly budget really means a month — raw events are only kept for <span className="t-mono">AGENTGLASS_RETENTION_DAYS</span> (8 by default). You are warned at 80% rather than only when you cross it.
+    </p>
     {err && <div role="alert" className="agx-settings-x pt-2 pb-3 text-[11px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
   </>,
-  <Button tone="primary" disabled={busy}
-    onClick={() => setRows([...(rows ?? []), { root: "", model: "", limit: 0, period: "month" }])}>
-    Add a budget
-  </Button>);
+  <ShellRow kind="control" agentExempt label="Add a budget" help="Sets a spending limit for a repository or model."
+    control={<Button tone="primary" disabled={busy}
+      onClick={() => setRows([...(rows ?? []), { root: "", model: "", limit: 0, period: "month" }])}>Add a budget</Button>} />);
 }

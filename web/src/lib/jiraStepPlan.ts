@@ -1,7 +1,8 @@
 /*
  * What a Jira step will do, as the rows its confirmation draws. One row per
  * block, in the order the server runs them (the move, then who is on the card,
- * then the comment, then the link), whatever order the blocks were saved in.
+ * then the comment, then the field, then the link), whatever order the blocks
+ * were saved in.
  *
  * Everything here is read from facts the panel already holds: the card's status,
  * its assignee, whether the pull request is already among its links. There is no
@@ -15,8 +16,10 @@
  * dialog settles on afterwards, never this one.
  */
 import { fillTemplate, planOf, type Placeholder } from "../../../shared/stepBlocks.ts";
-import type { JiraBlockOutcome, JiraHandoffRule, JiraStepChoice, JiraStepPr, StepBlock } from "../../../shared/providers.ts";
+import type { JiraBlockOutcome, JiraHandoffRule, JiraPair, JiraStepChoice, JiraStepPr, StepBlock } from "../../../shared/providers.ts";
 import { NO_ASSIGN } from "./stepAssign.ts";
+import { whatMoved } from "./conflictSentence.ts";
+import { reviewerPairs } from "./jiraPairs.ts";
 
 export interface PlanPerson {
   /** The id a card's people carry, so who is on the card compares with who a step names. */
@@ -42,7 +45,7 @@ export interface PlanInput {
   people?: readonly PlanPerson[];
 }
 
-export type RowKind = "move" | "unassign" | "assign" | "comment" | "link";
+export type RowKind = "move" | "unassign" | "assign" | "comment" | "field" | "link";
 /** The key the server's per-block answer uses for this row: the take-off and the assign share `assignee`. */
 export type OutcomeKey = JiraBlockOutcome["block"];
 
@@ -55,6 +58,8 @@ export interface PlanRow {
   detail?: string;
   /** Why this row would change nothing, or null when it will. */
   noop: string | null;
+  /** The `noop` sentence is the whole line: the dialog does not put "Nothing happens here" in front of it. */
+  alone?: boolean;
   /** Whom the row is about, drawn as faces with names beside the sentence. */
   people: PlanPerson[];
   /** Something to know that is not a reason: an unfilled placeholder. */
@@ -82,10 +87,16 @@ export function onCard(p: { key?: string; id?: number; name: string; initials?: 
   return { key, name: p.name, initials: p.initials || initialsOf(p.name), ...(p.avatar ? { avatar: p.avatar } : null), color: p.color || tintOf(p.name), ...(p.me ? { me: true } : null) };
 }
 
-/** A person the card can be given to: `id` is who a card carries, `key` what a write sends. */
-export function assignable(p: { key: string; id: string; name: string; avatar?: string }): PlanPerson {
-  return { key: p.id, writeKey: p.key, name: p.name, initials: initialsOf(p.name), ...(p.avatar ? { avatar: p.avatar } : null), color: tintOf(p.name) };
+/**
+ * A person the card can be given to: `id` is who a card carries, `key` what a write sends,
+ * and `me` when this is the account the connection is signed in as.
+ */
+export function assignable(p: { key: string; id: string; name: string; avatar?: string; me?: boolean }): PlanPerson {
+  return { key: p.id, writeKey: p.key, name: p.name, initials: initialsOf(p.name), ...(p.avatar ? { avatar: p.avatar } : null), color: tintOf(p.name), ...(p.me ? { me: true } : null) };
 }
+
+/** What the question's choice holds for this person: what a write sends when it differs from the card's own id. */
+export const choiceOf = (p: PlanPerson): string => p.writeKey ?? p.key;
 
 /** The same pull request, spelled the way a link and a card's own address may differ in: case, a slash, a query. */
 const canon = (u: string): string => { try { const x = new URL(u); return `${x.host.toLowerCase()}${x.pathname.replace(/\/+$/, "")}`; } catch { return u.trim().toLowerCase(); } };
@@ -96,8 +107,66 @@ export function alreadyLinked(links: { links: readonly { url: string }[]; error:
   return links.links.some((l) => canon(l.url) === canon(url));
 }
 
-const RUN_ORDER: RowKind[] = ["move", "unassign", "assign", "comment", "link"];
+const RUN_ORDER: RowKind[] = ["move", "unassign", "assign", "comment", "field", "link"];
 const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/** A review step that says nothing about who is on the card still offers an assign, which writes a person only when one is picked. */
+export const optionalAssign = (key: "handoff" | "review", blocks: readonly StepBlock[]): boolean =>
+  key === "review" && !blocks.some((b) => b.type === "assign" || b.type === "unassign");
+
+/** The blocks the confirmation draws: the step's own, and that optional assign when it has none. Nothing here is saved. */
+export const dialogBlocks = (key: "handoff" | "review", blocks: readonly StepBlock[]): StepBlock[] =>
+  optionalAssign(key, blocks) ? [...blocks, { type: "assign", who: "reviewer", ask: true }] : [...blocks];
+
+/**
+ * Why a person is up the top of the assign question: the account learned for one of the
+ * pull request's reviewers (see jiraPairs), or the connection's own account.
+ */
+export interface AssignSuggestion { person: PlanPerson; why: string; kind: "reviewer" | "me" }
+/** One row the question draws: the person, their reason when they are suggested, and the heading that opens the group. */
+export interface AssignRow { person: PlanPerson; why?: string; heading?: string }
+
+/**
+ * The people the question offers first, in the order `reviewerPairs` puts them: the reviewers'
+ * learned accounts, then the person pressing. A pair names an account by the key a write sends,
+ * so it is matched against both that and the id a card carries (Data Center keeps them apart).
+ */
+export function assignSuggestions(people: readonly PlanPerson[], o: { logins: readonly string[]; pairs: readonly JiraPair[] }): AssignSuggestion[] {
+  const out: AssignSuggestion[] = [];
+  const holds = (person: PlanPerson) => out.some((s) => choiceOf(s.person) === choiceOf(person));
+  for (const pair of reviewerPairs(o.logins, o.pairs)) {
+    const person = people.find((p) => p.key === pair.accountId || choiceOf(p) === pair.accountId);
+    if (person && !holds(person)) out.push({ person, why: `paired with reviewer ${pair.login}`, kind: "reviewer" });
+  }
+  const me = people.find((p) => p.me);
+  if (me && !holds(me)) out.push({ person: me, why: "you", kind: "me" });
+  return out;
+}
+
+/** The question's list: the suggested people under one heading with their reason, then everybody else, each person once. */
+export function assignRows(people: readonly PlanPerson[], o: { logins: readonly string[]; pairs: readonly JiraPair[] }): AssignRow[] {
+  const rows: AssignRow[] = assignSuggestions(people, o).map((s, i) => ({ person: s.person, why: s.why, ...(i === 0 ? { heading: "Suggested" } : null) }));
+  for (const person of people) if (!rows.some((r) => choiceOf(r.person) === choiceOf(person))) rows.push({ person });
+  return rows;
+}
+
+/**
+ * Where the question starts, from the block's own "Start at": the choice's value, or undefined for
+ * "leave as it is". "me" needs the account the server marked in the list, and the reviewer needs a
+ * learned pair; with neither, nobody is picked.
+ */
+export function assignStart(block: StepBlock | undefined, people: readonly PlanPerson[], suggested: readonly AssignSuggestion[]): string | undefined {
+  if (!block || block.type !== "assign" || !block.ask) return undefined;
+  const value = (p: PlanPerson | undefined): string | undefined => (p ? choiceOf(p) : undefined);
+  if (block.who === "me") return value(people.find((p) => p.me));
+  if (block.who === "reviewer") return value(suggested.find((s) => s.kind === "reviewer")?.person);
+  if (block.who === "person") {
+    const id = block.person ? String(block.person.id) : "";
+    return value(people.find((p) => p.key === id || p.writeKey === id));
+  }
+  // "none" is nobody picked, and a pull request's author is not a Jira account: both start at nothing.
+  return undefined;
+}
 
 export function planRows(i: PlanInput): PlanRow[] {
   const plan = planOf<string | number>("move", { enabled: true, statusNames: [], assign: NO_ASSIGN, blocks: [...i.blocks] });
@@ -111,9 +180,10 @@ export function planRows(i: PlanInput): PlanRow[] {
   // What the assign block writes, which decides whether a take-off still has a say.
   let given: PlanPerson | null | undefined; // undefined: leaves it; null: nobody
   let givenWhy: string | null = null;
+  let untouched = false; // The question was left as it is: the row's own sentence is the whole line.
   const asks = plan.askAssign;
   if (asks) {
-    if (choice.assign === undefined) givenWhy = "Left as it is: nobody is picked";
+    if (choice.assign === undefined) { givenWhy = "Nobody is picked, so the assignee stays as it is"; untouched = true; }
     else given = choice.assign === null ? null : find(choice.assign) ?? { key: choice.assign, name: choice.assign, initials: "?" };
   } else if (plan.assign.who === "me") {
     given = me; givenWhy = me ? null : "Jira picks you when it runs";
@@ -159,8 +229,10 @@ export function planRows(i: PlanInput): PlanRow[] {
         : on && given.key === on.key ? `${given.name} is already on the card` : null;
     rows.push({
       id: "assign", kind: "assign", outcome: "assignee", people: given ? [given] : [],
-      sentence: given === null ? "Take the assignee off the card" : given ? `Assign the card to ${given.name}` : "Assign the card",
-      noop, phrase: given === null ? "take the assignee off" : given ? `assign ${given.name}` : "assign it",
+      // A Jira card holds one assignee, so naming somebody replaces whoever is on it; the block has no choice to make.
+      sentence: given === null ? "Take the assignee off the card" : given ? `Assign the card to ${given.name}, replacing whoever is assigned` : "Assign the card",
+      noop, ...(untouched ? { alone: true } : null),
+      phrase: given === null ? "take the assignee off" : given ? `assign ${given.name}` : "assign it",
     });
   }
 
@@ -175,6 +247,17 @@ export function planRows(i: PlanInput): PlanRow[] {
     rows.push({
       id: "comment", kind: "comment", outcome: "comment", people: [], sentence: `Comment on ${card.key}`, detail: filled.text, noop: null, phrase: "comment",
       ...(filled.missing.length ? { note: `${filled.missing.map((m) => `{${m}}`).join(", ")} ${filled.missing.length > 1 ? "are" : "is"} filled in ${filled.missing[0] === "me" ? "with your Jira name " : ""}when it runs` } : null),
+    });
+  }
+
+  if (plan.field) {
+    const v = plan.field.value;
+    rows.push({
+      id: "field", kind: "field", outcome: "field", people: [],
+      sentence: `Set “${plan.field.field}” to ${v || "nothing"} on ${card.key}`,
+      ...(v ? { detail: "One request of its own, after the comment" } : { note: "No value is saved for this field, so Jira refuses the whole step" }),
+      phrase: `set “${plan.field.field}”`,
+      noop: null,
     });
   }
 
@@ -247,7 +330,7 @@ export function settleRows(rows: readonly PlanRow[], phase: Phase, answer: StepA
  */
 export function plainFailure(r: { ok?: boolean; error?: string; conflict?: boolean; unauthorised?: boolean }): string {
   const end = " Nothing in Jira was changed.";
-  if (r.conflict) return `Somebody changed the card while this was open.${end}`;
+  if (r.conflict) return `${whatMoved(r.error) ?? "Somebody changed the card while this was open"}.${end}`;
   if (r.unauthorised) return `Jira did not accept the saved sign-in.${end}`;
   const e = r.error ?? "";
   if (/^Writing to Jira is switched off$/.test(e)) return `${e}.${end}`;

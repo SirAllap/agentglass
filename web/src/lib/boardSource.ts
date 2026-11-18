@@ -118,14 +118,18 @@ export interface BoardSource {
   storageKey: (name: string) => string;
 
   views: () => Read<"clickupViews">;
-  /** One board. `force` skips the server's cache. */
-  read: (id?: string, force?: boolean, quick?: readonly string[]) => Read<"clickupView">;
+  /** One board. `force` skips the server's cache; `signal` stops the wait (Cancel on a slow read). */
+  read: (id?: string, force?: boolean, quick?: readonly string[], signal?: AbortSignal) => Read<"clickupView">;
   /** A board's quick filters, sprint and epics. Only a source whose `caps.context` is set has it. */
   boardContext?: (viewId: string) => Promise<JiraBoardContext>;
   /** The cards under a board's epics, in one read (Jira). The Areas tree counts from it and an Area's page is filtered from it. */
   boardAreas?: (viewId: string) => Promise<JiraBoardAreas>;
   /** Put a card before or after another on its board (the order the board is read in). Behind the tracker's write switch. */
   rank?: (key: string, ask: { before?: string; after?: string }) => Promise<{ ok: boolean; error?: string }>;
+  /** Put cards in a sprint by its id (Jira Software). Absent where the tracker has no sprints to write. */
+  moveToSprint?: (sprint: string, keys: string[]) => Promise<{ ok: boolean; error?: string }>;
+  /** Take cards out of their sprint, to the backlog (Jira Software). */
+  moveToBacklog?: (keys: string[]) => Promise<{ ok: boolean; error?: string }>;
   /** One list's own statuses and fields, for a card that lives elsewhere. */
   list: (listId: string) => Read<"clickupList">;
   /** A list's own saved views, for the rail. Only asked when `caps.listViews`. */
@@ -181,12 +185,17 @@ export interface BoardMainProps {
   feed?: MainFeed;
   /** Bumped (`n`) when the body asks the slot to read again; `force` skips the server's minute. */
   reload?: MainReload;
+  /** The body saved, edited or removed a view: the sidebar re-reads its own list. */
+  onViewsChanged?: () => void;
   /** Whether the Tasks tab is the one on screen: a hidden tab does not re-read on focus. */
   active?: boolean;
   /** The cards found by id that are on no board ("Looked up" in the sidebar), and whether that row is the one lit. */
   looked?: { on: boolean; cards: ProviderTask[]; forget: (id: string) => void; add: (t: ProviderTask) => void };
   /** A card the body wants open in the card pane (the pull-request panel's "show me this card", the sidebar's Looked up): `n` changes on every ask. */
   show?: { id: string; n: number } | null;
+  /** The sidebar beside the column: its docked width, whether it is folded to the rail now, pinned open, and the two
+   *  things the column may ask of it: fold on its own (the board would get under two columns) and the `[` toggle. */
+  rail?: { width: number; folded: boolean; pinned: boolean; onAuto: (fold: boolean) => void; onToggle: () => void };
 }
 
 export interface MainReload { n: number; force: boolean }
@@ -230,7 +239,7 @@ export const CLICKUP_BOARD: BoardSource = {
   storageKey: (name) => boardStorageKey("clickup", name),
 
   views: () => api.clickupViews(),
-  read: (id, force) => api.clickupView(id, force),
+  read: (id, force, _quick, signal) => api.clickupView(id, force, signal),
   list: (listId) => api.clickupList(listId),
   listViews: (listId) => api.clickupListViews(listId),
   /* The pull request sidebar reads this switch from a copy it holds for a

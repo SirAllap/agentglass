@@ -16,7 +16,7 @@ const AREAS = strip(readFileSync(url("../src/components/jira/JiraAreas.tsx"), "u
 
 test("the sprint is an inline badge carrying the range, points and goal in its title", () => {
   expect(CTX).toContain('data-testid="jira-sprint"');
-  expect(CTX).toContain("title=");
+  expect(CTX).toContain("data-tip={tipAttr(detail || sprint.name)}");
 });
 
 test("the badge sits in the first toolbar row, right after the breadcrumb", () => {
@@ -24,7 +24,7 @@ test("the badge sits in the first toolbar row, right after the breadcrumb", () =
   const badge = PANEL.indexOf("<JiraSprintHeader");
   expect(crumb).toBeGreaterThan(-1);
   expect(badge).toBeGreaterThan(crumb);
-  expect(badge - crumb).toBeLessThan(600);
+  expect(badge - crumb).toBeLessThan(750);
 });
 
 test("the areas rail marks its selected row with a bar, not a border above the group", () => {

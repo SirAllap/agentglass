@@ -567,3 +567,40 @@ describe("the window's own ground (electron/main.js)", () => {
     expect(main).not.toContain('"#0d1117"');
   });
 });
+
+describe("the cover's endless loops do not repaint every frame", () => {
+  const cover = HTML.slice(HTML.indexOf("#ag-cover {"));
+  test("every infinite animation on the cover is stepped", () => {
+    const decls = cover.split(/[;{}]/).filter((d) => /\binfinite\b/.test(d) && /animation/.test(d));
+    expect(decls.length).toBeGreaterThan(4);
+    for (const d of decls) expect(d).toMatch(/steps\(/);
+  });
+  test("every stepped loop on the cover moves on a 1 s grid", () => {
+    const decls = cover.split(/[;{}]/).filter((d) => /\binfinite\b/.test(d) && /steps\(/.test(d) && /animation/.test(d));
+    const rules = cover.match(/[^{}]*\{[^{}]*\}/g) ?? [];
+    let n = 0;
+    for (const d of decls) {
+      const m = d.match(/\b(\d+)s steps\((\d+)\)/);
+      if (m) { n++; expect(Number(m[1]) / Number(m[2]), d).toBe(1); }
+    }
+    /* Longhand twinkle variants: duration and steps set apart. */
+    for (const r of rules) {
+      const dur = r.match(/animation-duration:\s*(\d+)s/), st = r.match(/animation-timing-function:\s*steps\((\d+)\)/);
+      if (dur && st) { n++; expect(Number(dur[1]) / Number(st[1]), r).toBe(1); }
+      expect(r, "no per-element delay on an endless loop").not.toMatch(/animation-delay:\s*-/);
+    }
+    expect(n).toBeGreaterThan(6);
+  });
+  test("nothing under the cover animates, and the shimmer is stepped", () => {
+    const css = src("../src/index.css");
+    expect(css).toMatch(/:root\.ag-covering :is\([^)]*\.agx-sk[^)]*\) \{ animation: none; \}/);
+    const sk = css.slice(css.indexOf(".agx-sk {"), css.indexOf("@keyframes agx-sk {"));
+    expect(sk).toMatch(/animation: agx-sk [\d.]+s steps\(\d+\) infinite/);
+    expect(sk).not.toMatch(/animation:[^;]*\b(linear|ease[a-z-]*)\b/);
+    expect(css).toMatch(/:root\[data-idle="1"\] \.agx-sk \{ animation-play-state: paused/);
+  });
+  test("the loops are paused while idle or failed", () => {
+    expect(cover).toMatch(/:root\[data-idle="1"\] #ag-cover :is\([^)]*\.agc-glow[^)]*\.agc-sky/);
+    expect(cover).toMatch(/#ag-cover\.agc-failed :is\([^)]*\.agc-far-arm[^)]*\) \{ animation-play-state: paused/);
+  });
+});

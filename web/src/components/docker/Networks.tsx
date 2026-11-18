@@ -97,7 +97,7 @@ function NetworkCard({ i, members, byId, readOnly, open, onToggle, armed, pendin
       <div className="dk-xt">
         <Shape worn={worn} />
         <div className="nm">
-          <b className="dk-xn" title={n.name}>{n.name}</b>
+          <b className="dk-xn" data-tip={n.name}>{n.name}</b>
           <span className="dk-drv" data-d={n.driver}>{n.driver}</span>
           {i.kind === "built" && <Badge tone="var(--info)" title="Docker creates this network itself"><LockIcon size={ICON.xs} />built in</Badge>}
         </div>
@@ -117,12 +117,12 @@ function NetworkCard({ i, members, byId, readOnly, open, onToggle, armed, pendin
                     {c && hostPorts(c).length
                       ? hostPorts(c).map((p) => (
                         <button type="button" key={p.host} className="dk-pchip" data-web={(p.web && c.state === "running") || undefined}
-                          title={`host :${p.host} to container :${p.container}${c.state === "running" ? "" : " (published when it runs)"}. Open the container`}
+                          data-tip={`host :${p.host} to container :${p.container}${c.state === "running" ? "" : " (published when it runs)"}. Open the container`}
                           onClick={() => onGoContainer(c.id)}>:{p.host}</button>))
                       : <span className="dk-xe">no published port</span>}
                   </span>
                   {m.also.length
-                    ? <span className="dk-xa" title={`Also on ${m.also.join(", ")}`}><NodesIcon size={ICON.xs} />also on {m.also.length} other{m.also.length === 1 ? "" : "s"}</span>
+                    ? <span className="dk-xa" data-tip={`Also on ${m.also.join(", ")}`}><NodesIcon size={ICON.xs} />also on {m.also.length} other{m.also.length === 1 ? "" : "s"}</span>
                     : <span />}
                 </div>
               );

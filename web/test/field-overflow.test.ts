@@ -40,7 +40,7 @@ describe("values that can outgrow their cell", () => {
     /* Truncating hides something; the title is what makes that acceptable. */
     const fn = tasks.slice(tasks.indexOf("function FieldValue("), tasks.indexOf("function FieldPick("));
     expect(fn).toContain("truncate");
-    expect(fn).toContain("title={text}");
+    expect(fn).toContain("data-tip={text}");
   });
 
   test("the issue strip's cells can shrink AND clip", () => {

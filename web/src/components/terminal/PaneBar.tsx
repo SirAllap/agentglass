@@ -60,7 +60,7 @@ export const BAR_MIN_W = 210;
 
 export interface PaneBarProps {
   /** The pane's bottom edge and width, in the slot's coordinates — paneFoot. */
-  foot: { left: number; top: number; width: number };
+  foot: { left: number; top: number; width: number; atRight?: boolean };
   /** How the bar shows up. The thin line is the default for a machine that already had one. */
   mode?: Exclude<PaneBarMode, "off">;
   /** What the edge looks like: the line, or a small chevron tab. */
@@ -196,9 +196,14 @@ function Glyph({ g, size = ICON.sm, sw = 2 }: { g: keyof typeof G; size?: number
 
 const STOP = "data-chip-stop";
 
+/** Px the bench button takes from a pane's status pill: only the pane under it pays (index.css --fab-reserve is 54, less the pill's own 8). */
+const FAB_PILL_PX = 46;
+const reserveOf = (foot: { atRight?: boolean }): number => (foot.atRight === false ? 0 : FAB_PILL_PX);
+const reserveCss = (foot: { atRight?: boolean }): string => (foot.atRight === false ? "8px" : "var(--fab-reserve)");
+
 /** The pill's branch: the card id greyed while the whole name fits, else cut to the room there is. */
 function PillBranch({ p }: { p: PaneBarProps }) {
-  const l = branchLabel(p.branch, p.card?.id, pillNameChars(p.foot.width, !!p.pr, p.dirty > 0));
+  const l = branchLabel(p.branch, p.card?.id, pillNameChars(p.foot.width - reserveOf(p.foot), !!p.pr, p.dirty > 0));
   return <>{l.pre && <span style={{ color: "var(--text4)" }}>{l.pre}</span>}{l.text}</>;
 }
 
@@ -254,7 +259,7 @@ export function PaneBar(p: PaneBarProps) {
     kind, hasPr: !!p.pr, hasCard: !!p.card, ahead: p.ahead ?? 0, behind: p.behind ?? 0, width: p.foot.width,
   });
   const has = (x: (typeof parts)[number]) => parts.includes(x);
-  const label = branchLabel(p.branch, p.card?.id, chipNameChars(p.foot.width, parts, words));
+  const label = branchLabel(p.branch, p.card?.id, chipNameChars(p.foot.width - reserveOf(p.foot), parts, words));
 
   /* The bar is ONE tab stop (Ctrl+Shift+B puts the keyboard on it) and the
      arrows walk the rest; Esc gives the keyboard back to the terminal. */
@@ -285,7 +290,7 @@ export function PaneBar(p: PaneBarProps) {
         <span className="shrink-0 grid place-items-center rounded-md" style={{ width: 22, height: 22, color: kind === "outside" ? "var(--warning)" : "var(--text4)", background: kind === "outside" ? "color-mix(in srgb, var(--warning) 12%, transparent)" : "transparent" }}>
           <Glyph g={kind === "outside" ? "out" : "folder"} size={ICON.xs} />
         </span>
-        <span className="min-w-0 flex-1 truncate px-1.5 text-[11px]" style={{ color: "var(--text3)" }} title={p.note}>{p.note}</span>
+        <span className="min-w-0 flex-1 truncate px-1.5 text-[11px]" style={{ color: "var(--text3)" }} data-tip={p.note}>{p.note}</span>
         {p.noteAction && (
           <button {...stop(n++)} onClick={p.noteAction.onClick} className={`${btn} gap-1 px-1.5`} style={{ ...H, color: "var(--text2)" }}>
             <Glyph g="chev" size={ICON.xs} /><span>{p.noteAction.label}</span>
@@ -296,14 +301,14 @@ export function PaneBar(p: PaneBarProps) {
     const main = kind === "main";
     const full = `${main && p.repo ? `${p.repo} · ` : ""}${p.branch}`;
     return (<>
-      <span className="shrink-0 grid place-items-center rounded-md" title={main ? `Main checkout of ${p.repo ?? "this repository"}` : "Worktree"}
+      <span className="shrink-0 grid place-items-center rounded-md" data-tip={main ? `Main checkout of ${p.repo ?? "this repository"}` : "Worktree"}
         style={{ width: 22, height: 22, color: main ? "var(--text2)" : ACCENT, background: main ? "color-mix(in srgb, var(--text) 7%, transparent)" : `color-mix(in srgb, ${ACCENT} 14%, transparent)` }}>
         <Glyph g={main ? "home" : "branch"} size={ICON.xs} />
       </span>
       <button
         {...stop(n++)}
         onClick={(e) => { if (e.shiftKey) { p.onCopy(); setCopied(true); setTimeout(() => setCopied(false), 900); } else p.onGit(); }}
-        title={`${full}\nclick: Source control · shift+click: copy`}
+        data-tip={`${full} — click: Source control · shift+click: copy`}
         className="agx-btn min-w-0 flex-1 justify-start flex items-center rounded-md px-1.5 text-[11px] overflow-hidden whitespace-nowrap"
         style={{ ...H, color: "var(--text)" }}
       >
@@ -313,14 +318,14 @@ export function PaneBar(p: PaneBarProps) {
       </button>
       {has("copy") && (
         <button {...stop(n++)} onClick={() => { p.onCopy(); setCopied(true); setTimeout(() => setCopied(false), 900); }}
-          title="Copy branch name" aria-label="Copy branch name"
+          data-tip="Copy branch name" aria-label="Copy branch name"
           className={`${btn} justify-center`}
           style={{ width: 22, height: 22, color: copied || shout ? "var(--success)" : "var(--text3)" }}
         ><Glyph g={copied || shout ? "check" : "copy"} /></button>
       )}
       {has("sep") && <span aria-hidden className="shrink-0" style={{ width: 1, height: 16, margin: "0 2px", background: "color-mix(in srgb, var(--text) 12%, transparent)" }} />}
       {has("sync") && (
-        <button {...stop(n++)} onClick={p.onGit} title={`${p.ahead || 0} to push · ${p.behind || 0} to pull — opens Source control`}
+        <button {...stop(n++)} onClick={p.onGit} aria-label={`${p.ahead || 0} to push, ${p.behind || 0} to pull`} data-tip={`${p.ahead || 0} to push · ${p.behind || 0} to pull — opens Source control`}
           className={`${btn} gap-1.5 px-1.5 tabular-nums`} style={{ ...H, color: "var(--text3)" }}>
           {(p.ahead ?? 0) > 0 && <span style={{ color: "var(--text2)" }}>↑{p.ahead}</span>}
           {(p.behind ?? 0) > 0 && <span style={{ color: "var(--warning)" }}>↓{p.behind}</span>}
@@ -332,8 +337,8 @@ export function PaneBar(p: PaneBarProps) {
           card={has("card") ? p.card ?? null : null} behind={p.behind} worktree={kind === "worktree"} words={words}
           stop={() => stop(n++)} onPr={p.onPr ?? (() => {})} onCard={p.onCard ?? (() => {})} onNew={p.onGit} onReach={p.onPrReach ?? (() => {})} />
       )}
-      <button {...stop(n++)} onClick={p.onDiff}
-        title={p.dirty > 0 ? `${p.dirty} changed file${p.dirty === 1 ? "" : "s"} — open them in File changes` : "Open this checkout in File changes"}
+      <button {...stop(n++)} onClick={p.onDiff} aria-label={p.dirty > 0 ? `${p.dirty} changed file${p.dirty === 1 ? "" : "s"}` : "File changes"}
+        data-tip={p.dirty > 0 ? `${p.dirty} changed file${p.dirty === 1 ? "" : "s"} — open them in File changes` : "Open this checkout in File changes"}
         className={`${btn} gap-1.5 px-1.5 tabular-nums`} style={{ ...H, color: p.dirty > 0 ? "var(--warning)" : "var(--text3)" }}>
         <Glyph g="diff" />
         {p.dirty > 0 && <span className="font-semibold">{p.dirty}</span>}
@@ -350,7 +355,7 @@ export function PaneBar(p: PaneBarProps) {
       {p.ask && (
         <button
           onClick={p.ask.onAsk}
-          title={`Ask the agent in this pane about the ${p.ask.lines === 1 ? "selected line" : `${p.ask.lines} selected lines`}`}
+          data-tip={`Ask the agent in this pane about the ${p.ask.lines === 1 ? "selected line" : `${p.ask.lines} selected lines`}`}
           className="agx-btn shrink-0 flex items-center gap-1.5 rounded px-2 text-[11px] font-medium"
           style={{ height: 22, color: "var(--text)", background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
         >
@@ -439,8 +444,8 @@ export function PaneBar(p: PaneBarProps) {
           aria-label={`Pane bar: ${p.branch}. Ctrl+Shift+B focuses it; Enter opens the full bar.`}
           className="agx-btn absolute flex items-center gap-1.5 rounded-md text-[11px]"
           style={{
-            left: p.foot.left + p.foot.width - 8, top: p.foot.top - 5 - 22 - (p.pill?.lift ? 26 : 0), height: 22, zIndex: 11,
-            transform: "translateX(-100%)", padding: "0 8px 0 4px", color: "var(--text2)", maxWidth: Math.max(60, p.foot.width - 16),
+            left: `calc(${p.foot.left + p.foot.width}px - ${reserveCss(p.foot)})`, top: p.foot.top - 5 - 22 - (p.pill?.lift ? 26 : 0), height: 22, zIndex: 11,
+            transform: "translateX(-100%)", padding: "0 8px 0 4px", color: "var(--text2)", maxWidth: `max(60px, calc(${p.foot.width}px - ${p.foot.atRight === false ? "0px" : "var(--fab-reserve)"} - 8px))`,
             background: "color-mix(in srgb, var(--bg) 90%, var(--bg3))",
             boxShadow: "0 0 0 1px color-mix(in srgb, var(--text) 11%, transparent), 0 1px 2px rgba(0,0,0,.08)",
             opacity: on ? 0 : pillOp, pointerEvents: on ? "none" : "auto", transition: "opacity .14s ease, top .18s cubic-bezier(.23,1,.32,1)",

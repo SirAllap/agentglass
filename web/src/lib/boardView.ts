@@ -18,3 +18,10 @@ export function boardView(state: { data: { error?: string | null; tasks: readonl
   if (state.data.error && !state.data.tasks.length) return "error";
   return "ready";
 }
+
+/** What a board holds after "Still reading… Cancel": the rows it had (none if it had none), no read behind them, and the stopped note. */
+export function stoppedBoard<T extends { tasks: readonly unknown[]; revalidating?: boolean; error?: string | null }>(
+  d: T | null, empty: T,
+): T {
+  return { ...(d ?? empty), revalidating: false, error: "Stopped. Nothing was read." };
+}

@@ -5,6 +5,7 @@
  * index.css; nothing here names a hex.
  */
 import { EDGE, LINE } from "../workspace/Chrome.tsx";
+import { HIT } from "../../lib/iconSize.ts";
 
 export const DOCKER_CSS = `
 .dk-g{width:22px;height:22px;display:grid;place-items:center;flex:none}
@@ -18,6 +19,7 @@ export const DOCKER_CSS = `
 .dk-q svg{width:10px;height:10px;fill:none;stroke:var(--bg);stroke-width:3;stroke-linecap:round;display:block}
 .dk-q[data-t=up]{background:linear-gradient(180deg,color-mix(in srgb,var(--success) 88%,var(--text)),var(--success));box-shadow:inset 0 1px 0 color-mix(in srgb,var(--bg) 25%,transparent)}
 .dk-q[data-t=need]{background:linear-gradient(180deg,color-mix(in srgb,var(--error) 90%,var(--bg)),color-mix(in srgb,var(--error) 88%,var(--text)));box-shadow:0 0 0 2px var(--bg),0 0 0 3.5px color-mix(in srgb,var(--error) 45%,transparent)}
+.dk-q[data-t=crash]{background:var(--bg);box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--error) 70%,transparent)}
 .dk-q[data-t=restart]{background:repeating-linear-gradient(135deg,var(--warning) 0 3px,color-mix(in srgb,var(--warning) 80%,var(--text)) 3px 6px);box-shadow:0 0 0 2px var(--bg),0 0 0 3.5px color-mix(in srgb,var(--warning) 45%,transparent)}
 .dk-q[data-t=pause]{background:var(--warning);box-shadow:0 0 0 2px var(--bg),0 0 0 3.5px color-mix(in srgb,var(--warning) 45%,transparent)}
 .dk-q[data-t=stop]{background:var(--bg);box-shadow:inset 0 0 0 1.5px var(--bg4)}
@@ -30,6 +32,7 @@ button.dk-q{cursor:pointer;transition:transform 140ms var(--ease-out,ease)}
 button.dk-q:hover{transform:scale(1.15)}
 
 .dk-cols{display:grid;grid-template-columns:22px minmax(0,1fr) 96px 104px 132px 28px 28px;gap:10px;align-items:center;padding:0 10px}
+.dk-ch>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dk-ch{height:24px;font-size:9.5px;line-height:1;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;border-bottom:${LINE};background:color-mix(in srgb,var(--bg2) 35%,var(--bg))}
 .dk-r{min-height:46px;border-bottom:${LINE};cursor:pointer;position:relative;transition:background .12s;padding-block:4px;outline:none}
 .dk-r:last-child{border-bottom:0}
@@ -39,7 +42,6 @@ button.dk-q:hover{transform:scale(1.15)}
 .dk-r[data-sel=true]::before{content:"";position:absolute;left:0;top:6px;bottom:6px;width:3px;border-radius:0 2px 2px 0;background:var(--primary)}
 .dk-r[data-need=true]{background:color-mix(in srgb,var(--error) 4%,var(--bg))}
 .dk-r[data-need=true][data-sel=true]{background:color-mix(in srgb,var(--primary) 8%,color-mix(in srgb,var(--error) 4%,var(--bg)))}
-.dk-r[data-dense=true]{min-height:32px;padding-block:1px}
 .dk-r[data-off=true] .dk-nm{color:var(--text3)}
 .dk-nm{display:flex;align-items:center;gap:6px;font-size:12.5px;line-height:1.25;font-weight:500;color:var(--text);white-space:nowrap;min-width:0}
 .dk-nm>span:first-child{overflow:hidden;text-overflow:ellipsis;min-width:0}
@@ -71,7 +73,7 @@ button.dk-q:hover{transform:scale(1.15)}
 .dk-stack{border:${EDGE};border-radius:12px;background:var(--bg);box-shadow:0 1px 2px color-mix(in srgb,var(--text) 5%,transparent);margin-bottom:10px;overflow:clip;flex:none}
 .dk-sh{display:grid;grid-template-columns:26px minmax(0,1fr) auto auto 28px;align-items:center;gap:8px;height:42px;padding:0 8px 0 6px;background:linear-gradient(180deg,var(--bg),color-mix(in srgb,var(--bg2) 50%,var(--bg)));border-bottom:${LINE}}
 .dk-stack[data-folded=true] .dk-sh{border-bottom:0}
-.dk-tg{width:26px;height:26px;border:0;border-radius:6px;background:transparent;display:grid;place-items:center;color:var(--text3);transition:transform .15s var(--ease-out,ease)}
+.dk-tg{width:${HIT}px;height:${HIT}px;border:0;border-radius:6px;background:transparent;display:grid;place-items:center;color:var(--text3);transition:transform .15s var(--ease-out,ease)}
 .dk-tg:hover{background:var(--surface-inset)}
 .dk-stack[data-folded=true] .dk-tg{transform:rotate(-90deg)}
 .dk-own{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 7px;border-radius:6px;font-size:11px;line-height:1;font-family:var(--font-mono,ui-monospace,monospace);color:var(--text2);background:var(--bg);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--text) 12%,transparent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:0 1 auto;max-width:55%}
@@ -82,6 +84,7 @@ button.dk-q:hover{transform:scale(1.15)}
 .dk-r:hover .dk-more,.dk-r[data-sel=true] .dk-more,.dk-more[data-open=true]{color:var(--text2)}
 .dk-more:hover,.dk-more[data-open=true]{background:var(--surface-inset);border-color:var(--border)}
 .dk-more:disabled{opacity:.4;cursor:not-allowed}
+.dk-proj{padding:7px 10px 2px;font-size:10.5px;font-weight:600;letter-spacing:.02em;color:var(--text3);background:var(--surface-inset);text-transform:uppercase}
 
 .dk-say{font-size:13px;line-height:1.45;color:var(--text2);margin:0 0 12px}
 .dk-say b{color:var(--text);font-weight:600}
@@ -148,6 +151,7 @@ button.dk-q:hover{transform:scale(1.15)}
 .dk-nv .n{margin-left:auto;font-size:10.5px;color:var(--text3)}
 .dk-nv .n .amb{color:var(--warning-ink,var(--warning));font-weight:600}
 .dk-nv .n .amb b{font-weight:700}
+.dk-note{margin:14px 9px 0;padding-top:12px;font-size:11px;color:var(--text3);line-height:1.5;border-top:${LINE}}
 .dk-sub{margin:auto 0 0;padding:10px 9px 2px;font-size:10.5px;color:var(--text3);line-height:1.45;border-top:${LINE}}
 .dk-sub kbd{font-family:var(--font-mono,ui-monospace,monospace);font-size:10.5px;color:var(--text3);background:var(--surface-inset);border-radius:4px;padding:1px 5px;box-shadow:inset 0 0 0 1px var(--surface-line)}
 
@@ -267,7 +271,7 @@ button.dk-q:hover{transform:scale(1.15)}
 .dk-chip.sm{height:22px;font-size:10.5px;padding:0 8px;gap:5px}
 .dk-chip.ghost{background:transparent;border-color:transparent}
 .dk-chip.ghost:hover:not(:disabled){background:var(--surface-inset)}
-.dk-dock{flex:none;display:flex;align-items:center;gap:8px;height:34px;padding:0 10px 0 14px;font-size:11.5px;color:var(--text2);border-top:${LINE};background:var(--surface-nav)}
+.dk-dock{flex:none;display:flex;align-items:center;gap:8px;height:34px;padding:0 var(--fab-reserve) 0 14px;font-size:11.5px;color:var(--text2);border-top:${LINE};background:var(--surface-nav)}
 .dk-dock .mut{font-size:10.5px;color:var(--text3)}
 .dk-dock .cr{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-family:var(--font-mono,ui-monospace,monospace);font-size:10.5px;color:var(--text3)}
 `;

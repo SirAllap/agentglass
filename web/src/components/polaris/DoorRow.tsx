@@ -16,9 +16,11 @@ export function DoorRow({ v, disabled, onMode, onParams, onReset }: {
 }) {
   return (
     <SettingRow
+      settingId={`polaris.door.${v.door}`}
       label={
         <span className="inline-flex flex-wrap items-center gap-2">
           {v.name}
+          {v.unwired && <StatusBadge tone="off">Not wired yet</StatusBadge>}
           {v.mark && <StatusBadge tone={v.mark === "Live" ? "warn" : "off"}>{v.mark}</StatusBadge>}
           {v.isNew && <StatusBadge tone="info">New</StatusBadge>}
         </span>

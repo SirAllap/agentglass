@@ -35,7 +35,7 @@ function Fold({ id, label, note, open, onToggle, children }: {
 }
 
 export function Detail({
-  c, stat, env, config, top, error, readOnly, tail, onTail, onOpenPort, open, onToggle, others, bar,
+  c, stat, env, config, top, error, readOnly, tail, onTail, onOpenPort, open, onToggle, others, bar, recentRestarts,
 }: {
   c: DockerContainer;
   stat?: DockerStat;
@@ -52,6 +52,8 @@ export function Detail({
   /** Every other container on screen, for "why does yours start and mine not". */
   others: DockerContainer[];
   bar: BarProps;
+  /** Restarts in the last 10 min, counted from earlier readings; null until there are two. */
+  recentRestarts?: number | null;
 }) {
   const [errorTick, setErrorTick] = useState(0);
   const procs = top ? topTree(top) : null;
@@ -59,7 +61,7 @@ export function Detail({
     <>
       <div className="dk-head">
         <DetailBar c={c} bar={{ ...bar, readOnly }} />
-        <WhyLine c={c} onShowLog={() => setErrorTick((n) => n + 1)} />
+        <WhyLine c={c} recent={recentRestarts} onShowLog={() => setErrorTick((n) => n + 1)} />
         <FactCards c={c} stat={stat} onOpenPort={onOpenPort} />
       </div>
 
@@ -112,11 +114,11 @@ function EnvList({ env }: { env: string[] }) {
           const hide = r.secret && !shown[r.key];
           return (
             <span key={r.key} style={{ display: "contents" }}>
-              <span className="k" title={r.key}>{r.key}</span>
+              <span className="k" data-tip={r.key}>{r.key}</span>
               <span className="v" data-mask={hide || undefined}>
                 {hide
                   ? <button type="button" className="dk-lk" onClick={() => setShown((s) => ({ ...s, [r.key]: true }))}
-                    title="Hidden because it looks like a secret. Click to reveal it.">•••••••• <u>show</u></button>
+                    data-tip="Hidden because it looks like a secret. Click to reveal it.">•••••••• <u>show</u></button>
                   : r.value}
               </span>
             </span>
@@ -187,9 +189,9 @@ function EnvCompare({ c, others }: { c: DockerContainer; others: DockerContainer
           <div className="dk-dfr">
             {list.map((r) => (
               <span key={r.name} style={{ display: "contents" }}>
-                <span className="sg" data-c={r.change} title={r.change}>{sign(r)}</span>
+                <span className="sg" data-c={r.change} data-tip={r.change}>{sign(r)}</span>
                 <span className="dk-mut">{r.name}</span>
-                <span className="mono" title={r.masked ? (r.change === "same" ? "identical" : "differs") : undefined}>{cell(r, r.a)}</span>
+                <span className="mono" data-tip={r.masked ? (r.change === "same" ? "identical" : "differs") : undefined}>{cell(r, r.a)}</span>
                 <span className="mono">{cell(r, r.b)}</span>
               </span>
             ))}

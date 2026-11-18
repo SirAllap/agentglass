@@ -13,6 +13,7 @@ import { clock, relTime, tildify } from "../../lib/projectsPaths.ts";
 import { Button, EDGE } from "../workspace/Chrome.tsx";
 import { BranchIcon, SparkleIcon } from "../../lib/glyphIcons.tsx";
 import { Foot, HAIR, Kbd, Status, PaneHead, StateCard, Tile } from "./ui.tsx";
+import { useVisibleInterval } from "../../lib/visibleInterval.ts";
 
 type Phase = { t: "running"; since: number } | { t: "done"; found: GitRepoRef[] } | { t: "stopped" } | { t: "failed" };
 
@@ -39,11 +40,7 @@ export function AgentsPane({ listed, busy, onAdd, onBack }: { listed: readonly s
   };
   useEffect(() => { start(); return () => { token.current++; }; /* once per opening of the pane */ // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  useEffect(() => {
-    if (phase.t !== "running") return;
-    const i = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(i);
-  }, [phase.t]);
+  useVisibleInterval(() => setNow(Date.now()), 1000, phase.t === "running");
 
   const found = phase.t === "done" ? phase.found : [];
   return (
@@ -71,7 +68,7 @@ export function AgentsPane({ listed, busy, onAdd, onBack }: { listed: readonly s
               <label key={r.root} className="grid items-center gap-x-2.5 px-3 cursor-pointer" style={{ gridTemplateColumns: "16px 22px minmax(0,1fr) 150px", height: 46, borderBottom: HAIR }}>
                 <input type="checkbox" checked={ticks.includes(r.root)} onChange={() => setTicks((t) => (t.includes(r.root) ? t.filter((x) => x !== r.root) : [...t, r.root]))} style={{ accentColor: "var(--primary)" }} aria-label={`Add ${r.name}`} />
                 <Tile hue="success"><BranchIcon size={ICON.xs} /></Tile>
-                <span className="min-w-0"><b className="block text-[12.5px] truncate" title={r.name}>{r.name}</b><span className="block font-mono text-[11px] truncate" style={{ color: "var(--text3)" }} title={r.root}>{tildify(r.root)}</span></span>
+                <span className="min-w-0"><b className="block text-[12.5px] truncate" data-tip={r.name}>{r.name}</b><span className="block font-mono text-[11px] truncate" style={{ color: "var(--text3)" }} data-tip={r.root}>{tildify(r.root)}</span></span>
                 <span className="text-right text-[11px]" style={{ color: "var(--text3)" }}>{counts[r.root] ? `${counts[r.root]} session${counts[r.root] === 1 ? "" : "s"} · ` : ""}{relTime(r.touchedAt, Date.now())}</span>
               </label>
             ))}

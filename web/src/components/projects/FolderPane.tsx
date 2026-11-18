@@ -59,7 +59,7 @@ export function FolderPane({ roots, listedRoots, busy, error, onAdd, onBack, onC
             {pre.sample.map((s) => (
               <div key={s.path} className="flex items-center gap-2.5 px-3 py-2" style={{ borderBottom: HAIR }}>
                 <Tile hue="success"><BranchIcon size={ICON.xs} /></Tile>
-                <span className="min-w-0 flex-1"><b className="block text-[12.5px] truncate" title={s.name}>{s.name}</b><span className="block font-mono text-[11px] truncate" style={{ color: "var(--text3)" }} title={s.path}>{tildify(s.path)}</span></span>
+                <span className="min-w-0 flex-1"><b className="block text-[12.5px] truncate" data-tip={s.name}>{s.name}</b><span className="block font-mono text-[11px] truncate" style={{ color: "var(--text3)" }} data-tip={s.path}>{tildify(s.path)}</span></span>
               </div>
             ))}
             {pre.repos > pre.sample.length && <div className="px-3 py-2 text-[11px]" style={{ color: "var(--text3)" }}>and {pre.repos - pre.sample.length} more</div>}

@@ -80,7 +80,7 @@ export interface Plan {
   /** 1 for the first text the plan had, +1 each time the text was replaced. Only the open plan's read carries it. */
   version?: number;
   /** Before Go: the model this plan's builder starts on, and one sentence saying why. */
-  launch?: { mode: string; model: string; why: string };
+  launch?: { mode: string; model: string; why: string; engine?: string };
 }
 export interface PlanQuestion { id?: string; text: string; detail?: string; choices: string[]; recommended?: number; by: string; at: number; answer?: { text: string; by: string; at: number } }
 export interface PlanDetail { plan: Plan; run: Run | null }
@@ -224,12 +224,16 @@ export function stationStates(p: Plan, run: Run | null, preflightOn: boolean): S
   });
 }
 
+/** A plan linked to a worker that builds it: only a plan at ready or Go; a draft has no builder and a launched one follows its own. */
+export const isLinked = (state: Plan["state"], worker: unknown): boolean => worker !== undefined && worker !== null && (state === "ready" || state === "go");
+
 export type Group = "awaiting" | "progress" | "launched";
 /** Where a plan sits in the list. A plan said No-go to is in History, not here. */
 export function groupOf(p: Plan, run: Run | null): Group | null {
   if (p.state === "no-go") return null;
   if (p.state === "launched") return "launched";
-  if (p.state === "draft" || (p.state === "go" && (p.queued || p.workerState !== undefined))) return "progress";
+  /* A plan a linked worker builds is past Go, whatever its stored state: it never waits for the person's Go. */
+  if (p.state === "draft" || (p.state === "go" && p.queued) || isLinked(p.state, p.workerState)) return "progress";
   if (run && (run.state === "running" || run.state === "awaiting-go")) return "progress";
   return "awaiting";
 }
@@ -303,6 +307,9 @@ export function titleFrom(request: string): string {
   const cut = first.length > 80 ? first.slice(0, 79).replace(/\s+\S*$/, "") + "…" : first;
   return cut || "New flight plan";
 }
+
+/** The sizes the create door accepts, from `flightPlan.preflight.sizes`: M and L, or L alone. S is never a plan. */
+export const planSizes = (sizes: "L" | "ML"): Size[] => (sizes === "L" ? ["L"] : ["M", "L"]);
 
 export type Verdict = "go" | "no-go" | "checked";
 /** "1 file", "3 files". */

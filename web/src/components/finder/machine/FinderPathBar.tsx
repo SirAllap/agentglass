@@ -110,8 +110,8 @@ export function FinderPathBar({ path, home, onGo, signalEdit, onEditing, volumes
             }
           }}
           className={`${INPUT} flex-1 min-w-0`} style={{ ...INPUT_STYLE, borderColor: "var(--primary)" }} />
-        <button className="agx-btn rounded grid place-items-center shrink-0" style={{ width: HIT, height: HIT, color: "var(--text3)" }} title="Go (Enter)" aria-label="Go to this path" onMouseDown={(e) => { e.preventDefault(); commit(text); }}><StrataIcon set="act" name="check" size={ICON.sm} /></button>
-        <button className="agx-btn rounded grid place-items-center shrink-0" style={{ width: HIT, height: HIT, color: "var(--text3)" }} title="Cancel (Esc)" aria-label="Cancel editing the path" onMouseDown={(e) => { e.preventDefault(); setText(null); }}><StrataIcon set="act" name="x" size={ICON.sm} /></button>
+        <button className="agx-btn rounded grid place-items-center shrink-0" style={{ width: HIT, height: HIT, color: "var(--text3)" }} data-tip="Go (Enter)" aria-label="Go to this path" onMouseDown={(e) => { e.preventDefault(); commit(text); }}><StrataIcon set="act" name="check" size={ICON.sm} /></button>
+        <button className="agx-btn rounded grid place-items-center shrink-0" style={{ width: HIT, height: HIT, color: "var(--text3)" }} data-tip="Cancel (Esc)" aria-label="Cancel editing the path" onMouseDown={(e) => { e.preventDefault(); setText(null); }}><StrataIcon set="act" name="x" size={ICON.sm} /></button>
         {shown.length > 0 && (
           <div role="listbox" aria-label="Folders" className="absolute left-0 right-0 rounded-lg py-1 text-[12px] shadow-2xl" style={{ top: 34, zIndex: 5, background: "var(--surface-card)", border: EDGE }}>
             {shown.map((n, i) => (
@@ -140,16 +140,16 @@ export function FinderPathBar({ path, home, onGo, signalEdit, onEditing, volumes
     {/* In the flow, not over the crumbs: a fade drawn over the strip dimmed the first letters of the last crumb whenever it rested at the left edge (measured at 360 px: 3 px under it). */}
     {fades.left && <span aria-hidden data-crumb-more className="shrink-0 grid place-items-center pointer-events-none" style={{ width: 16, color: "var(--text4)" }}>…</span>}
     <div ref={strip} className="flex-1 min-w-0 flex items-center gap-1 px-2 overflow-x-auto cursor-text whitespace-nowrap" role="navigation" aria-label="Path" onScroll={measureFades} onWheel={(e) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY; }}
-      onClick={(e) => { if (activates(e.button, "click")) edit(); }} style={{ minHeight: 30, scrollbarWidth: "none" }} title="Click to type a path (Ctrl+L)"
+      onClick={(e) => { if (activates(e.button, "click")) edit(); }} style={{ minHeight: 30, scrollbarWidth: "none" }} data-tip="Click to type a path (Ctrl+L)"
       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu(new DOMRect(e.clientX, e.clientY, 1, 1)); }}>
       {parts.map((c, i) => (
         <span key={c.path} className="flex items-center gap-1 shrink-0">
           {i > 0 && <span aria-hidden className="px-1.5" style={{ color: "var(--text4)" }}>/</span>}
-          <button className="agx-btn rounded px-1 shrink-0" title={crumbLabel(c.label) !== c.label ? c.label : undefined} data-drop-path={i < parts.length - 1 ? c.path : undefined} data-drop-kind="crumb" style={{ color: i === parts.length - 1 ? "var(--primary-ink)" : "var(--text3)", fontWeight: i === parts.length - 1 ? 700 : 400 }}
+          <button className="agx-btn rounded px-1 shrink-0" data-tip={crumbLabel(c.label) !== c.label ? c.label : undefined} data-drop-path={i < parts.length - 1 ? c.path : undefined} data-drop-kind="crumb" style={{ color: i === parts.length - 1 ? "var(--primary-ink)" : "var(--text3)", fontWeight: i === parts.length - 1 ? 700 : 400 }}
             onClick={(e) => { e.stopPropagation(); if (!activates(e.button, "click")) return; if (i === parts.length - 1) edit(); else onGo(c.path); }}>{crumbLabel(c.label)}</button>
         </span>
       ))}
-      <button type="button" className="agx-btn rounded grid place-items-center shrink-0" style={{ width: HIT, height: HIT, color: copied ? "var(--primary-ink)" : "var(--text3)" }} title={copied ? "Path copied" : "Copy path"} aria-label="Copy path"
+      <button type="button" className="agx-btn rounded grid place-items-center shrink-0" style={{ width: HIT, height: HIT, color: copied ? "var(--primary-ink)" : "var(--text3)" }} data-tip={copied ? "Path copied" : "Copy path"} aria-label="Copy path"
         onClick={(e) => { e.stopPropagation(); copy(); }}><StrataIcon set="act" name={copied ? "check" : "copy"} size={ICON.sm} /></button>
       {/* Inside the bar in the DOM: a click on the menu must not reach the bar and start typing. */}
       {menu && (

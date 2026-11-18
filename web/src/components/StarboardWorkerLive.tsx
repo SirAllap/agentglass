@@ -4,7 +4,7 @@
 // its tab is the reader that draws them (server/agents/opencodeview.py), so the
 // event feed has nothing to scope by session. `/agents/named/read` answers with
 // that tab's lines, which is the same view `agentglass-agent read <name>` gives.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import { Panel } from "./Panel.tsx";
@@ -12,7 +12,7 @@ import { Panel } from "./Panel.tsx";
 const READ_POLL_MS = 2_000;
 const READ_LINES = 300;
 
-export function WorkerLive({ name }: { name: string }) {
+export function WorkerLive({ name, active = true }: { name: string; active?: boolean }) {
   const [text, setText] = useState("");
   const [err, setErr] = useState("");
   const load = () => {
@@ -24,7 +24,11 @@ export function WorkerLive({ name }: { name: string }) {
   // The first read is immediate: a poll's first beat would leave the panel
   // blank for two seconds on a row somebody just pressed.
   useEffect(() => { setText(""); setErr(""); load(); }, [name]); // eslint-disable-line react-hooks/exhaustive-deps
-  usePoll(true, load, READ_POLL_MS);
+  // Back on screen after a pause: one read at once, not one beat later.
+  const wasActive = useRef(active);
+  useEffect(() => { if (active && !wasActive.current) load(); wasActive.current = active; }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Starboard stays mounted behind another view: the 2 s read stops with it.
+  usePoll(active, load, READ_POLL_MS);
 
   // The reader's own header is not a step: a turn that has printed nothing yet
   // still gets the one sentence, and the panel says there is nothing to see.

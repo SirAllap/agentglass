@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
 import { api } from "../../lib/api.ts";
+import { openSettings } from "../../lib/openSettings.ts";
 import { followLink } from "../../lib/linkRouter.ts";
 import { Select } from "../Select.tsx";
 import { Button, INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
 import { Ph } from "../agents/phosphor.tsx";
 import { Empty, SectionHead, SubLine } from "../agents/AgentsSections.tsx";
 import type { BaseRed, ItemsAnswer, PolarisItem, SettingsAnswer } from "../../../../shared/polaris.ts";
-import { baseBanners, baseOfItem, beaconOf, changeDoor, classCounts, draftSaveable, fixNotice, itemView, sendState, sortItems, syncResult, syncWarning, waitingOnYou, withoutNumber, type BannerView, type ItemAct, type ItemView } from "../../lib/polarisView.ts";
+import { baseBanners, baseOfItem, beaconOf, changeDoor, classCounts, draftSaveable, enabledOf, fixNotice, itemView, sendState, sortItems, syncResult, syncWarning, waitingOnYou, withoutNumber, type BannerView, type ItemAct, type ItemView } from "../../lib/polarisView.ts";
 
+/** Rows the compact list shows before the link. */
+export const COMPACT_ROWS = 5;
 const CLEANUP_TEXT = "Close the session, remove the worktree and mark the card done.";
 const MODE_WORDS: Record<string, string> = { dry: "dry run", live: "live", draft: "draft", off: "off" };
 
@@ -98,12 +101,17 @@ function BaseBanner({ b, root, items, onChanged }: { b: BannerView; root: string
 }
 
 /** The Pull requests section: every item in its class, with why and the one button of its course. */
-export function PullRequestsSection({ root, settings, items, error, onChanged }: {
+export function PullRequestsSection({ root, settings, items, error, onChanged, compact, quietEmpty }: {
   root: string; settings: SettingsAnswer | null; items: ItemsAnswer | null; error: string | null; onChanged: () => void;
+  /** The short form on the Agents screen: a few rows and a link to the full page. */
+  compact?: boolean;
+  /** The caller says why the list is empty in its own words. */
+  quietEmpty?: boolean;
 }) {
-  if (!settings?.enabled) return null;
-  const sorted = items ? sortItems(items.items) : [];
-  const counts = classCounts(sorted).map((c) => `${c.n} ${c.cls.toLowerCase()}`).join(" · ");
+  if (!settings || !enabledOf(settings)) return null;
+  const all = items ? sortItems(items.items) : [];
+  const sorted = compact ? all.slice(0, COMPACT_ROWS) : all;
+  const counts = classCounts(all).map((c) => `${c.n} ${c.cls.toLowerCase()}`).join(" · ");
   const d = settings.doors;
   const bell = d.cleared.mode === "bell";
   const banners = baseBanners(items?.bases);
@@ -111,7 +119,7 @@ export function PullRequestsSection({ root, settings, items, error, onChanged }:
   const canSync = (items?.bases ?? []).reduce((n, b) => n + b.canSync.length, 0);
   return (
     <div>
-      <SectionHead title="Pull requests" count={sorted.length} hint={counts || undefined}>
+      <SectionHead title="Pull requests" count={all.length} hint={counts || undefined}>
         {d.relaunch.mode !== "off" && <span className="agv-chip line"><Ph name="arrows-clockwise" size={13} />Relaunch: {MODE_WORDS[d.relaunch.mode]}</span>}
         {canSync > 0 && <span className="agv-chip ok"><Ph name="arrows-clockwise" size={13} />{canSync} can sync</span>}
         {d.beacon.mode !== "off" && <span className="agv-chip line"><Ph name="chat-circle-text" size={13} />Beacon: {MODE_WORDS[d.beacon.mode]}</span>}
@@ -123,7 +131,7 @@ export function PullRequestsSection({ root, settings, items, error, onChanged }:
       {items?.uncharted && (
         <Empty icon="warning-circle" title="Polaris cannot read the pull requests">{items.uncharted}</Empty>
       )}
-      {items && !items.uncharted && sorted.length === 0 && (
+      {!quietEmpty && items && !items.uncharted && all.length === 0 && (
         <Empty icon="check-circle" title="No open pull requests">When one opens in this repository, it is filed here with a reason.</Empty>
       )}
       {sorted.length > 0 && (
@@ -138,6 +146,7 @@ export function PullRequestsSection({ root, settings, items, error, onChanged }:
                 <div className="pr-t">
                   <b title={v.title}>{v.title}</b>
                   <div className="mut">{v.sentence}{v.note ? ` ${v.note}` : ""}{v.waitsOn ? ` Waits on ${v.waitsOn}.` : ""}</div>
+                  {v.signals.map((s) => <div className="pr-sig" key={`${s.kind}:${s.text}`} data-signal={s.kind}>{s.text}</div>)}
                 </div>
                 <CourseButton item={i} v={v} root={root} settings={settings} bases={items?.bases} onChanged={onChanged} />
               </div>
@@ -145,6 +154,7 @@ export function PullRequestsSection({ root, settings, items, error, onChanged }:
           })}
         </div>
       )}
+      {compact && <div style={{ marginTop: 8 }}><Button size="compact" tone="quiet" onClick={() => openSettings("polarisPrs")}>Open Polaris{all.length > sorted.length ? ` (${all.length - sorted.length} more)` : ""}</Button></div>}
     </div>
   );
 }
@@ -208,7 +218,7 @@ function BeaconDraft({ item, root, match, panes, onChanged }: { item: PolarisIte
 export function PolarisWaiting({ root, settings, items, panes, onChanged }: {
   root: string; settings: SettingsAnswer | null; items: ItemsAnswer | null; panes: { id: string; label: string }[]; onChanged: () => void;
 }) {
-  if (!settings?.enabled || !items) return null;
+  if (!settings || !enabledOf(settings) || !items) return null;
   const rows = waitingOnYou(items.items, settings.doors);
   return (
     <>
@@ -218,6 +228,7 @@ export function PolarisWaiting({ root, settings, items, panes, onChanged }: {
           <div className="card ask q" id={`polaris-beacon-${i.number}`} key={`polaris-${i.number}`}><div className="rail" /><div className="in">
             <div className="t"><span className="badge"><Ph name="compass" size={18} /></span><b title={v.title}>#{v.number} {v.title}</b><span className={`agv-chip ${v.tone}`}>{v.cls}</span></div>
             <div className="what" style={{ fontSize: 14 }}>{v.sentence}</div>
+            {v.signals.map((s) => <div className="pr-sig" key={`${s.kind}:${s.text}`} data-signal={s.kind}>{s.text}</div>)}
             {beaconOf(i).draft ? <BeaconDraft item={i} root={root} match={String(settings.doors.match.mode)} panes={panes} onChanged={onChanged} />
               : <div className="acts"><CourseButton item={i} v={v} root={root} settings={settings} bases={items.bases} onChanged={onChanged} /></div>}
           </div></div>

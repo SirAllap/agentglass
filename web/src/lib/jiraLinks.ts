@@ -9,8 +9,12 @@
  * not on every render.
  */
 import { api } from "./api.ts";
+import { forgetPrefix, load, markStale, peek, writePush } from "./remoteStore.ts";
 import type { CardDevPr, CardWebLink } from "../../../shared/providers.ts";
 import { prMentions } from "../../../shared/taskref.ts";
+
+/** A card is held under the account that read it: the same key on two accounts is two cards. */
+const K = (key: string, repo?: string) => `jira-links:${repo ? `${repo}\n${key}` : key}`;
 
 /** Where a row came from: a real remote link, or an address somebody wrote in the card's words. */
 export type LinkWhere = "link" | "comment" | "description" | "dev";
@@ -19,40 +23,32 @@ export interface JiraLink { url: string; number: number; title: string; resolved
 export type JiraLinks = { links: JiraLink[]; web: CardWebLink[]; error: string };
 
 const TTL_MS = 60_000;
-const held = new Map<string, { at: number; value: JiraLinks }>();
-const pending = new Map<string, Promise<JiraLinks>>();
 const listeners = new Set<() => void>();
 let version = 0;
 const changed = () => { version++; for (const f of listeners) f(); };
 
 /** What is held for a card, without asking: the pane's tab counter reads this and costs no request. */
-export function peekJiraLinks(key: string): JiraLinks | null { return held.get(key)?.value ?? null; }
+export function peekJiraLinks(key: string, repo?: string): JiraLinks | null { return peek<JiraLinks>(K(key, repo)).value ?? null; }
 export function onJiraLinks(fn: () => void): () => void { listeners.add(fn); return () => { listeners.delete(fn); }; }
 export function jiraLinksVersion(): number { return version; }
 
 /** The card's links: from memory while fresh, otherwise one request, shared by whoever asks meanwhile. */
-export function readJiraLinks(key: string): Promise<JiraLinks> {
-  const hit = held.get(key);
-  if (hit && Date.now() - hit.at < TTL_MS) return Promise.resolve(hit.value);
-  const going = pending.get(key);
-  if (going) return going;
-  const p = api.jiraLinks(key)
+export function readJiraLinks(key: string, repo?: string): Promise<JiraLinks> {
+  return load(K(key, repo), () => api.jiraLinks(key, repo)
     .then((r): JiraLinks => ({ links: r?.ok ? r.links ?? [] : [], web: r?.ok ? r.web ?? [] : [], error: r?.ok ? "" : r?.error || "Jira did not answer" }))
     .catch((): JiraLinks => ({ links: [], web: [], error: "Could not reach the server" }))
-    .then((value) => { held.set(key, { at: Date.now(), value }); pending.delete(key); changed(); return value; });
-  pending.set(key, p);
-  return p;
+    .then((v) => { changed(); return v; }), TTL_MS);
 }
 
 /** A write just put this link on the card: what the card now carries, without asking again. */
-export function addJiraLink(key: string, link: JiraLink): JiraLinks {
-  const cur = held.get(key)?.value ?? { links: [], web: [], error: "" };
+export function addJiraLink(key: string, link: JiraLink, repo?: string): JiraLinks {
+  const cur = peek<JiraLinks>(K(key, repo)).value ?? { links: [], web: [], error: "" };
   const value = {
     links: cur.links.some((l) => l.url === link.url) ? cur.links : [...cur.links, link],
     web: cur.web.some((w) => w.url === link.url) ? cur.web : [...cur.web, { id: link.url, url: link.url, title: link.title, host: new URL(link.url).host, pr: true }],
     error: "",
   };
-  held.set(key, { at: Date.now(), value });
+  writePush<JiraLinks>(K(key, repo), value);
   changed();
   return value;
 }
@@ -62,17 +58,17 @@ export function addJiraLink(key: string, link: JiraLink): JiraLinks {
  * are the rows whose address is still there; one the write ADDED is not in `links` yet (its number and state come from a read),
  * so that card is read again in the background and the Development tab catches up.
  */
-export function setJiraWeb(key: string, web: CardWebLink[]): JiraLinks {
-  const cur = held.get(key)?.value ?? { links: [], web: [], error: "" };
+export function setJiraWeb(key: string, web: CardWebLink[], repo?: string): JiraLinks {
+  const cur = peek<JiraLinks>(K(key, repo)).value ?? { links: [], web: [], error: "" };
   const value = { links: cur.links.filter((l) => web.some((w) => w.url === l.url)), web, error: "" };
   const adds = web.some((w) => w.pr && !cur.links.some((l) => l.url === w.url));
-  held.set(key, { at: adds ? 0 : Date.now(), value });
+  writePush<JiraLinks>(K(key, repo), value);
   changed();
-  if (adds) void readJiraLinks(key);
+  if (adds) { markStale(K(key, repo)); void readJiraLinks(key, repo); }
   return value;
 }
 
-export function forgetJiraLinks(): void { held.clear(); pending.clear(); changed(); }
+export function forgetJiraLinks(): void { forgetPrefix("jira-links:"); changed(); }
 
 /** Most rows the tab will hold: a card quoting a whole release's pull requests is not a list of its own. */
 export const MENTION_CAP = 20;

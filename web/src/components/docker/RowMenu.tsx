@@ -22,7 +22,7 @@ export function Item({ icon, label, kbd, disabled, reason, danger, onClick }: {
   icon: ReactNode; label: string; kbd?: string; disabled?: boolean; reason?: string; danger?: boolean; onClick: () => void;
 }) {
   return (
-    <button type="button" role="menuitem" className="dk-mi" disabled={disabled} title={reason} data-danger={danger || undefined} onClick={onClick}>
+    <button type="button" role="menuitem" className="dk-mi" disabled={disabled} data-tip={reason} data-danger={danger || undefined} onClick={onClick}>
       {icon}<span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>{kbd ? <span className="r"><kbd>{kbd}</kbd></span> : null}
     </button>
   );

@@ -25,7 +25,7 @@ const WHY_NOT = "\u0000why";
  * moved says so in the list instead of showing an empty one. `updated` rides along with the write, so a card that changed while
  * this was open comes back as a conflict.
  */
-export function TrackerStatusPick({ tracker, task, query, onSaid, onTask, align, chip }: {
+export function TrackerStatusPick({ tracker, task, query, onSaid, onTask, align, chip, repo }: {
   tracker: Tracker; task: ProviderTask; query: string; onSaid: (s: string) => void;
   /** Which edge of the control the list lines up with: `right` where the control sits at the end of a row. */
   align?: "left" | "right";
@@ -33,16 +33,18 @@ export function TrackerStatusPick({ tracker, task, query, onSaid, onTask, align,
   onTask?: (t: ProviderTask) => void;
   /** Draw the closed control as the card's state chip of this height (the card dock's), not as the status pill. */
   chip?: number;
+  /** The repo the card is seen from: the account it chose reads and writes, not the default's. */
+  repo?: string;
 }) {
   const [opts, setOpts] = useState<StatusOptionsResult | null>(null);
   const [busy, setBusy] = useState(false);
   const form = useMoveForm();
   const load = useCallback(() => {
     if (opts !== null) return;
-    void tracker.statusOptions(task)
+    void tracker.statusOptions(task, repo)
       .then(setOpts)
       .catch(() => setOpts({ ok: false, error: "Could not reach the server" }));
-  }, [opts, tracker, task]);
+  }, [opts, tracker, task, repo]);
   // A card that moved has different moves from here; what was read is no longer its list.
   useEffect(() => { setOpts(null); }, [task.status, task.updated, tracker.id]);
 
@@ -67,7 +69,7 @@ export function TrackerStatusPick({ tracker, task, query, onSaid, onTask, align,
         card: { key: task.customId || task.id, title: task.title, status: task.status, statusColor: task.statusColor || undefined },
         to: { status: opt.toStatus, color: opt.color },
         fields: opt.fields,
-        run: (values) => tracker.setStatus(task, opt, values),
+        run: (values) => tracker.setStatus(task, opt, values, repo),
       });
       if (asked?.ok) {
         onSaid(`now ${opt.toStatus}`);
@@ -78,7 +80,7 @@ export function TrackerStatusPick({ tracker, task, query, onSaid, onTask, align,
     }
     setBusy(true);
     onSaid("moving…");
-    const r = await tracker.setStatus(task, opt);
+    const r = await tracker.setStatus(task, opt, undefined, repo);
     setBusy(false);
     onSaid(r.ok ? `now ${opt.toStatus}` : `!${r.conflict ? "somebody changed this card while you had it open" : r.error || "the tracker refused that"}`);
     if (r.ok) putCard(query, r.task);

@@ -94,7 +94,7 @@ describe("the rail's width", () => {
     expect(src).toContain('const RAIL_W_KEY = "agentglass.clickup.listRail.width";');
     expect(src).toContain('aria-label="Resize the list menu"');
     expect(src).toContain('e.key === "ArrowRight") { e.preventDefault(); setRailW(');
-    expect(src, "no easing while the pointer is dragging it").toContain('transition: railDrag ? "none"');
+    expect(src, "no easing while the pointer is dragging it").toContain('transition: railDrag || railPeek ? "none"');
   });
 });
 
@@ -131,7 +131,7 @@ describe("the rail on screen", () => {
 
   it("gives every row the full name as a tooltip, so a cut name can be read", () => {
     const b = railBlock();
-    expect(b).toContain("title={r.title}");
+    expect(b).toContain("data-tip={r.title}");
     // The row's title is built from the whole name and its place, not from the drawn label.
     expect(b).toContain("`${crumb}${v.listName && v.name !== v.listName ? `${v.listName} · ${v.name}` : v.name}`");
     expect(b).toContain('className="truncate min-w-0 flex-1"');

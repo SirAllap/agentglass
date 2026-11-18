@@ -11,6 +11,7 @@
  * a test can pin them without rendering the screen.
  */
 import { api, type ManifestRead } from "./api.ts";
+import { intervalWhileVisible } from "./visibleInterval.ts";
 import type {
   ManifestInProgress, ManifestProject, ManifestRow, ManifestStartWrite, ManifestSummaryProject, ManifestWrite,
 } from "../../../shared/manifest.ts";
@@ -146,15 +147,8 @@ export async function refreshSummary(): Promise<void> {
 
 function startPolling(): void {
   if (stopped) return;
-  const ask = () => { if (!document.hidden) void refreshSummary(); };
-  const id = setInterval(ask, SUMMARY_MS);
-  window.addEventListener("focus", ask);
-  document.addEventListener("visibilitychange", ask);
-  stopped = () => {
-    clearInterval(id);
-    window.removeEventListener("focus", ask);
-    document.removeEventListener("visibilitychange", ask);
-  };
+  // Visible is enough: a window on a second monitor has no focus but is still looked at.
+  stopped = intervalWhileVisible(() => { void refreshSummary(); }, SUMMARY_MS);
   void refreshSummary();
 }
 

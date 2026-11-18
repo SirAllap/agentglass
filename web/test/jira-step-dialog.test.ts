@@ -73,7 +73,8 @@ describe("StepDialog before the press", () => {
     expect(html).toContain('role="dialog"');
     expect(html).toContain('aria-modal="true"');
     expect(html).toContain('aria-label="Move ORBIT-1042 to In Review"');
-    expect(html).toContain('title="waiting"');
+    expect(html).toContain('aria-label="waiting"');
+    expect(html).toContain('data-tip="waiting"');
   });
 
   test("switched off: it says why, and the button cannot run it", () => {
@@ -92,6 +93,39 @@ describe("StepDialog before the press", () => {
     expect(asked).toContain('data-asked=""');
     for (const w of ["Move to", "Take off", "Give it to", "Comment"]) expect(asked).toContain(w);
     expect(asked).toContain("Leave as is");
+  });
+});
+
+describe("the Give it to question", () => {
+  const ada = { key: "acc-0001", writeKey: "acc-0001", name: "Ada Tester", initials: "AT", me: true };
+  const lin = { key: "acc-0003", writeKey: "acc-0003", name: "Lin Tester", initials: "LT" };
+  const pair = { login: "ada-dev", accountId: "acc-0003", name: "Lin Tester", n: 2, at: 1 };
+  const asking = (b: StepDialogSpec["blocks"][number], over: Partial<StepDialogSpec> = {}) => draw(spec({
+    verb: "Move to Code review", to: "Code review", blocks: [{ type: "move", statusNames: ["Code review"] }, b],
+    asks: { status: false, clear: false, assign: true, comment: false }, moves: [], people: [ada, lin],
+    reviewers: ["ada-dev"], pairs: [pair], ...over,
+  }));
+
+  test("Start at me: the question opens on the person pressing it", () => {
+    const html = asking({ type: "assign", who: "me", ask: true });
+    expect(html).toContain("data-pick-assign");
+    expect(html).toContain("Assign the card to Ada Tester, replacing whoever is assigned");
+  });
+
+  test("Start at the reviewer: the question opens on the account learned for the pull request's reviewer", () => {
+    const html = asking({ type: "assign", who: "reviewer", ask: true });
+    expect(html).toContain("Assign the card to Lin Tester, replacing whoever is assigned");
+  });
+
+  test("Start at nobody, or no pair known: nothing is pre-picked, and the row says so whole", () => {
+    for (const html of [
+      asking({ type: "assign", who: "none", ask: true }),
+      asking({ type: "assign", who: "reviewer", ask: true }, { reviewers: [], pairs: [] }),
+    ]) {
+      expect(html).toContain("Leave as is");
+      expect(html).toContain("Nobody is picked, so the assignee stays as it is");
+      expect(html).not.toContain("Nothing happens here");
+    }
   });
 });
 
@@ -131,7 +165,7 @@ describe("the title and the footer", () => {
  * and its motion stops when the person asked for none.
  */
 const read = (p: string) => Bun.file(new URL(p, import.meta.url)).text();
-const SRC = { dialog: await read("../src/components/jira/JiraStepDialog.tsx"), card: await read("../src/components/StepCard.tsx"), buttons: await read("../src/components/jira/JiraStepButtons.tsx"), css: await read("../src/index.css"), face: await read("../src/components/AssignPicker.tsx"), trap: await read("../src/lib/focusTrap.ts") };
+const SRC = { dialog: await read("../src/components/jira/JiraStepDialog.tsx"), pick: await read("../src/components/jira/JiraPeoplePick.tsx"), card: await read("../src/components/StepCard.tsx"), buttons: await read("../src/components/jira/JiraStepButtons.tsx"), css: await read("../src/index.css"), face: await read("../src/components/AssignPicker.tsx"), trap: await read("../src/lib/focusTrap.ts") };
 const code = (s: string) => s.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
 
 describe("a person's picture", () => {
@@ -159,6 +193,10 @@ describe("the dialog's promises", () => {
     expect(code(SRC.dialog)).toContain('if (phase !== "running") onDone');
   });
 
+  test("Escape in the people box closes the list, not the dialog", () => {
+    expect(code(SRC.dialog)).toContain("if (assignOpen) return;");
+  });
+
   test("it uses the house tokens, not sizes of its own", () => {
     expect(code(SRC.dialog)).toContain("ICON.lg");
     expect(code(SRC.dialog)).toMatch(/var\(--surface-card\)/);
@@ -179,5 +217,14 @@ describe("the dialog's promises", () => {
   test("the buttons no longer ask through the plain confirm", () => {
     expect(code(SRC.buttons)).not.toContain("useDialogs");
     expect(code(SRC.buttons)).toContain("useStepDialog");
+  });
+
+  test("the people are picked in the house picker: the same box as everywhere, and it opens above the summary", () => {
+    expect(code(SRC.dialog)).toContain("<JiraPeoplePick");
+    expect(code(SRC.pick)).toContain("<PeoplePick");
+    // The row sits over the summary: the list opens upward so the summary stays readable.
+    expect(code(SRC.pick)).toContain('prefer="above"');
+    // The site's list is never short enough to do without the box.
+    expect(code(SRC.pick)).toContain("filterOver={0}");
   });
 });

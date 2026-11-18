@@ -128,7 +128,7 @@ export function PluginsView({ active }: { active: boolean }) {
                     ? <PluginMark name={p.plugin} icon={p.hasIcon ? "icon" : undefined} color={p.color ?? undefined} size={ICON.lg} stamp={p.stamp} />
                     : <PanelGlyph icon={p.icon} size={ICON.sm} />}
                   {p.title}
-                  {!p.running && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--text4)" }} title="not running" />}
+                  {!p.running && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--text4)" }} data-tip="not running" role="img" aria-label="not running" />}
                 </span>
               ),
             }))} />
@@ -140,7 +140,7 @@ export function PluginsView({ active }: { active: boolean }) {
               {current.plugin}
             </span>
             <span style={{ color: "var(--text4)" }}>·</span>
-            <span className="truncate max-w-[18ch]" title={`Published by ${current.publisher} — not verified`}>{current.publisher}</span>
+            <span className="truncate max-w-[18ch]" data-tip={`Published by ${current.publisher} — not verified`}>{current.publisher}</span>
             <Button size="compact" onClick={() => openSettings(`plugin:${current.plugin}`)} className="ml-1">Settings</Button>
           </div>
         )}

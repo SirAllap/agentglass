@@ -39,7 +39,7 @@ describe("the Jira connection form", () => {
     for (const name of ["jiraConnect", "jiraStatus", "jiraWrites"]) {
       expect(api.split(`${name}:`).length - 1, name).toBe(2);
     }
-    expect(api).toContain('post<JiraConnectResult>("/jira/connect", { email, site, token })');
+    expect(api).toContain('post<JiraConnectResult>("/jira/connect", { email, site, token, ...(accountKey ? { accountKey } : null) })');
     expect(api).not.toMatch(/\/jira\/[a-z]+\?[^"`]*token/);
   });
 });

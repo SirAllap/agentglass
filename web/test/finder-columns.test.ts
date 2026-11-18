@@ -88,7 +88,7 @@ describe("the column edge", () => {
   });
   test("every row keeps its full name on hover", async () => {
     const t = await Bun.file(new URL("../src/components/finder/machine/Column.tsx", import.meta.url)).text();
-    expect(t).toContain("title={r.why ?? r.name}");
+    expect(t).toContain("data-tip={r.why ?? r.name}");
   });
 });
 

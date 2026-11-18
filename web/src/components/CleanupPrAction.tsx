@@ -10,8 +10,9 @@ import { api } from "../lib/api.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { modeOf } from "../lib/cleanupSettings.ts";
 import { actionView, leftAfter, showsAction, type Plan } from "../lib/cleanupPr.ts";
-import { offerFor, stateOfPlan } from "../lib/leftovers.ts";
+import { offerFor, autoRunOf, barFor, onDisk, stateOfPlan } from "../lib/leftovers.ts";
 import { isRunning, subscribeRuns } from "../lib/cleanupEvents.ts";
+import { useAutoEntry } from "../lib/leftoversStore.ts";
 import { LockIcon, SparkleIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { CleanupDialog } from "./CleanupDialog.tsx";
 import "./cleanupPr.css";
@@ -24,6 +25,7 @@ export function CleanupPrAction({ root, pr, state }: { root: string; pr: number;
   /* Bytes the last run of this PR removed: with nothing left the badge says "Cleaned up", not "No leftovers". */
   const [freed, setFreed] = useState<number | null>(null);
   const [busy, setBusy] = useState(() => isRunning(root, pr));
+  const auto = useAutoEntry(root, pr);
   const seq = useRef(0);
   const planRef = useRef<Plan | null>(null);
   planRef.current = plan;
@@ -61,17 +63,28 @@ export function CleanupPrAction({ root, pr, state }: { root: string; pr: number;
   if (!on) return null;
   const v = actionView(plan, freed);
   /* One rule for every surface (lib/leftovers.ts): a button only when the plan has a real item; reading and a failed read draw none. */
-  const offer = offerFor(stateOfPlan(plan, failed), "panel");
+  const left = stateOfPlan(plan, failed);
+  const offer = offerFor(left, "panel");
+  /* With Automatic on, this PR's own run in the Housekeeping entries speaks here and the manual button stays away. */
+  const bar = barFor({ mode: mode ?? "off", run: onDisk(autoRunOf(auto), left), leftovers: offer.button }, "panel");
   return (
     <div className="agx-cp" data-cleanup-action="">
-      <span className="agx-cp-fl"><LockIcon size={ICON.sm} /><span>{v.blocked ? `Blocked: ${v.blocked}` : "Nothing on GitHub changes"}</span></span>
-      {offer.skeleton && <i className="agx-sk" aria-hidden style={{ width: 96, height: 18 }} />}
+      <span className="agx-cp-fl" data-wait={bar.wait ? "1" : undefined} title={bar.wait ? bar.title : undefined}>
+        {bar.wait ? <SparkleIcon size={ICON.sm} /> : <LockIcon size={ICON.sm} />}
+        <span>{bar.wait ? bar.text : v.blocked ? `Blocked: ${v.blocked}` : "Nothing on GitHub changes"}</span>
+      </span>
+      {offer.skeleton && !bar.text && <i className="agx-sk" aria-hidden style={{ width: 96, height: 18 }} />}
       {offer.muted && offer.chip && <span className="agx-cp-badge" data-tone="none" title={offer.tooltip}><WarningIcon size={ICON.xs} />{offer.chip}</span>}
-      {plan && v.badge && <span className="agx-cp-badge" data-tone={v.tone} title={offer.tooltip || undefined}>{v.tone !== "none" && <SparkleIcon size={ICON.xs} />}{v.badge}</span>}
-      {offer.button && <button type="button" className={`agx-cln-btn primary agx-cp-btn`} data-status="ready" data-strong={v.strong ? "" : undefined}
+      {bar.text && !bar.wait && <span className="agx-cp-badge" data-tone={bar.tone ?? "none"} title={bar.title}>{bar.text}</span>}
+      {plan && v.badge && !bar.text && <span className="agx-cp-badge" data-tone={v.tone} title={offer.tooltip || undefined}>{v.tone !== "none" && <SparkleIcon size={ICON.xs} />}{v.badge}</span>}
+      {offer.button && bar.button && <button type="button" className={`agx-cln-btn primary agx-cp-btn`} data-status="ready" data-strong={v.strong ? "" : undefined}
         disabled={busy || !!v.blocked} onClick={() => setOpen(true)}
         title={v.blocked || "See what would be removed from this computer. Nothing is removed until you confirm."}>
         <SparkleIcon size={ICON.xs} />{busy ? "Cleaning up\u2026" : "Clean up local leftovers"}
+      </button>}
+      {bar.retry && <button type="button" className="agx-cln-btn primary agx-cp-btn" data-status="retry" disabled={busy} onClick={() => setOpen(true)}
+        title={`${bar.title} See what would be removed from this computer. Nothing is removed until you confirm.`}>
+        <SparkleIcon size={ICON.xs} />{busy ? "Cleaning up\u2026" : "Retry cleanup"}
       </button>}
       {open && <CleanupDialog repo={root} pr={pr} onClose={() => setOpen(false)} />}
     </div>

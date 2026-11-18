@@ -44,7 +44,7 @@ export function GoCard({ plan, run, pilot, handled, question, busy, error, popov
   const t = text.trim();
   const why = goBlocker(plan);
   const open = openCount(run);
-  const x = onClose && popover ? <button type="button" className="gc-x" aria-label="Close" title="Close (Esc)" onClick={onClose}><CrossIcon size={ICON.sm} /></button> : null;
+  const x = onClose && popover ? <button type="button" className="gc-x" aria-label="Close" data-tip="Close (Esc)" onClick={onClose}><CrossIcon size={ICON.sm} /></button> : null;
   const tile = (icon: React.ReactNode) => <span className="gc-tile" aria-hidden="true">{icon}</span>;
 
   if (variant === "decided") {
@@ -74,7 +74,7 @@ export function GoCard({ plan, run, pilot, handled, question, busy, error, popov
     const n = question.choices.length;
     return (
       <section className="gc" data-v="question" aria-label={`One question from the orchestrator about ${plan.title}`}>
-        <div className="gc-h">{tile(<HandIcon size={ICON.sm} />)}<div><div className="gc-t" title={plan.title}>{plan.title}</div><div className="gc-from">asked by <b>the orchestrator</b>{run ? " · after Preflight" : ""} · {hhmm(question.askedAt)}</div></div><span className="gc-badge">1 question</span>{x}</div>
+        <div className="gc-h">{tile(<HandIcon size={ICON.sm} />)}<div><div className="gc-t" data-tip={plan.title}>{plan.title}</div><div className="gc-from">asked by <b>the orchestrator</b>{run ? " · after Preflight" : ""} · {hhmm(question.askedAt)}</div></div><span className="gc-badge">1 question</span>{x}</div>
         <h3>{question.text}</h3>
         {question.detail && <p className="gc-ctx">{question.detail}</p>}
         <form onSubmit={(e) => { e.preventDefault(); if (document.activeElement === textRef.current && t) send({ text: t }); else if (pick) send({ choiceId: pick }); else if (t) send({ text: t }); }}>
@@ -106,10 +106,11 @@ export function GoCard({ plan, run, pilot, handled, question, busy, error, popov
   const answers = handled.fixed + handled.contested + handled.dismissed;
   return (
     <section className="gc" data-v="go" aria-label={`Go or No-go: ${plan.title}`}>
-      <div className="gc-h">{tile(<FlagIcon size={ICON.sm} />)}<div><div className="gc-t" title={plan.title}>{plan.title}</div><div className="gc-from">ready · {answers ? <><b>the orchestrator</b> answered {plural(answers, "finding")}</> : "nothing to answer"} · {PILOT_NAME[pilot]}</div></div><span className="gc-badge">Go?</span>{x}</div>
-      <h3 title={plan.title}>{plan.state === "go" ? `Launch “${plan.title}”?` : `Go for “${plan.title}”?`}</h3>
+      <div className="gc-h">{tile(<FlagIcon size={ICON.sm} />)}<div><div className="gc-t" data-tip={plan.title}>{plan.title}</div><div className="gc-from">ready · {answers ? <><b>the orchestrator</b> answered {plural(answers, "finding")}</> : "nothing to answer"} · {PILOT_NAME[pilot]}</div></div><span className="gc-badge">Go?</span>{x}</div>
+      <h3 data-tip={plan.title}>{plan.state === "go" ? `Launch “${plan.title}”?` : `Go for “${plan.title}”?`}</h3>
       <p className="gc-ctx">{goSentence(plan, run)}</p>
-      {plan.launch && (
+      {plan.launch?.engine && <p className="gc-ctx gc-model"><span>{plan.launch.why}</span></p>}
+      {plan.launch && !plan.launch.engine && (
         <p className="gc-ctx gc-model">
           <label>Model <select aria-label="The model this builder starts on" value={model} disabled={busy} onChange={(e) => setModel(e.target.value)}>
             {BUILDER_MODELS.map((m) => <option key={m} value={m}>{modelLabel(m)}</option>)}
@@ -122,7 +123,7 @@ export function GoCard({ plan, run, pilot, handled, question, busy, error, popov
         <div className="gc-free">
           <input ref={textRef} className={INPUT} style={INPUT_STYLE} aria-label="No-go reason, optional" placeholder="No-go reason (optional) — it goes to the orchestrator" value={text} disabled={busy} onChange={(e) => setText(e.target.value)} />
           <button type="button" className="btn nogo field" disabled={busy} onClick={() => onNoGo(t)}>No-go</button>
-          <button type="button" className="btn go" data-big disabled={busy || !canGo(plan)} title={why ?? undefined} onClick={() => onGo(model && model !== plan.launch?.model ? model : undefined)}><PlaneIcon size={ICON.sm} />{plan.state === "go" ? "Launch" : "Go"}</button>
+          <button type="button" className="btn go" data-big disabled={busy || !canGo(plan)} data-tip={why ?? undefined} onClick={() => onGo(model && model !== plan.launch?.model ? model : undefined)}><PlaneIcon size={ICON.sm} />{plan.state === "go" ? "Launch" : "Go"}</button>
         </div>
       </form>
       <p className="gc-err" role="alert">{error}</p>
@@ -140,7 +141,7 @@ export function Certificate({ run, cap, withPlan }: { run: Run; cap: number; wit
   const at = new Date(c.createdAt);
   return (
     <div className="cert">
-      <div className="hd"><span className="seal"><SealIcon size={14} /></span><b>Preflight certificate</b><span style={{ fontSize: 10.1, color: "var(--text3)" }}>{at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}</span></div>
+      <div className="hd"><span className="seal"><SealIcon size={ICON.sm} /></span><b>Preflight certificate</b><span style={{ fontSize: 10.1, color: "var(--text3)" }}>{at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}</span></div>
       <div className="big">Saw <em>no conversation</em>. Read <em>{read === 1 ? "this file" : `these ${read} files`}</em>, nothing else.</div>
       <div className="files">
         {files.map((f) => <div key={f.path} className="file"><span>{f.shown.split("/").slice(-3).join("/")}</span><span>{kb(f.bytes)} · {f.sha256.slice(0, 4)}…</span></div>)}

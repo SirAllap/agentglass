@@ -71,7 +71,7 @@ describe("repaint on show", () => {
     const at = panel.indexOf("browserShown({");
     expect(at).toBeGreaterThan(-1);
     const eff = panel.slice(panel.lastIndexOf("useEffect(", at), panel.indexOf("[viewOn]);", at));
-    expect(eff).toContain("!viewOn || scope");
+    expect(eff).toContain("!viewOn || !HAS_BROWSER");
     expect(eff).toContain("calc(100% - 1px)");
     expect(eff).toContain("r.painted");
   });

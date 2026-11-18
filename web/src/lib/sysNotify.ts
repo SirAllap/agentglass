@@ -43,6 +43,8 @@ export type SystemNote = {
    *  than a counter beside the list, so a row that is superseded, cleared,
    *  dismissed or muted takes its count with it. */
   unread?: true;
+  /** A test note from Settings ▸ Notifications (or `agentglass-ui notify test`): the card says "Test" and a waiting one only offers Dismiss. */
+  test?: true;
   /**
    * Somewhere in THIS app the note is about.
    *
@@ -97,6 +99,12 @@ export type SystemNote = {
      */
     | { kind: "settings"; pane: string }
     /**
+     * A web page, opened in the agentglass browser (a Jira issue or a pull
+     * request still lands in its own view — see linkRouter's openNoteLink).
+     * The default browser only for what the agentglass browser refuses.
+     */
+    | { kind: "web"; url: string }
+    /**
      * A file (or a folder) in a checkout, shown in Files.
      *
      * For the notes whose news is a document: a report that was written, an
@@ -121,7 +129,12 @@ export type NotifyCapability = {
 };
 
 import { gitDestination } from "./gitNote.ts";
-import { DESKTOP, deliveryFor, mutedSources, sourceOf, subscribeMuted, type Delivery } from "./notePolicy.ts";
+import { DESKTOP, OUR_RULE, TEST_APP, TEST_GATE_KEY, testOutcome, type TestBy, type TestKind, appRules, deliveryFor, mutedSources, ruleFor, setAppRule, sourceOf, subscribeAppRules, subscribeMuted, whereItShows, type Delivery, type PolicyState, type Surface } from "./notePolicy.ts";
+import { attentionNow, refreshDesktopDnd, screenNow } from "./desktopDnd.ts";
+import { onTestNoteAsked } from "./notifyTestDoor.ts";
+
+/** Everything deliveryFor reads, as it stands right now. */
+const policyNow = (): PolicyState => ({ muted: mutedSources(), quiet: notifyQuiet(), silence: getNotifyPrefs().none, rules: appRules() });
 import { NOTIFY_VOICES, findVoice, playVoice } from "./sounds.ts";
 
 /* ---------------------------------------------------------------------------
@@ -165,7 +178,12 @@ const DETAIL_KEY = "agentglass.sysNotify.detail";
 /** Off unless asked for. Reading every notification you receive is not a
  *  default anyone should be opted into. */
 export function sysNotifyMode(): SysNotifyMode {
-  const v = localStorage.getItem(KEY);
+  let v: string | null = null;
+  try {
+    v = typeof localStorage === "undefined" ? null : localStorage.getItem(KEY);
+  } catch {
+    // Storage blocked or absent: fall back to the default.
+  }
   return v === "full" || v === "titles" ? v : "off";
 }
 
@@ -218,16 +236,16 @@ export function subscribeSysNotifyMode(fn: (m: SysNotifyMode) => void): () => vo
 //     to look.
 // ---------------------------------------------------------------------------
 
-const APP_KEY = "agentglass.appNotify";
-
 /** On unless turned off: these are the app's own events, and someone running a
  *  fleet cockpit installed it to be told about them. */
 export function appNotify(): boolean {
-  return localStorage.getItem(APP_KEY) !== "0";
+  // Read through the per-app rule now ("agentglass news: Pop up / Bell only").
+  // The old key is migrated into that rule on first read — see notePolicy.ts.
+  return ruleFor(OUR_RULE, appRules()) === "popup";
 }
 
 export function setAppNotify(on: boolean) {
-  localStorage.setItem(APP_KEY, on ? "1" : "0");
+  setAppRule(OUR_RULE, on ? "popup" : "bell");
   /*
    * The one place this app has ever had to ask, and until now it never did.
    *
@@ -252,13 +270,10 @@ export function setAppNotify(on: boolean) {
    * not this one.
    */
   if (on) void askNotifyPermission();
-  for (const fn of appListeners) fn(on);
 }
 
-const appListeners = new Set<(on: boolean) => void>();
 export function subscribeAppNotify(fn: (on: boolean) => void): () => void {
-  appListeners.add(fn);
-  return () => appListeners.delete(fn);
+  return subscribeAppRules(() => fn(appNotify()));
 }
 
 /**
@@ -274,7 +289,7 @@ export function subscribeAppNotify(fn: (on: boolean) => void): () => void {
  * else — a turn that finished, commits to pull, checks that went green — waits
  * for you in the bell.
  */
-export const shouldInterrupt = (urgent: boolean): boolean => urgent || (appNotify() && !notifyQuiet());
+export const shouldInterrupt = (urgent: boolean): boolean => urgent || (appNotify() && !notifyQuiet() && !getNotifyPrefs().none);
 
 // ---------------------------------------------------------------------------
 // Quiet.
@@ -311,11 +326,11 @@ const QUIET_KEY = "agentglass.sysNotify.quiet";
  * the gate still does not travel this path at all.
  */
 export function notifyQuiet(): boolean {
-  return localStorage.getItem(QUIET_KEY) !== "0";
+  try { return localStorage.getItem(QUIET_KEY) !== "0"; } catch { return true; }
 }
 
 export function setNotifyQuiet(q: boolean) {
-  localStorage.setItem(QUIET_KEY, q ? "1" : "0");
+  try { localStorage.setItem(QUIET_KEY, q ? "1" : "0"); } catch { /* private mode */ }
   for (const fn of quietListeners) fn(q);
 }
 
@@ -574,7 +589,7 @@ export function fireDesktopAlert(a: {
   // what an alert with no promotion has meant since kindOfNotification's
   // default branch, not because it is a guess this file is making twice.
   const kind = a.notifyKind ?? "idle";
-  let said: Delivery | null = null;
+  let said: (Delivery & Surface) | null = null;
   if (notifies(prefs, kind, "bell")) {
     // A keyed situation that resolved, or changed with nothing new in it.
     // Both are about a row that is already here, and neither is news: no
@@ -623,10 +638,10 @@ export function fireDesktopAlert(a: {
     if (a.key && a.clear) dropKeyed(a.key);
     return;
   }
-  // Recorded above, drawn nowhere, unless the policy lets it interrupt — which
-  // a quiet row never does and a normal one does only with Quiet off.
+  // Recorded above (and shown as a card there when the window is on screen).
+  // The desktop popup is for a window nobody can see — see whereItShows.
   if (!notifies(prefs, kind, "desktop")) return;
-  if (said.interrupt) popupOf(a);
+  if (said.desktop) popupOf(a);
 }
 
 /**
@@ -642,7 +657,11 @@ export function fireDesktopAlert(a: {
 export function firePopupOnly(a: { title: string; body: string; urgency?: 0 | 1 | 2; pane?: string; notifyKind?: NotifyKind }) {
   const kind = a.notifyKind ?? "blocked";
   if (!notifies(getNotifyPrefs(), kind, "desktop")) return;
-  popupOf(a);
+  // On screen, gateStore's row is already a card with Allow / Deny. Hidden,
+  // one desktop popup — under DND only while "break through" is on.
+  // Keyed: this is an open hold (see waitsOnYou).
+  const n = { app: "gate", source: "gate", urgency: a.urgency ?? 2, key: "hold" };
+  if (whereItShows(n, deliveryFor(n, policyNow()), attentionNow()).desktop) popupOf(a);
 }
 
 /**
@@ -665,19 +684,26 @@ export async function deliverPendingWatchFires(): Promise<void> {
   } catch { /* the next connect asks again */ }
 }
 
+/** An asked-for watch, with the window out of sight: may it raise a desktop popup under the current DND? */
+const askedPopsOnDesktop = (): boolean => {
+  const n = { app: OUR_APP, source: "ci", urgency: 1 as const, asked: true };
+  return whereItShows(n, deliveryFor(n, policyNow()), { ...screenNow(), visible: false }).desktop;
+};
+
 /** The app's window has the person's attention right now. */
 const windowFocused = (): boolean => typeof document !== "undefined" && document.hasFocus();
 
 /**
  * Go where a notification points, in this app.
  *
- * Only a `url` leaves it, because there is no view of a bare link; everything
- * else lands in the same router the bell and the toast cards use, so one press
+ * A `url` lands in the agentglass browser (see linkRouter's openNoteLink); everything
+ * lands in the same router the bell and the toast cards use, so one press
  * from any surface ends up in the same place.
  */
 export function openTarget(t: NotifyTarget): void {
   const g = gotoOfTarget(t);
-  if (g) { goto?.(g); return; }
+  if (g && goto) { goto(g); return; }
+  // No router yet (cold start, a test): a link still opens, through the scheme check.
   if (t.kind === "url") { try { openExternal(t.url); } catch { /* no window to open one from */ } }
 }
 
@@ -689,7 +715,7 @@ export function fireWatchAlert(f: { seq: number; alertId?: string; payload?: Not
   const payload = f.payload ?? watchPayload(f);
   const dest = payload.target ? gotoOfTarget(payload.target) ?? undefined : undefined;
   const prefs = getNotifyPrefs();
-  if (!notifies(prefs, "reminders", "bell")) return;
+  if (!notifies(prefs, "reminders", "bell", { asked: true })) return;
   // Urgency 1 on the row, never 2: a 2 keeps the strip lit until it is
   // answered, which is the permanent notification this must not be. The row is
   // the durable copy; the banner below is what the person asked for, and it does
@@ -698,11 +724,13 @@ export function fireWatchAlert(f: { seq: number; alertId?: string; payload?: Not
     ...(dest ? { goto: dest } : {}) });
   // The in-app banner is the server's (an `askedalert` frame, kept until the person acts, Quiet or not): this
   // fire is the bell row above and the OS popup below.
-  if (!notifies(prefs, "reminders", "desktop")) return;
+  if (!notifies(prefs, "reminders", "desktop", { asked: true })) return;
   // A person looking at agentglass has the banner; the OS popup is for the
   // window nobody is looking at. Critical there, because it is something they
-  // asked for — it still closes itself (see popup), never pinned.
+  // asked for — it still closes itself (see popup), never pinned. Under DND it
+  // goes out only while "Agents waiting on you break through DND" is on.
   if (windowFocused()) return;
+  if (!askedPopsOnDesktop()) return;
   // The tag folds the same fire in two windows into one popup. A popup that cannot be shown says why to the server's log.
   popup({ title: payload.title, body: payload.line, urgency: 2, dest, tag: `pr-watch-${f.seq}`, entries: popupEntries(payload),
     onFail: (why) => { if (f.alertId) void api.askedOsFailed(f.alertId, why).catch(() => {}); } });
@@ -820,7 +848,8 @@ export function recordNote(n: {
   source?: string; key?: string;
   /** The person armed this by hand (a PR watch): it breaks through Quiet and mutes. */
   asked?: boolean;
-}): Delivery {
+  test?: true;
+}): Delivery & Surface {
   const note: SystemNote = {
     id: `app-${++localSeq}`,
     app: n.app,
@@ -832,11 +861,13 @@ export function recordNote(n: {
     ...(n.source ? { source: n.source } : {}),
     ...(n.key ? { key: n.key } : {}),
     ...(n.asked ? { asked: true } : {}),
+    ...(n.test ? { test: true as const } : {}),
   };
-  const said = deliveryFor(note, { muted: mutedSources(), quiet: notifyQuiet() });
+  const said = deliveryFor(note, policyNow());
+  const where = whereItShows(note, said, attentionNow());
   // Muted: not kept at all. That is what muting a source means, and the one
   // way to say it that nobody has to clear afterwards.
-  if (!said.keep) return said;
+  if (!said.keep) return { ...said, card: false, desktop: false };
   const kept = supersede(history, note);
   if (said.badge) note.unread = true;
   history = [note, ...kept].slice(0, HISTORY_MAX);
@@ -851,9 +882,32 @@ export function recordNote(n: {
   // else.
   if (said.interrupt) ding();
   historyChanged();
-  return said;
+  // An asked-for watch has its own banner (the server's `askedalert`), so no card for it too.
+  if (where.card && !note.asked) for (const fn of noteListeners) fn(note);
+  return { ...said, ...where };
 }
 let localSeq = 0;
+
+/**
+ * agentglass's own news (a PR check that went green or red): the row, and with
+ * the window out of sight one desktop popup — the "agentglass news" row of
+ * whereItShows. recordNote alone keeps the row and draws the card on screen,
+ * but a hidden window has no card, so without this the news said nothing.
+ * Pressing the popup lands where the row does.
+ */
+export function recordNews(n: Parameters<typeof recordNote>[0]): void {
+  const go = () => {
+    const said = recordNote(n);
+    if (said.desktop && getNotifyPrefs().channels.desktop) {
+      const p = alertPayload({ title: n.summary, body: n.body });
+      popup({ title: p.title, body: p.line, urgency: n.urgency ?? 1, ...(n.goto ? { dest: n.goto } : {}) });
+    }
+  };
+  // DND turned off from the bar is not pushed; a window not in front heard no
+  // focus or visibility event to re-read it. Ask the desktop first, as receiveMirrored does.
+  if (!windowFocused()) void refreshDesktopDnd().then(go);
+  else go();
+}
 
 /** A keyed situation resolved: its row goes. */
 function dropKeyed(key: string): void {
@@ -891,7 +945,7 @@ function redrawKeyed(a: { key: string; title: string; body: string; urgency?: 0 
   if (i < 0) {
     if (dismissedKeys.has(a.key)) return;
     const row = drawn();
-    if (!deliveryFor(row, { muted: mutedSources(), quiet: notifyQuiet() }).keep) return;
+    if (!deliveryFor(row, policyNow()).keep) return;
     history = [row, ...history].slice(0, HISTORY_MAX);
   } else {
     history = [...history];
@@ -1157,7 +1211,7 @@ export function receiveMirrored(n: SystemNote): void {
    */
   if (n.app && n.app.toLowerCase().startsWith(OUR_APP)) return;
   n = { ...n, source: `${DESKTOP}${(n.app || "desktop").trim().toLowerCase()}` };
-  const said = deliveryFor(n, { muted: mutedSources(), quiet: notifyQuiet() });
+  const said = deliveryFor(n, policyNow());
   if (!said.keep) return;
   // A mirrored note cannot say where it points. Read it and see.
   if (!n.goto) { const g = gitDestination(n); if (g) n = { ...n, goto: g }; }
@@ -1182,8 +1236,52 @@ export function receiveMirrored(n: SystemNote): void {
   // Collected either way; only the interruption is optional. Quiet means the
   // notch does not open for someone else's message, not that agentglass
   // stopped listening -- the list behind the notch is still complete.
-  if (said.interrupt) { ding(); for (const fn of noteListeners) fn(n); }
+  // A card only under Desktop DND: with DND off the desktop drew its own popup,
+  // and a second one from us was the double popup (whereItShows).
+  const show = () => { if (whereItShows(n, said, screenNow()).card) { ding(); for (const fn of noteListeners) fn(n); } };
+  // DND is re-read on focus and on visibility. A window that is shown but not
+  // focused hears neither, so DND turned off from the bar leaves a stale "on"
+  // and the card doubles the desktop's own popup. Ask the desktop first.
+  if (whereItShows(n, said, screenNow()).card && !windowFocused()) void refreshDesktopDnd().then(show);
+  else show();
 }
+
+/**
+ * One test note of a kind, sent through the path a real one takes, so it shows
+ * exactly where a real one would (whereItShows, Desktop DND, Silence all, the
+ * app rules). Its words say "Test" and where it was routed.
+ *
+ * The waiting kind is a row and a card only: nothing is written to the gate
+ * store, so no hold exists and nothing can be allowed or denied. Its key is
+ * TEST_GATE_KEY, which no real hold's `gate:<id>` matches.
+ */
+export function sendTestNote(kind: TestKind, by: TestBy = "person"): string {
+  const prefs = getNotifyPrefs();
+  const gates = kind === "waits"
+    ? { bell: notifies(prefs, "blocked", "bell"), desktop: notifies(prefs, "blocked", "desktop") }
+    : { bell: true, desktop: prefs.channels.desktop };
+  const { route, label, sent } = testOutcome(kind, policyNow(), attentionNow(), gates, by);
+  if (!sent) return label;
+  const body = `Routed to: ${label}`;
+  if (kind === "other") {
+    receiveMirrored({ id: `test-${++localSeq}`, app: TEST_APP, summary: "Test · Other app", body, urgency: 1, at: Date.now(), test: true });
+    return label;
+  }
+  if (kind === "waits") {
+    // Gated as a real hold is: the "blocked" kind, bell then desktop. An
+    // agent's test is news-level (urgency 1), so it never breaks through.
+    recordNote({ app: "gate", source: "gate", key: `${TEST_GATE_KEY}:${++localSeq}`, urgency: by === "agent" ? 1 : 2, test: true,
+      summary: "TEST · An agent waits on you", body: `${body}. Nothing is held: Dismiss is the only button.` });
+    if (route.desktop) popupOf({ title: "TEST · An agent waits on you", body, urgency: by === "agent" ? 1 : 2 });
+    return label;
+  }
+  // As useLive.ts records a PR check: a row, a card on screen, a desktop popup when away.
+  recordNews({ app: OUR_APP, source: "ci", urgency: 1, test: true, summary: "Test · agentglass news (a PR check)", body });
+  return label;
+}
+
+// The agent door (`notify.test`) asks through a mailbox; this module answers it.
+onTestNoteAsked((k, by) => { sendTestNote(k, by); });
 
 function attach() {
   const sock = new WebSocket(withToken(SERVER.replace(/^http/, "ws") + "/notifications"));

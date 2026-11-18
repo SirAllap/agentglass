@@ -14,7 +14,7 @@ import { api } from "../../lib/api.ts";
 import { CAN_BROWSE_FOLDER, chooseFolder } from "../../lib/desktop.ts";
 import { tildify } from "../../lib/projectsPaths.ts";
 import { FolderField } from "../projects/FolderField.tsx";
-import { addedRoots, branchLabel, repoRowsOf, reposView, repoTally, tickAll } from "../../lib/setupRepos.ts";
+import { addedRoots, branchLabel, repoRowsOf, reposView, repoTally, reposBlocked, tickAll } from "../../lib/setupRepos.ts";
 
 export interface ReposFrame {
   /** The footer's tally for this step; null falls back to the step number. */
@@ -69,7 +69,7 @@ export function ReposStep({ onFrame, onCommit, onSearch }: {
   const view = reposView(asked, answer);
   const rows = repoRowsOf(view);
   const tally = view.state === "rows" ? repoTally(ticked, rows) : null;
-  const blocked = view.state !== "rows" || tally!.n === 0;
+  const blocked = reposBlocked(view.state, tally?.n ?? 0, open.length);
 
   useEffect(() => { onFrame({ tally, blocked }); }, [tally?.n, tally?.of, blocked, onFrame]);
 
@@ -141,7 +141,7 @@ export function ReposStep({ onFrame, onCommit, onSearch }: {
         <>
           <div className="setup-folder">
             <span className="setup-folder-mark" aria-hidden="true"><Folder /></span>
-            <code title={view.path}>{tildify(view.path)}</code>
+            <code data-tip={view.path}>{tildify(view.path)}</code>
             <button type="button" className="setup-btn setup-btn-xs" onClick={() => (CAN_BROWSE_FOLDER ? void browse() : setAsked(""))} disabled={busy}>
               {CAN_BROWSE_FOLDER ? "Choose another folder…" : "Type another path"}
             </button>
@@ -184,8 +184,8 @@ export function RepoList({ path, rows, ticked, onToggle }: {
             <input type="checkbox" className="setup-repobox" checked={on} onChange={() => onToggle(r.root)}
               aria-label={`${r.name}, on ${r.branch}`} />
             <span className="setup-repomark" aria-hidden="true"><Branch /></span>
-            <span className="setup-reponame" title={r.name}>{r.name}</span>
-            <span className="setup-repobranch" title={r.branch} aria-label={r.branch}>{branchLabel(r.branch)}</span>
+            <span className="setup-reponame" data-tip={r.name}>{r.name}</span>
+            <span className="setup-repobranch" data-tip={r.branch} aria-label={r.branch}>{branchLabel(r.branch)}</span>
           </label>
         );
       })}

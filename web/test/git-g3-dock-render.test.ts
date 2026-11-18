@@ -48,16 +48,16 @@ describe("the dock, drawn", () => {
     const html = dock("log", 1);
     for (const a of dockActionsFor("log", { count: 1 }, { branch: "main" }).actions) expect(html).toContain(`data-dock="${a.id}"`);
     expect(html).toContain("Cherry-pick onto");
-    expect(html).toMatch(/<span class="shrink-0[^>]*title="main"[^>]*>main<\/span>/);
+    expect(html).toMatch(/<span class="shrink-0[^>]*data-tip="main"[^>]*>main<\/span>/);
   });
   test("a shut button says why on hover and stays in place", () => {
     const html = dock("log", 0);
-    expect(html).toContain('title="Pick one first"');
+    expect(html).toContain('data-tip="Pick one first"');
     expect(html).toContain('data-dock="show"');
   });
   test("the dirty-tree reason reaches Cherry-pick and Revert", () => {
     const html = dock("log", 1, { branch: "main", dirty: true } as never);
-    expect(html.match(/title="Commit or stash your changes first"/g)?.length).toBe(2);
+    expect(html.match(/data-tip="Commit or stash your changes first"/g)?.length).toBe(2);
   });
   test("More is a menu button", () => {
     expect(dock("log", 1)).toContain('data-dock="more"');
@@ -166,10 +166,10 @@ describe("the Changes tab acts through the same dock", () => {
     expect(html).not.toContain('data-dock="stage"');
   });
   test("nothing picked shuts every button with Pick a file first", () => {
-    expect(changesDock({ count: 0 }).match(/title="Pick a file first"/g)?.length).toBe(4);
+    expect(changesDock({ count: 0 }).match(/data-tip="Pick a file first"/g)?.length).toBe(4);
   });
   test("an untracked file's Discard says delete <path>", () => {
-    expect(changesDock({ count: 1, untracked: true, path: "notes.md" })).toContain('title="delete notes.md"');
+    expect(changesDock({ count: 1, untracked: true, path: "notes.md" })).toContain('data-tip="delete notes.md"');
   });
   test("the panel renders the Changes actions through GitDock and the row has no button", () => {
     expect(CHANGES).toContain("<GitDock");

@@ -6,8 +6,8 @@
 import { describe, expect, test } from "bun:test";
 import type { JiraSpace, JiraSpaceTree, JiraTreeComponent, JiraTreeEpic } from "../../shared/jiraSpaces.ts";
 import {
-  EMPTY_PREFS, EPICS_PER_COMPONENT, browseUrl, buildRows, componentMenu, componentUrl, epicMenu, epicProgress,
-  keyC, keyE, keyS, meMenu, parsePrefs, epicTip, spaceMenu, viewMenu, type TreeInput, type TreeRow,
+  EMPTY_PREFS, EPICS_PER_COMPONENT, browseUrl, buildRows, componentMenu, componentUrl, epicMenu, epicProgress, focusable,
+  keyC, keyE, keyS, meMenu, parsePrefs, epicTip, spaceMenu, viewJql, viewMenu, type TreeInput, type TreeRow,
 } from "../src/lib/jiraTree.ts";
 import { parseAddress } from "../src/lib/jiraAddress.ts";
 import { walkIds } from "../src/lib/prCardMenu.ts";
@@ -91,6 +91,12 @@ describe("buildRows: what is open and how much is drawn", () => {
     expect(row.error).toBe("Jira did not answer");
   });
 
+  test("an open space that failed to read shows the real reason, not a generic line", () => {
+    const rows = buildRows(input({ reads: { ORB: { state: "error", error: "No Jira project with that key" } } }));
+    const note = rows.find((r) => r.kind === "note" && r.key === "note:ORB") as { text: string };
+    expect(note.text).toBe("No Jira project with that key");
+  });
+
   test("a space that is loading draws a skeleton and nothing else under it", () => {
     const rows = buildRows(input({ reads: { ORB: { state: "loading" } } }));
     expect(kinds(rows)).toContain("skeleton");
@@ -100,6 +106,12 @@ describe("buildRows: what is open and how much is drawn", () => {
   test("a space with no components says it has no epics", () => {
     const rows = buildRows(input({ t: tree([]) }));
     expect(rows.some((r) => r.kind === "note")).toBe(true);
+  });
+
+  // The "Column order from board" picker was removed from the sidebar on purpose: the automatic order is the only order.
+  test("no column-order row is drawn, in any shape or filter", () => {
+    expect(buildRows(input({ spaces: [{ ...orbit, columnBoard: "123" }], t })).some((r) => (r.kind as string) === "columnorder")).toBe(false);
+    expect(buildRows(input({ t, prefs: { ...EMPTY_PREFS, shape: { ORB: "epics" } } })).some((r) => (r.kind as string) === "columnorder")).toBe(false);
   });
 });
 
@@ -186,6 +198,17 @@ describe("addresses", () => {
   });
 });
 
+describe("viewJql: the query a starred row's address holds", () => {
+  test("a saved search's address gives its query", () => {
+    expect(viewJql({ url: "https://acme.example.net/issues/?jql=type%20%3D%20Bug%20AND%20assignee%20%3D%20me" })).toBe("type = Bug AND assignee = me");
+  });
+  test("a board or a filter with no jql param, a blank one, or no address at all gives none", () => {
+    expect(viewJql({ url: "https://acme.example.net/jira/software/projects/ORB/boards/1" })).toBeNull();
+    expect(viewJql({ url: "https://acme.example.net/issues/?jql=" })).toBeNull();
+    expect(viewJql({ url: undefined })).toBeNull();
+  });
+});
+
 describe("links", () => {
   test("a key is encoded, a site without a scheme gets one", () => {
     expect(browseUrl("acme.example.net", "ORB-9")).toBe("https://acme.example.net/browse/ORB-9");
@@ -197,16 +220,16 @@ const treeSource = await Bun.file(new URL("../src/components/jira/JiraTree.tsx",
 
 describe("an epic row says who holds it", () => {
   test("the row tip carries summary, key, status, people, progress and components", () => {
-    const e = { ...epic(1, ["Ingest"]), assignee: { key: "a", id: "a", name: "Lin Tester" }, reporter: { key: "b", id: "b", name: "Sam Rivera" } };
+    const e = { ...epic(1, ["Ingest"]), assignee: { key: "a", id: "a", name: "Lin Tester" }, reporter: { key: "b", id: "b", name: "Sam Orbit" } };
     expect(epicTip(e, [])).toEqual({
       name: "Vector index fold 1", detail: "ORB-1", tag: "In Progress",
-      rows: [{ k: "Assignee", v: "Lin Tester" }, { k: "Reporter", v: "Sam Rivera" }, { k: "Progress", v: "1 of 4 cards done" }, { k: "Components", v: "Ingest" }],
+      rows: [{ k: "Assignee", v: "Lin Tester" }, { k: "Reporter", v: "Sam Orbit" }, { k: "Progress", v: "1 of 4 cards done" }, { k: "Components", v: "Ingest" }],
     });
   });
 
   test("unassigned says so, the reporter is still named, and no components means no row", () => {
-    const t = epicTip({ ...epic(2, []), total: 0, done: 0, reporter: { key: "b", id: "b", name: "Sam Rivera" } }, []);
-    expect(t.rows).toEqual([{ k: "Assignee", v: "Unassigned" }, { k: "Reporter", v: "Sam Rivera" }, { k: "Progress", v: "No cards" }]);
+    const t = epicTip({ ...epic(2, []), total: 0, done: 0, reporter: { key: "b", id: "b", name: "Sam Orbit" } }, []);
+    expect(t.rows).toEqual([{ k: "Assignee", v: "Unassigned" }, { k: "Reporter", v: "Sam Orbit" }, { k: "Progress", v: "No cards" }]);
   });
 
   test("the row draws one face (the assignee's) with the house tip, never a native title, and keeps the summary ellipsized", () => {

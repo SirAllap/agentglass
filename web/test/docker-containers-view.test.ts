@@ -34,7 +34,7 @@ const web = (host: number) => ({ host, hostEnd: host, hostIp: "0.0.0.0", contain
 const stat = (cpu: number, mem: number): DockerStat => ({ id: "api", cpu, mem, memUsage: "212MiB / 7.7GiB", netIO: "", blockIO: "", pids: 3 });
 
 const rowProps = (over: Record<string, unknown> = {}) => ({
-  c: c({ id: "api", portList: [web(3100)] }), stat: stat(12.3, 40), selected: false, dense: false, readOnly: false, busy: false,
+  c: c({ id: "api", portList: [web(3100)] }), stat: stat(12.3, 40), selected: false, readOnly: false, busy: false,
   confirm: null, menuOpen: false, onSelect: noop, onVerb: noop, onMenu: noop, onOpenPort: noop, onConfirm: noop, ...over,
 });
 
@@ -92,9 +92,6 @@ describe("a container row", () => {
     const html = draw(h(ContainerRow, rowProps({ confirm: "rm" })));
     expect(html).toContain('role="alertdialog"');
     expect(html).toContain("its volumes stay");
-  });
-  test("dense drops the sub-line", () => {
-    expect(draw(h(ContainerRow, rowProps({ dense: true })))).not.toContain("acme/orbit:dev</span>");
   });
 });
 
@@ -175,13 +172,14 @@ describe("the header", () => {
   const ov = { available: true, writeEnabled: true, version: "27.3.1", containers: [], images: [], volumes: [], networks: [], at: 1 } as DockerOverview;
   const head = (over: Record<string, unknown> = {}) => draw(h(DockerHeader, {
     situation: "normal", version: "27.3.1", fresh: { text: "Live · 5s ago", warn: false }, scope: null, q: "", onQ: noop,
-    groupBy: "stack", onGroupBy: noop, layout: "list", onLayout: noop, dense: false, onDense: noop, readOnly: false,
+    groupBy: "stack", onGroupBy: noop, layout: "list", onLayout: noop, readOnly: false,
     onRefresh: noop, refreshing: false, showFilter: true, showView: true, back: null, ...over,
   }));
   void ov;
-  test("title, engine, freshness, filter, grouping, layout, dense and refresh are all there", () => {
+  test("title, engine, freshness, filter, grouping and refresh are all there; Dense is gone and the rest sits in the menu", () => {
     const html = head();
-    for (const s of ["Docker", "Engine 27.3.1", "Live · 5s ago", "By stack", "By worktree", "List", "Split", "Dense", "Refresh"]) expect(html).toContain(s);
+    for (const s of ["Docker", "Engine 27.3.1", "Live · 5s ago", "By stack", "By worktree", "Refresh"]) expect(html).toContain(s);
+    expect(html).not.toContain("Dense");
     expect(html).toContain('aria-label="Filter containers"');
   });
   test("a downed daemon is amber and disables the filter", () => {

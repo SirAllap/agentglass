@@ -3,16 +3,17 @@
 // rendered, a page in an isolated frame, JSON as text / tree / graph, pictures,
 // PDF, audio and video in their own viewers, and a plain message for a binary.
 // The "Editing" tab is nvim running in this pane (FinderNvim); the header's "Open in nvim" is the bench.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../../lib/api.ts";
 import { Markdown } from "../../../lib/markdown.tsx";
 import { useDiffHighlight } from "../../../lib/diffHighlight.ts";
 import { humanBytes } from "../../../lib/paletteModel.ts";
 import {
   COLOUR_LINES, GRAPH_MAX_BYTES, HTML_RENDER_MAX_BYTES, JSON_READ_CAP, READ_LINES,
-  defaultTab, graphAllowed, hasRawHtml, htmlRenderable, isGif, isolatedDoc, nextReadWidth, previewPlan, readMaxWidth, readWidthLabel, readWindow, sortedOrder, type ReadWidth, type PreviewTab,
+  defaultTab, graphAllowed, hasRawHtml, htmlRenderable, isGif, isolatedDoc, pageImages, withPageImages, pageDocKey, pageImageShrink, makePageMemo, PAGE_IMAGE_EDGE, PAGE_IMAGE_PARALLEL, PAGE_IMAGES_AFTER_MS, PAGE_IMAGE_MAX_BYTES, PAGE_IMAGES_TOTAL_BYTES, nextReadWidth, previewPlan, readMaxWidth, readWidthLabel, readWindow, sortedOrder, type ReadWidth, type PreviewTab,
 } from "../../../lib/finderPreview.ts";
 import { placeholderText } from "../../../lib/finderMedia.ts";
+import { containSize, makeGate, shrinkPicture } from "../../../lib/finderThumb.ts";
 import { HIT } from "../../../lib/iconSize.ts";
 import type { FileFacts } from "../../../../../shared/types.ts";
 import { EDGE } from "../../workspace/Chrome.tsx";
@@ -46,7 +47,7 @@ const note = (children: React.ReactNode, warn = false) => (
 );
 
 /** What the panel hands the body so the header bar can carry the view's own tools. */
-export interface BarProps { lead: React.ReactNode; name: string; meta: string; title: string; onClose?: () => void; onOpen?: () => void; onNvim?: () => void }
+export interface BarProps { lead: React.ReactNode; name: string; meta: string; title: string; onClose?: () => void; onOpen?: () => void; onBrowser?: () => void; onBrowserScripts?: () => void; onNvim?: () => void }
 
 /** Print what the pane shows: its markup in a hidden frame, so nothing else of the page is on the sheet. */
 function printPane(el: HTMLElement | null, title: string) {
@@ -139,7 +140,7 @@ export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, o
         const off = t === "Graph" && !graphOk;
         return (
           <button key={t} role="tab" aria-selected={!editing && tab === t} disabled={off} className="agx-btn px-2.5 rounded-md text-[11px] disabled:opacity-40"
-            title={off ? `Graph is for JSON under ${humanBytes(GRAPH_MAX_BYTES)}` : undefined}
+            data-tip={off ? `Graph is for JSON under ${humanBytes(GRAPH_MAX_BYTES)}` : undefined}
             style={{ minHeight: HIT - 6, border: EDGE, ...(!editing && tab === t ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", color: "var(--text)" } : { color: "var(--text3)" }) }}
             onClick={() => { setEditing(false); setTab(t); }}>{t}</button>
         );
@@ -147,7 +148,7 @@ export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, o
       {canEdit && (
         <button role="tab" aria-selected={editing} disabled={!mayEdit || !mayEdit.ok} className="agx-btn px-2.5 rounded-md text-[11px] disabled:opacity-40"
           style={{ minHeight: HIT - 6, border: EDGE, ...(editing ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", color: "var(--text)" } : { color: "var(--text3)" }) }}
-          title={mayEdit && !mayEdit.ok ? mayEdit.why : "Edit this file with nvim, here"} onClick={() => setEditing(true)}>Editing</button>
+          data-tip={mayEdit && !mayEdit.ok ? mayEdit.why : "Edit this file with nvim, here"} onClick={() => setEditing(true)}>Editing</button>
       )}
     </div>
   );
@@ -156,7 +157,7 @@ export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, o
       {toggles && <BarButton icon="file-code" label={showsSource ? `Show ${other.toLowerCase()}` : "Show source"} on={showsSource} onClick={() => { setEditing(false); setTab(other); }} />}
       {texty && !editing && <BarButton icon="search" label="Find in preview" on={findOpen} onClick={() => { setFindOpen((o) => !o); setTimeout(() => findRef.current?.focus(), 0); }} />}
       {(plan.viewer === "markdown" || plan.viewer === "code") && !editing && (
-        <button type="button" className="agx-btn rounded-md px-1.5 text-[10.5px] shrink-0" style={{ height: HIT - 4, minWidth: HIT - 4, color: "var(--text3)", border: EDGE }} title={`Reading width: ${readWidthLabel(readW)} (press to change)`} aria-label={`Reading width ${readWidthLabel(readW)}`}
+        <button type="button" className="agx-btn rounded-md px-1.5 text-[10.5px] shrink-0" style={{ height: HIT - 4, minWidth: HIT - 4, color: "var(--text3)", border: EDGE }} data-tip={`Reading width: ${readWidthLabel(readW)} (press to change)`} aria-label={`Reading width ${readWidthLabel(readW)}`}
           onClick={() => onReadW(nextReadWidth(readW))}>{readWidthLabel(readW)}</button>
       )}
       {bar.onNvim && <BarButton icon="terminal" label="Open in nvim" onClick={bar.onNvim} />}
@@ -168,7 +169,7 @@ export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, o
   if (editorOn) body = <FinderNvim root={root} path={path} onEnd={() => setEditing(false)} />;
   else switch (plan.viewer) {
     case "markdown": body = tab === "Source" ? <Reading facts={facts} name={facts.name} wrap={wrap} readW={readW} /> : <MarkdownView facts={facts} readW={readW} />; break;
-    case "html": body = tab === "Rendered" ? <HtmlFrame path={path} bytes={facts.bytes} /> : <Reading facts={facts} name={facts.name} wrap={wrap} />; break;
+    case "html": body = tab === "Rendered" ? <HtmlFrame path={path} bytes={facts.bytes} mtime={facts.mtime} /> : <Reading facts={facts} name={facts.name} wrap={wrap} />; break;
     case "json": body = tab === "Reading" ? <Reading facts={facts} name={facts.name} wrap={wrap} /> : <JsonData path={path} bytes={facts.bytes} graph={tab === "Graph"} />; break;
     case "code": body = <Reading facts={facts} name={facts.name} wrap={wrap} readW={readW} />; break;
     case "image": body = isGif(facts.name) && !autoplay ? <StillGif src={api.previewUrl(path)} facts={facts} /> : <Picture src={api.previewUrl(path)} facts={facts} />; break;
@@ -179,7 +180,7 @@ export function PreviewBody({ path, facts, canEdit, root, onEditing, savedTab, o
   }
   return (
     <>
-      <PreviewBar lead={bar.lead} name={bar.name} meta={bar.meta} title={bar.title} dragPath={bar.title} tools={tools} afterPrint={afterTools} onOpen={bar.onOpen} onPrint={texty ? () => printPane(bodyRef.current, bar.name) : undefined} onClose={bar.onClose} />
+      <PreviewBar lead={bar.lead} name={bar.name} meta={bar.meta} title={bar.title} dragPath={bar.title} tools={tools} afterPrint={afterTools} onBrowser={bar.onBrowser} onBrowserScripts={bar.onBrowserScripts} onOpen={bar.onOpen} onPrint={texty ? () => printPane(bodyRef.current, bar.name) : undefined} onClose={bar.onClose} />
       {tabs}
       {findOpen && (
         <div className="mt-2">
@@ -267,17 +268,61 @@ function MarkdownView({ facts, readW }: { facts: FileFacts; readW: ReadWidth }) 
 
 /* ------------------------------------------------------------------ page */
 
-function HtmlFrame({ path, bytes }: { path: string; bytes: number }) {
-  const [doc, setDoc] = useState<string | null>(null);
+/** The pictures beside a page, read by the app and turned into `data:` URIs for the closed frame. See finderPreview.ts. */
+async function readPageImages(html: string, pagePath: string, signal: AbortSignal): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  let total = 0;
+  const gate = makeGate(PAGE_IMAGE_PARALLEL);
+  await Promise.all(pageImages(html, pagePath).map(({ src, path }) => gate(async () => {
+    const res = await fetch(api.previewUrl(path), { signal });
+    if (!res.ok) return;
+    const read = await res.blob();
+    if (!read.type.startsWith("image/") || read.size > PAGE_IMAGE_MAX_BYTES) return;
+    // Drawn down when it is large; the picture as read when this window cannot, or when that came out no lighter.
+    const how = pageImageShrink(read.type, read.size);
+    const small = how ? await shrinkPicture(read, (w, h) => containSize(w, h, PAGE_IMAGE_EDGE), how.type, how.quality) : null;
+    const blob = small && small.size < read.size ? small : read;
+    if (signal.aborted || (total += blob.size) > PAGE_IMAGES_TOTAL_BYTES) return;
+    const uri = await new Promise<string>((ok, no) => { const fr = new FileReader(); fr.onload = () => ok(String(fr.result)); fr.onerror = () => no(fr.error); fr.readAsDataURL(blob); });
+    out.set(src, uri);
+  }, signal).catch(() => { /* that picture keeps its alt text */ })));
+  return out;
+}
+
+/* The last page built, pictures and all, outside the component: a re-render, a
+   trip to the Source tab, or a step to the picture beside it and back must not
+   read and encode the same megabytes again. */
+const lastPage = makePageMemo();
+
+function HtmlFrame({ path, bytes, mtime }: { path: string; bytes: number; mtime: number }) {
+  const key = pageDocKey(path, mtime, bytes);
+  const [doc, setDoc] = useState<string | null>(() => lastPage.get(key, Date.now()) ?? null);
   const [err, setErr] = useState<string | null>(null);
   const ok = htmlRenderable(bytes);
   useEffect(() => {
-    setDoc(null); setErr(null);
-    if (!ok) return;
-    let live = true;
-    void api.previewText(path, HTML_RENDER_MAX_BYTES).then((r) => { if (!live) return; if (r.ok) setDoc(isolatedDoc(r.text)); else setErr(r.error); });
-    return () => { live = false; };
-  }, [path, ok]);
+    setErr(null);
+    const kept = ok ? lastPage.get(key, Date.now()) : undefined;
+    setDoc(kept ?? null);
+    if (!ok || kept !== undefined) return;
+    // Leaving the page stops its reads: the text request, each picture's fetch, and the ones still in line.
+    const leave = new AbortController();
+    void api.previewText(path, HTML_RENDER_MAX_BYTES, leave.signal).then(async (r) => {
+      if (leave.signal.aborted) return;
+      if (!r.ok) { setErr(r.error); return; }
+      // The page first, so text is on screen at once; its pictures follow when read.
+      const plain = isolatedDoc(r.text);
+      setDoc(plain);
+      if (!pageImages(r.text, path).length) { lastPage.set(key, plain, Date.now()); return; }
+      await new Promise((go) => setTimeout(go, PAGE_IMAGES_AFTER_MS));
+      if (leave.signal.aborted) return;
+      const data = await readPageImages(r.text, path, leave.signal);
+      if (leave.signal.aborted) return;
+      const full = data.size ? isolatedDoc(withPageImages(r.text, data)) : plain;
+      lastPage.set(key, full, Date.now());
+      if (data.size) setDoc(full);
+    });
+    return () => leave.abort();
+  }, [key, path, ok]);
   if (!ok) return note(`This page is ${humanBytes(bytes)}, over the ${humanBytes(HTML_RENDER_MAX_BYTES)} the finder draws. The Source tab reads it; “Open in Files” opens it.`, true);
   if (err) return note(`Not shown: ${err}.`, true);
   if (doc === null) return <p style={{ color: "var(--text3)" }}>Reading…</p>;
@@ -334,23 +379,29 @@ function StillGif({ src, facts }: { src: string; facts: FileFacts }) {
     <>
       <div className="flex-1 min-h-0 min-w-0 flex items-center justify-center relative">
         <img alt={facts.name} src={still} className="p-2 rounded-md" style={FIT} />
-        <button className="agx-btn absolute rounded-md grid place-items-center" style={{ right: 12, bottom: 12, width: HIT, height: HIT, background: "var(--surface-card)", border: EDGE, color: "var(--primary-ink)" }} aria-label="Play GIF" title="Play GIF" onClick={() => setPlay(true)}><StrataIcon set="act" name="play" size={ICON.sm} /></button>
+        <button className="agx-btn absolute rounded-md grid place-items-center" style={{ right: 12, bottom: 12, width: HIT, height: HIT, background: "var(--surface-card)", border: EDGE, color: "var(--primary-ink)" }} aria-label="Play GIF" data-tip="Play GIF" onClick={() => setPlay(true)}><StrataIcon set="act" name="play" size={ICON.sm} /></button>
       </div>
       <p className="mt-2 text-[11px] text-center" style={{ color: "var(--text3)" }}>{facts.width && facts.height ? `${facts.width} × ${facts.height} px · ` : ""}{facts.mime} · {humanBytes(facts.bytes)} · paused</p>
     </>
   );
 }
 
-function Picture({ src, facts }: { src: string; facts: FileFacts }) {
+/* Decoded off the frame, and not handed to React again while the same file is
+   shown. A screenshot of 4774 by 1072 is about 20 MB of bitmap; decoded in
+   step with the frame it held the pane and the list beside it still for the
+   length of the decode, on a compositor that runs on the CPU here. The memo
+   keeps a re-render of the pane (a tab's state, the wrap toggle, the read
+   width) from walking this subtree for a picture that has not changed. */
+const Picture = memo(function Picture({ src, facts }: { src: string; facts: FileFacts }) {
   return (
     <>
       <div className="flex-1 min-h-0 min-w-0 flex items-center justify-center">
-        <img alt={facts.name} src={src} className="p-2 rounded-md" style={FIT} />
+        <img alt={facts.name} src={src} decoding="async" className="p-2 rounded-md" style={FIT} />
       </div>
       <p className="mt-2 text-[11px] text-center" style={{ color: "var(--text3)" }}>{facts.width && facts.height ? `${facts.width} × ${facts.height} px · ` : ""}{facts.mime} · {humanBytes(facts.bytes)}</p>
     </>
   );
-}
+});
 
 /** A format the browser cannot draw: the server converts it first, so it comes as a blob. */
 function Converted({ path, facts }: { path: string; facts: FileFacts }) {

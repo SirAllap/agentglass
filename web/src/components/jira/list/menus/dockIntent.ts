@@ -13,7 +13,8 @@
  */
 import { useEffect, useSyncExternalStore } from "react";
 
-export type DockWhat = "move" | "assign" | "comment";
+/** work: no control to land on, only the Work tab, where what an agent did is read. edit: the title's editor, the first field of the card. subtask: the sub-task title line. */
+export type DockWhat = "move" | "assign" | "comment" | "next" | "work" | "edit" | "subtask";
 export interface DockIntent { seq: number; id: string; what: DockWhat; at: number }
 export const INTENT_MS = 5000;
 

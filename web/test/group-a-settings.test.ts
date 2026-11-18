@@ -94,8 +94,8 @@ describe("rail count badges", () => {
 
 describe("header chips from a page's own facts", () => {
   const on = [{ tone: "ok" as const, text: "On" }];
-  it("the volume names the Notifications chip", () => {
-    expect(facts.pageChips("notifications", on, { volume: "Loud" })[0]!.text).toBe("Loud volume");
+  it("News pop-ups names the Notifications chip", () => {
+    expect(facts.pageChips("notifications", on, { news: "on" })[0]!.text).toBe("News pop-ups on");
     expect(facts.pageChips("notifications", on, {})[0]!.text).toBe("On");
   });
   it("tmux says its version, Tasks its sources, Terminal what is unsaved, Browser what can come in", () => {
@@ -107,6 +107,6 @@ describe("header chips from a page's own facts", () => {
     expect(facts.pageChips("browser", [], { importableSites: 12 })[0]!.text).toBe("12 sites to bring in");
   });
   it("a page with nothing to add keeps the nav's chips", () => {
-    expect(facts.pageChips("diff", on, { volume: "Loud" })).toEqual(on);
+    expect(facts.pageChips("diff", on, { news: "on" })).toEqual(on);
   });
 });

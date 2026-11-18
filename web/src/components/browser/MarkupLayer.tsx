@@ -17,6 +17,7 @@ import { ArrowIcon, BoxIcon, CircleIcon, EditIcon, IconLabel } from "../../lib/g
 import { ICON } from "../../lib/iconSize.ts";
 import { Button, EDGE } from "../workspace/Chrome.tsx";
 import { TerminalIcon } from "../workspace/icons.tsx";
+import { BROWSER } from "../../lib/layers.ts";
 
 type Guest = { capturePage(): Promise<{ toDataURL(): string }> } | null;
 
@@ -195,7 +196,7 @@ export function MarkupLayer({ view, url, onNote, onDone }: {
   };
 
   return (
-    <div ref={wrap} className="absolute inset-0" style={{ zIndex: 30 }}>
+    <div ref={wrap} className="absolute inset-0" style={{ zIndex: BROWSER.overlay }}>
       <canvas ref={canvas}
         onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}
         className="absolute inset-0"
@@ -211,7 +212,7 @@ export function MarkupLayer({ view, url, onNote, onDone }: {
           ))}
           <span style={{ width: 1, height: 16, background: "color-mix(in srgb, var(--border) 45%, transparent)" }} />
           {COLOURS.map((c) => (
-            <button key={c} onClick={() => setColour(c)} title={c}
+            <button key={c} onClick={() => setColour(c)} aria-label={c} data-tip={c}
               className="rounded-full shrink-0"
               style={{
                 width: 15, height: 15, background: c,
@@ -220,7 +221,7 @@ export function MarkupLayer({ view, url, onNote, onDone }: {
           ))}
           <span style={{ width: 1, height: 16, background: "color-mix(in srgb, var(--border) 45%, transparent)" }} />
           {WIDTHS.map((w) => (
-            <button key={w} onClick={() => setWidth(w)} title={`${w}px`}
+            <button key={w} onClick={() => setWidth(w)} aria-label={`${w}px`} data-tip={`${w}px`}
               className="rounded-lg flex items-center justify-center"
               style={{ width: 22, height: 22, background: width === w ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent" }}>
               <span className="rounded-full" style={{ width: w, height: w, background: "var(--text2)", display: "block" }} />

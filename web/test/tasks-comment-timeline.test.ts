@@ -130,7 +130,7 @@ describe("Resolve draws on the press; nothing else about a comment does", () => 
   });
 
   it("reads every card through the layer's ticket", () => {
-    const reads = card.match(/api\.clickupTask\(t\.id\)/g)?.length ?? 0;
+    const reads = card.match(/api\.clickupTask\(t\.id(?:, (?:ac\.)?signal)?\)/g)?.length ?? 0;
     expect(reads).toBeGreaterThan(0);
     expect(card.match(/layers\.readStarted\(\)/g)?.length).toBe(reads);
   });
@@ -139,7 +139,7 @@ describe("Resolve draws on the press; nothing else about a comment does", () => 
 describe("the resolve patch", () => {
   const detail = {
     comments: [
-      { id: "c1", who: "Sam Rivera", text: "Looks right on staging.", at: 1 },
+      { id: "c1", who: "Sam Orbit", text: "Looks right on staging.", at: 1 },
       { id: "c2", who: "Kai Moreno", text: "Shipped with ORBIT-1042.", at: 2, resolved: true },
     ],
   };

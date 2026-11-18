@@ -1,7 +1,8 @@
 import { useRef, useEffect, useState, type ReactElement } from "react";
 import { ICON } from "../lib/iconSize.ts";
 import { SparkleIcon } from "../lib/glyphIcons.tsx";
-import { cleanAll, cleanTargets, confirmBody, progressWord, summaryWord, type CleanSummary } from "../lib/cleanAll.ts";
+import { cleanAll, cleanTargets, confirmBody, failedList, failedTip, progressWord, summaryWord, type CleanSummary } from "../lib/cleanAll.ts";
+import { tipAttr } from "../lib/tip.ts";
 import { leftoverFor, useLeftoverVersion } from "../lib/leftoversStore.ts";
 import { Button } from "./workspace/Chrome.tsx";
 import { useDialogs } from "./ConfirmDialog.tsx";
@@ -29,12 +30,11 @@ export function CleanAllButton({ root, rows }: { root: string; rows: readonly { 
   };
 
   if (targets.length === 0 && !at && !sum) return null;
-  const failedTip = sum?.failed.map((f) => `#${f.pr}: ${f.why}`).join("\n");
   return (
     <>
       {sum && !at && (
-        <span role="status" className="agx-srow-ss min-w-0 truncate" style={{ marginTop: 0, color: sum.failed.length ? "var(--warning-ink)" : undefined }} title={failedTip}>
-          {summaryWord(sum)}{sum.failed.length ? ` (${sum.failed.map((f) => `#${f.pr}`).join(", ")})` : ""}
+        <span role="status" className="agx-srow-ss min-w-0 truncate" style={{ marginTop: 0, color: sum.failed.length ? "var(--warning-ink)" : undefined }} data-tip={sum.failed.length ? tipAttr(failedTip(sum)) : undefined}>
+          {summaryWord(sum)}{sum.failed.length ? ` (${failedList(sum)})` : ""}
         </span>
       )}
       {at && <span role="status" className="agx-srow-ss" style={{ marginTop: 0 }}>{progressWord(at.n, at.of)}</span>}

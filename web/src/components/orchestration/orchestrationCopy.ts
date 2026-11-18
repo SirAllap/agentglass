@@ -23,7 +23,7 @@ import type { StatusTone } from "../SettingsKit.tsx";
 
 // ── names that come from data ────────────────────────────────────────────
 
-/** The engine's own title for a usage provider's plan: Claude's provider reads as "Claude Code". */
+/** The engine's own title for a usage provider's plan: Claude's provider reads as the engine title. */
 export const usageWord = (p: UsageProviderId): string => agentProvider(usageEngine(p))?.title ?? p;
 
 /** "OpenCode big-pickle", or just the engine when the model is its own default. */
@@ -69,7 +69,7 @@ export function thenWords(rule: PolicyRule, flow?: FlowLike | null): string {
   return parts.length ? parts.join("; ") : "nothing changes";
 }
 
-/** The sentence under a rule's name: "When 10% or less of the Claude Code weekly plan is left: builders use OpenCode big-pickle, then Hermes." */
+/** The sentence under a rule's name: "When 10% or less of the weekly plan is left: builders use OpenCode big-pickle, then Hermes." */
 export function ruleLine(rule: PolicyRule, flow?: FlowLike | null): string {
   return `When ${rule.when.map(triggerWords).join(" and ")}: ${thenWords(rule, flow)}.`;
 }
@@ -292,21 +292,23 @@ export const SAFETY = {
   workers: { title: "What a worker may do by default", note: "What a worker gets when the main agent says nothing. A builder can edit src/app.ts in its own copy but cannot run curl." },
   most: { title: "The most the main agent may allow", note: "A limit on what the main agent can grant a worker, even if it asks. With network off here, no worker can ever get it." },
   limits: { title: "Limits", note: "How much the main agent may start at once." },
-  hands: { title: "Never in a worker's hands", note: "Push, pull requests, merges, releases, anything that spends. No worker can open a pull request, whatever a rule says; those wait for you at the Gate." },
+  hands: { title: "Never in a worker's hands", note: "Push, merges, releases, anything that spends. A worker's shell may run gh unless you close it below, so a pull request is held by the Gate and your agent rules, not by the lock." },
   gate: "Show the exact push or PR, wait for your answer",
   extra: { note: "Off by default. You allow it for the project, then grant it to one worker at a time; nothing runs without your Approve click." },
   write: "Where a worker may change files",
   network: "Fetching from the web and calling APIs",
   commit: "Local only; a push is still refused",
   docker: "Running containers on this machine. A container runs as you do and can mount the disk. Example: with this on, a worker can run the test suite in a container.",
+  worktreeOps: "Workers may run git reset, merge, checkout, switch, clean and worktree remove, list or prune. These act on whatever path they name, not only the worktree; what holds them to it is the sandbox's own write limits (only while network and docker are both off), not the command line. Example: a worker can merge main into its branch, or undo a bad edit, without asking you to do it by hand.",
   deny: "Commands refused on top of the ones that are always refused.",
-  always: { hint: "Push, pull requests, another machine, sudo, rm and signals are never granted, whatever a role or a rule says. Example: a role may be granted docker, and no role can push or open a pull request.", more: "Why this cannot be changed here", body: "A flow role may be granted a command from the list above that its work needs, for that role's workers only. These it may not: a person does them, and nothing a main agent, a rule or a preset says can grant one." },
+  always: { hint: "Only sudo and four git worktree commands (lock, move, repair, unlock) are refused to every worker, whatever a role or a rule says. rm, kill, ssh, gh and the rest are open by default and each has its own switch per project. Example: a role may be granted docker, and a push still waits for your Gate and your agent rules.", more: "Why this cannot be changed here", body: "A flow role's extra commands lift only git commit, curl, wget and docker, and only when the most allowed has that flag on. Anything else typed there is dropped when the flow starts. The fixed list can never be granted." },
 } as const;
 
 /** Nothing in Safety and limits differs from what a fresh install holds. */
 export const safetyIsDefault = (p: Pick<Policy, "workerDefault" | "ceiling" | "limits">): boolean => {
   // Field by field: the server's key order is not the page's, and a byte compare read "defaults" as "changed".
   const same = (a: Envelope, b: Envelope) => a.write === b.write && a.network === b.network && a.commit === b.commit && a.docker === b.docker
+    && !!a.worktreeOps === !!b.worktreeOps
     && a.deny.length === b.deny.length && a.deny.every((d) => b.deny.includes(d));
   return same(p.workerDefault, DEFAULT_WORKER_ENVELOPE) && same(p.ceiling, DEFAULT_CEILING)
     && p.limits.maxWorkers === DEFAULT_LIMITS.maxWorkers && p.limits.turnMinutes === DEFAULT_LIMITS.turnMinutes && p.limits.maxRetries === DEFAULT_LIMITS.maxRetries;
@@ -376,7 +378,7 @@ const chainOf = (ids: string[]): Chain => ids.map((engine) => ({ engine, model: 
 const engineTitle = (id: string): string => agentProvider(id)?.title ?? id;
 
 /**
- * "The chair stays Claude Code" is a claim about the chair, and this preset sets
+ * "The main agent stays on its engine" is a claim about the chair, and this preset sets
  * workers only, so it holds only if the chair already is that engine: the base
  * chair, and no rule of the person's that moves it. `policy` is null where a
  * card is drawn with no policy at hand, and then nothing is checked.

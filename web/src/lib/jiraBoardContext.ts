@@ -47,9 +47,17 @@ export function epicTone(color: string | undefined): string {
   return Number.isFinite(n) && n > 0 ? EPIC_TONES[(n - 1) % EPIC_TONES.length]! : "--text3";
 }
 
+/** An epic's tone: its own Jira colour, else one picked from its key so two epics on a board never wear the same grey. */
+export function epicToneFor(e: { key: string; color?: string | undefined }): string {
+  if (/(\d{1,2})$/.test(e.color ?? "")) return epicTone(e.color);
+  let h = 0;
+  for (const ch of e.key) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return EPIC_TONES[h % EPIC_TONES.length]!;
+}
+
 const DAY = 86_400_000;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const dayOf = (ms: number): string => { const d = new Date(ms); return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`; };
+export const dayOf = (ms: number): string => { const d = new Date(ms); return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`; };
 
 /** The header's line for the sprint: its dates and where in them today is. Empty text where the site gave no dates. */
 export function sprintLine(s: JiraBoardSprint, now: number): { range: string; left: string; late: boolean } {

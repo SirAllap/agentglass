@@ -4,15 +4,15 @@ import { api } from "../../lib/api.ts";
 import type { GitRepoRef } from "../../../../shared/types.ts";
 import { CheckoutPicker } from "../CheckoutPicker.tsx";
 import { focusedPaneRoot } from "../TerminalPanel.tsx";
-import { projectName, titleFrom, type Size } from "../../lib/flightPlan.ts";
+import { projectName, titleFrom, planSizes, type Size } from "../../lib/flightPlan.ts";
 import { DocIcon, PlaneIcon } from "./fpIcons.tsx";
-import type { Cfg } from "./useFlightPlan.ts";
+import { DEFAULT_CFG, type Cfg } from "./useFlightPlan.ts";
 
 export interface Preset { root?: string; request?: string; taskId?: string; from?: string }
 
-const hint = (size: Size, c: Cfg | undefined): string =>
-  size === "S" ? "Small plans launch without Preflight."
-    : !c || c.before === "off" ? "Preflight is off for this project."
+/** Why the size the person picks goes through Preflight or not. S is not a plan: it is refused on create, so it is not offered. */
+const hint = (c: Cfg | undefined): string =>
+  !c || c.before === "off" ? "Preflight is off for this project."
     : "Preflight reads the plan before Launch in this project.";
 
 /** "New flight plan": a request in the person's own words, a project and a size. The author turns it into the plan. */
@@ -25,6 +25,10 @@ export function Composer({ projects, root, preset, cfg, onClose, onCreated }: {
   const [proj, setProj] = useState(preset.root || focusedPaneRoot() || root || projects[0] || "");
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [size, setSize] = useState<Size>("M");
+  /* `flightPlan.preflight.sizes` is one value for the machine, so any project's read of it is that value. */
+  const sizes = planSizes(cfg[proj]?.sizes ?? Object.values(cfg)[0]?.sizes ?? DEFAULT_CFG.sizes);
+  /* A size the door refuses is neither offered nor sent: the create answers 409 for it. */
+  const picked = sizes.includes(size) ? size : sizes[0];
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   useEffect(() => { if (!proj && root) setProj(root); }, [root, proj]);
@@ -54,7 +58,7 @@ export function Composer({ projects, root, preset, cfg, onClose, onCreated }: {
   const submit = async () => {
     if (!request.trim() || !proj || busy) return;
     setBusy(true); setErr("");
-    const r = await api.flightPlanNew({ root: proj, title: titleFrom(request), request: request.trim(), visual: false, size, ...(preset.taskId ? { taskId: preset.taskId } : {}) })
+    const r = await api.flightPlanNew({ root: proj, title: titleFrom(request), request: request.trim(), visual: false, size: picked, ...(preset.taskId ? { taskId: preset.taskId } : {}) })
       .catch(() => ({ ok: false, error: "could not reach the server" } as { ok: boolean; plan?: Record<string, unknown>; ticket?: string; error?: string }));
     setBusy(false);
     if (!r.ok || !r.plan) { setErr(r.error ?? "the plan was not created"); return; }
@@ -78,9 +82,9 @@ export function Composer({ projects, root, preset, cfg, onClose, onCreated }: {
             <textarea id="fp-rq" rows={4} autoFocus value={request} onChange={(e) => setRequest(e.target.value)} placeholder="Describe the change, who it is for, and what done looks like…" />
           </div>
           <div className="srow flat">
-            <div><div className="rn">Size</div><div className="rh">{hint(size, cfg[proj])}</div></div>
+            <div><div className="rn">Size</div><div className="rh">{hint(cfg[proj])}</div></div>
             <div className="seg" role="group" aria-label="Size">
-              {(["S", "M", "L"] as const).map((s) => <button key={s} type="button" aria-pressed={size === s} onClick={() => setSize(s)}>{s}</button>)}
+              {sizes.map((s) => <button key={s} type="button" aria-pressed={picked === s} onClick={() => setSize(s)}>{s}</button>)}
             </div>
           </div>
           <div className="gobar">

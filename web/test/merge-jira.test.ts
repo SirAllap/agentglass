@@ -140,8 +140,8 @@ describe("wiring that needs a renderer, asserted against the source", () => {
     // A move that comes from the merge step runs as the step; any other is the plain transition with the stamp.
     expect(run).toContain('move.tracker === "jira" ? jiraMergeWrite(move, detail)');
     expect(panel).toContain('api.jiraRunStep(move.id, move.updated, "merge"');
-    expect(panel).toContain("api.jiraTransition(move.id, move.to, move.updated)");
-    expect(run).toContain("move.write ? api.clickupCard(move.id, move.write, move.updated) : api.clickupStatus(move.id, move.to, move.updated)");
+    expect(panel).toContain("api.jiraTransition(move.id, move.to, move.updated, undefined, move.repo)");
+    expect(run).toContain("move.write ? api.clickupCard(move.id, move.write, move.updated, repo?.nameWithOwner) : api.clickupStatus(move.id, move.to, move.updated, repo?.nameWithOwner)");
     expect(run).toContain('move.tracker === "jira" ? move.query');
   });
 
@@ -159,8 +159,8 @@ describe("wiring that needs a renderer, asserted against the source", () => {
 
   test("the Jira picker lists what the tracker offers, and the Select never sees a move it cannot make", async () => {
     const pick = code(await read("components/TrackerStatusPick.tsx"));
-    expect(pick).toContain("tracker.statusOptions(task)");
-    expect(pick).toContain("tracker.setStatus(task, opt)");
+    expect(pick).toContain("tracker.statusOptions(task, repo)");
+    expect(pick).toContain("tracker.setStatus(task, opt, undefined, repo)");
     expect(pick).toContain("opt.needs?.length");
     expect(pick).toContain("putCard(query, r.task)");
   });

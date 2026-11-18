@@ -29,8 +29,8 @@ export function ResultPane({ rows, opened, busy, onRetry, onOpenReady, onBack }:
             <div key={r.path} role="listitem" className="grid items-start gap-x-2.5 px-3 py-2.5" style={{ gridTemplateColumns: "22px minmax(0,1fr) auto", borderBottom: HAIR }}>
               <Tile hue={hue} spin={r.state === "opening"}>{r.state === "ok" ? <DoneIcon size={ICON.xs} /> : r.state === "fail" ? <WarningIcon size={ICON.xs} /> : <span className="inline-block w-3 h-3 rounded-full" style={{ border: "2px solid currentColor", borderTopColor: "transparent" }} />}</Tile>
               <span className="min-w-0">
-                <b className="block text-[12.5px] truncate" title={r.path}>{r.path.split("/").pop()}</b>
-                <span className="block font-mono text-[11px] truncate" style={{ color: "var(--text3)" }} title={r.path}>{m.head}{m.tail}</span>
+                <b className="block text-[12.5px] truncate" data-tip={r.path}>{r.path.split("/").pop()}</b>
+                <span className="block font-mono text-[11px] truncate" style={{ color: "var(--text3)" }} data-tip={r.path}>{m.head}{m.tail}</span>
                 {r.why && <span className="block text-[11.5px] mt-1" style={{ color: "var(--error)", overflowWrap: "anywhere" }}>{r.why}</span>}
               </span>
               <Status hue={hue}>{r.state === "ok" ? "Opened" : r.state === "fail" ? "Failed" : r.state === "ready" ? "Not opened" : "Opening…"}</Status>

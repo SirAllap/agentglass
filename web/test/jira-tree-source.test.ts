@@ -57,6 +57,17 @@ describe("the seam", () => {
   });
 });
 
+// The sidebar "Column order from board" picker (its tip and hide-when-one-board tests) was removed on purpose; the board header line stays.
+describe("the column-order header line", () => {
+  test("the board header names where the order came from, with the house tip, never a native title", () => {
+    const at = panel.indexOf("data?.columnsFrom");
+    const body = panel.slice(at - 80, panel.indexOf(")}", at) + 2);
+    expect(body).toContain("Columns as on");
+    expect(body).toMatch(/data-tip=\{/);
+    expect(body).not.toMatch(/\btitle=/);
+  });
+});
+
 describe("shared panel", () => {
   test("the tree and its plus menu are Jira-only", () => {
     expect(panel).toContain('const isJira = source.id === "jira";');

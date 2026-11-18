@@ -16,7 +16,7 @@ export const StateGlyph = ({ icon, size = ICON.sm }: { icon: StateIcon; size?: n
  */
 export function StateTile({ state, detail = false }: { state: StateBadge; detail?: boolean }) {
   return (
-    <div className="pv-state" data-state-id={state.id} data-tone={state.tone} data-running={state.running ? "" : undefined} data-detail={detail ? "" : undefined} title={state.long}>
+    <div className="pv-state" data-state-id={state.id} data-tone={state.tone} data-running={state.running ? "" : undefined} data-detail={detail ? "" : undefined} data-tip={state.long}>
       <span className="st-ico" aria-hidden="true"><StateGlyph icon={state.icon} size={detail ? ICON.lg : ICON.sm} /></span>
       <span className="w">{detail ? state.long : state.word}</span>
       {!detail && state.sub && <span className="s">{state.sub}</span>}

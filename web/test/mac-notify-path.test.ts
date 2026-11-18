@@ -49,9 +49,14 @@ describe("popupEntries", () => {
   it("a payload with no target has no buttons", () => {
     expect(popupEntries({ title: "t", line: "l" } as NotifyPayload)).toEqual([]);
   });
-  it("a link has no in-app view and a click never opened it, so it gets no button", () => {
+  // Since 3ec64e0fc a web link HAS an in-app view: the agentglass browser. The
+  // press brings agentglass forward and routes the "web" goto to openNoteLink,
+  // so the link keeps its button.
+  it("a web link gets a button whose press opens it in the agentglass browser", () => {
     const p: NotifyPayload = { title: "t", line: "l", target: { kind: "url", url: "https://example.com" } };
-    expect(popupEntries(p)).toEqual([]);
+    const e = popupEntries(p);
+    expect(e.length).toBe(1);
+    expect(e[0]!.dest).toEqual({ kind: "web", url: "https://example.com" });
   });
   it("a deed first leaves nothing: the second may never become what a click does", () => {
     const p: NotifyPayload = {

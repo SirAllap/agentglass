@@ -173,6 +173,6 @@ describe("a read is answered when asked", () => {
 
   it("the only timer is the one-shot hidden-window delay and the server's wait", () => {
     expect((code(answer).match(/setTimeout\(/g) ?? []).length).toBe(1);
-    expect((code(control).match(/setTimeout\(/g) ?? []).length).toBe(1);
+    expect((code(control).match(/setTimeout(?:As)?\(/g) ?? []).length).toBe(1);
   });
 });

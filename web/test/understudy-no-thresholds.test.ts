@@ -110,18 +110,27 @@ describe("the understudy panel derives nothing", () => {
 /*
  * The two windows the settings page prints.
  *
- * They live in server/src/db.ts because that is where the sweep that enforces
- * them lives; they are repeated in the panel because a browser cannot import a
+ * SNAPSHOT_DAYS lives in server/src/db.ts, a sealed constant. STUB_DAYS moved
+ * to a live setting in server/src/retention.ts (its own switch on the privacy
+ * page, default 90 — see privacy.ledgerStubDays); the panel's copy mirrors
+ * that default, since a changed setting is read live, not through this
+ * hardcoded field. Repeated in the panel because a browser cannot import a
  * module that opens a database. That copy is allowed to exist and is not
  * allowed to be wrong.
  */
 describe("the retention numbers still match the sweep that enforces them", () => {
   const db = readFileSync(join(import.meta.dir, "..", "..", "server", "src", "db.ts"), "utf8");
+  const retention = readFileSync(join(import.meta.dir, "..", "..", "server", "src", "retention.ts"), "utf8");
   const panel = readFileSync(join(DIR, "UnderstudyPanel.tsx"), "utf8");
 
-  const server = (name: string): number => {
+  const sealed = (name: string): number => {
     const m = new RegExp(String.raw`export const ${name}\s*=\s*(\d+)`).exec(db);
     if (!m) throw new Error(`${name} is gone from server/src/db.ts — the panel's copy has nothing to mirror`);
+    return Number(m[1]);
+  };
+  const defaulted = (name: string): number => {
+    const m = new RegExp(String.raw`export let ${name}\s*=.*\?\?\s*(\d+)\)`).exec(retention);
+    if (!m) throw new Error(`${name}'s default is gone from server/src/retention.ts — the panel's copy has nothing to mirror`);
     return Number(m[1]);
   };
   const client = (field: string): number => {
@@ -131,10 +140,10 @@ describe("the retention numbers still match the sweep that enforces them", () =>
   };
 
   test("sealed situations", () => {
-    expect(client("snapshotDays")).toBe(server("UNDERSTUDY_SNAPSHOT_DAYS"));
+    expect(client("snapshotDays")).toBe(sealed("UNDERSTUDY_SNAPSHOT_DAYS"));
   });
 
   test("the bare fact of a write", () => {
-    expect(client("stubDays")).toBe(server("UNDERSTUDY_STUB_DAYS"));
+    expect(client("stubDays")).toBe(defaulted("UNDERSTUDY_STUB_DAYS"));
   });
 });

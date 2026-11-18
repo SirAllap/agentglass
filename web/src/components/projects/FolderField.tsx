@@ -79,7 +79,7 @@ export function FolderField({ id, value, onChange, onSubmit, placeholder, autoFo
               className="px-3 py-1.5 flex items-center gap-2.5 cursor-pointer text-[12px]"
               style={{ background: i === sel ? "color-mix(in srgb, var(--primary) 10%, transparent)" : "transparent", color: "var(--text)" }}>
               <span className="flex" style={{ color: "var(--text3)" }}>{e.repo ? <BranchIcon size={ICON.sm} /> : <FolderIcon size={ICON.sm} />}</span>
-              <span className="truncate font-semibold min-w-0 flex-1" title={e.path}>{e.name}</span>
+              <span className="truncate font-semibold min-w-0 flex-1" data-tip={e.path}>{e.name}</span>
               {e.repo && <span className="shrink-0 text-[10px] px-1.5 rounded-full" style={{ color: "var(--primary-hover)", background: wash("var(--primary)", 15), boxShadow: ring("var(--primary)", 20) }}>git</span>}
             </div>
           ))}

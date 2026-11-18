@@ -59,7 +59,7 @@ describe("the pull-request bar's one control", () => {
 
   it("the refresh, the age and the banner buttons take the bar's height and icon", () => {
     expect(panel).toContain("iconSize={BAR_ICON}");
-    expect(freshness).toMatch(/inline-flex items-center h-\[28px\] text-\[11px\] tabular-nums/);
+    expect(freshness).toMatch(/inline-flex items-center [^"]*h-\[28px\][^"]*text-\[11px\][^"]*tabular-nums/);
     expect(panel).toContain("<PrFreshness ");
     /* The "Back to the board" button of the search banner is the kit's kit Button (compact, as the mockup draws it), not a hand-sized one. */
     expect(triage).toMatch(/<Button size="compact"[^>]*onClick=\{closedView\.onBack\}/);

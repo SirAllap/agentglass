@@ -6,6 +6,7 @@
  * not shown when it was not. It is not a notification kind and never interrupts.
  */
 import { useEffect, useState } from "react";
+import { BoardSkeleton } from "./tasks/BoardState.tsx";
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import { api } from "../lib/api.ts";
 import { SettingRow } from "./SettingRow.tsx";
@@ -22,7 +23,7 @@ export function AskedAlertLog() {
     api.askedAudit().then((r) => { if (!dead) setRows(r?.audit ?? []); }).catch(() => { if (!dead) setRows([]); });
     return () => { dead = true; };
   }, []);
-  if (!rows) return <EmptyState>Loading…</EmptyState>;
+  if (!rows) return <BoardSkeleton label="Reading the log…" widths={[70, 50]} dots={false} />;
   if (!rows.length) return <EmptyState>Nothing asked for has fired yet.</EmptyState>;
   // One row per notification, so the card's divider falls between them.
   return (

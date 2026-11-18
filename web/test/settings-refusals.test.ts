@@ -19,7 +19,7 @@ stub("fetch", async (url: string) => {
   return Response.json({ ok: true });
 });
 
-const { answerSettingsRequest, answerAllSettingsRequests, settingsRefusals, settingsRequestsChanged, settingsRequests } = await import("../src/lib/settingsRequests.ts");
+const { answerSettingsRequest, answerAllSettingsRequests, settingsRefusals, settingsRequestsChanged, settingsRequests, liveRefusals, REFUSAL_MS } = await import("../src/lib/settingsRequests.ts");
 const req = { id: "sr_1", setting: "workers.roles", who: "an unnamed agent", diff: ["Worker roles"], expires: Date.now() + 60_000 };
 const about = { who: req.who, title: "Worker roles" };
 
@@ -31,7 +31,7 @@ describe("a refused answer is not lost with its card", () => {
     const err = await answerSettingsRequest(req.id, true, about);
     expect(err).toBe("worker roles are global; nothing was applied");
     expect(settingsRequests.list().length).toBe(0);
-    expect(settingsRefusals.list()).toEqual([{ id: "sr_1", ...about, approve: true, error: "worker roles are global; nothing was applied" }]);
+    expect(settingsRefusals.list()).toEqual([{ id: "sr_1", ...about, approve: true, error: "worker roles are global; nothing was applied", at: expect.any(Number) }]);
     settingsRefusals.dismiss("sr_1");
     expect(settingsRefusals.list()).toEqual([]);
   });
@@ -81,6 +81,29 @@ describe("Approve all answers every waiting request", () => {
   });
 });
 
+describe("a refusal is news, not a question, so it leaves by itself", () => {
+  const x = { id: "sr_9", who: "an unnamed agent", title: "Worker roles", approve: true, error: "changed since", at: 1_000 };
+  test("it is on screen for REFUSAL_MS, and gone at the mark", () => {
+    expect(liveRefusals([x], 1_000)).toEqual([x]);
+    expect(liveRefusals([x], 1_000 + REFUSAL_MS - 1)).toEqual([x]);
+    expect(liveRefusals([x], 1_000 + REFUSAL_MS)).toEqual([]);
+  });
+  test("one running out leaves the others alone", () => {
+    const later = { ...x, id: "sr_10", at: 1_000 + REFUSAL_MS };
+    expect(liveRefusals([x, later], 1_000 + REFUSAL_MS)).toEqual([later]);
+  });
+  test("the card carries the moment it arrived, so that life starts at the answer", async () => {
+    pending = [req]; await settingsRequestsChanged();
+    decide = { status: 409, body: { ok: false, error: "relaunch changed since" }, removes: true };
+    const before = Date.now();
+    await answerSettingsRequest(req.id, true, about);
+    const kept = settingsRefusals.list()[0]!;
+    expect(kept.at).toBeGreaterThanOrEqual(before);
+    expect(kept.at).toBeLessThanOrEqual(Date.now());
+    settingsRefusals.dismiss(kept.id);
+  });
+});
+
 describe("the chip and the list draw it", () => {
   test("the chip stays up while a refusal waits, and the list renders a card for it", async () => {
     const chip = await Bun.file(new URL("../src/components/AgentChangeChip.tsx", import.meta.url)).text();
@@ -88,6 +111,10 @@ describe("the chip and the list draw it", () => {
     const list = await Bun.file(new URL("../src/components/SettingsRequests.tsx", import.meta.url)).text();
     expect(list).toContain("refused.map((x) => <RefusalCard");
     expect(list).toContain('role="alert"');
+    // Three ways out of a card that is not a question: the cross, Esc, and its own life.
+    expect(list).toContain("<CloseButton onClick={() => settingsRefusals.dismiss(x.id)}");
+    expect(list).toContain('e.key === "Escape"');
+    expect(list).toContain("liveRefusals(all, now)");
     // One click for a waiting pile; nothing to click for a single card.
     expect(list).toContain("requests.length > 1 && <ApproveAll");
     expect(list).toContain("Approve all ({requests.length})");

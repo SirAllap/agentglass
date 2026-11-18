@@ -155,8 +155,11 @@ export const uniqueRoots = (groups: readonly Group[]): string[] => Array.from(ne
 export const indexOfRoot = (items: readonly Item[], root: string | null): number =>
   root ? items.findIndex((i) => i.t === "row" && i.r.root === root) : -1;
 
-/** The rail's numbers. They count what the rail item would list, whatever the search says. */
-export function railCounts(repos: readonly GitRepoRef[], folders: readonly string[], workspaces: readonly string[], hidden: readonly string[]) {
+/** The rail's numbers. They count what the rail item would list, whatever the search says.
+ *  `hero`: the first-run screen stands where the list would be, so nothing is listed
+ *  and every number is 0 (a repo the server found beside the app is not a project yet). */
+export function railCounts(repos: readonly GitRepoRef[], folders: readonly string[], workspaces: readonly string[], hidden: readonly string[], hero = false) {
+  if (hero) return { all: 0, open: 0, hidden: 0, perFolder: Object.fromEntries(folders.map((f) => [f, 0])) as Record<string, number> };
   const hide = new Set(hidden);
   const live = repos.filter((r) => !hide.has(r.root) || workspaces.includes(r.root));
   const perFolder: Record<string, number> = {};

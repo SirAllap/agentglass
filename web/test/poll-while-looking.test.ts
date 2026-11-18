@@ -2,8 +2,8 @@
  * The gate every always-on poll goes through, run rather than read.
  *
  * A desktop window is never `document.hidden`, so a plain interval asks for as
- * long as the window exists. `pollWhileLooking` is silent unless the window is
- * visible AND focused, asks at once when it comes back, and lets go of every
+ * long as the window exists. `pollWhileLooking` is silent only while the window is
+ * hidden (focus does not matter), asks at once when it comes back, and lets go of every
  * listener when stopped. The globals are stubbed and restored: `bun test` runs
  * every file in one process.
  */
@@ -29,27 +29,24 @@ beforeAll(() => {
   });
 });
 
-test("pollWhileLooking is silent unfocused, asks at once on focus, and lets go", async () => {
+test("pollWhileLooking keeps polling when blurred but visible, stops when hidden, and lets go", async () => {
   let n = 0;
-  focused = false;
+  focused = false; // blurred, still visible (second screen)
   const stop = pollWhileLooking(() => { n++; }, 20);
   await Bun.sleep(100);
-  expect(n, "an unfocused window asks nothing").toBe(0);
-  focused = true;
-  fire(winL, "focus");
-  expect(n, "coming back asks at once").toBe(1);
-  await Bun.sleep(70);
-  expect(n, "and then on the interval").toBeGreaterThanOrEqual(3);
+  expect(n, "a blurred but visible window keeps asking").toBeGreaterThanOrEqual(3);
   hidden = true;
+  fire(docL, "visibilitychange");
   const at = n;
   await Bun.sleep(70);
   expect(n, "a hidden document asks nothing").toBe(at);
   hidden = false;
+  fire(docL, "visibilitychange");
+  expect(n, "becoming visible asks at once").toBe(at + 1);
   stop();
   const stopped = n;
   await Bun.sleep(70);
-  fire(winL, "focus");
+  fire(docL, "visibilitychange");
   expect(n, "stopped is stopped").toBe(stopped);
-  expect(winL.get("focus")?.size ?? 0).toBe(0);
   expect(docL.get("visibilitychange")?.size ?? 0).toBe(0);
 });

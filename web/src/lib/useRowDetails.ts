@@ -69,13 +69,14 @@ export function useRowDetails(root: string, rows: PrSummary[], on: boolean): PrS
     if (!key || !root) return;
     const numbers = key.split(",").map(Number);
     for (const n of numbers) tried.current.n.add(n);
-    let live = true;
+    /* Not tied to this effect run: `key` changes the moment the numbers are marked tried, which re-ran the effect and dropped
+       the answer of a request that was still out, and a number tried is never asked again. Only another repository drops it. */
     void api.prRowDetails(root, numbers, finishedOf(numbers)).then((r) => {
-      if (!live || !r?.rows) return;
+      if (tried.current.root !== root) return;
+      if (!r?.rows) { for (const n of numbers) tried.current.n.delete(n); return; }
       for (const [n, row] of Object.entries(r.rows)) if (row.closed) finishedSeen.set(`${root}\u0000${n}`, row);
       setGot((cur) => { const next = new Map(cur); for (const [n, row] of Object.entries(r.rows)) next.set(Number(n), row); return next; });
     }).catch(() => {});
-    return () => { live = false; };
   }, [key, root]);
   return filled;
 }

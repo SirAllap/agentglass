@@ -883,8 +883,10 @@ export function FilePalette({
     /* The same allowlist as every other read: the page route
        judges the path, and the fallback is the opener that
        already does. */
-    if (onOpenBrowser) { onOpenBrowser(withToken(pageUrl(SERVER, p))); onClose(); }
-    else void api.previewOpen(p);
+    if (!onOpenBrowser) { void api.previewOpen(p); return; }
+    /* A ticket for this one file, never the token: the page's own
+       scripts run, and a script can read its address. */
+    void api.previewPageLink(p).then((l) => { onOpenBrowser(pageUrl(SERVER, l.path)); onClose(); }, () => { void api.previewOpen(p); });
   };
 
     const status = tab === "machine" ? (byText ? inside : onDisk) : null;

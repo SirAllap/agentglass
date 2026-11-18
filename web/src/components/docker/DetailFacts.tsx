@@ -9,8 +9,8 @@ import { RefreshIcon, WarningIcon } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { ExtIcon } from "./Glyphs.tsx";
 
-export function WhyLine({ c, onShowLog }: { c: DockerContainer; onShowLog: () => void }) {
-  const w = healthLine(c);
+export function WhyLine({ c, onShowLog, recent }: { c: DockerContainer; onShowLog: () => void; recent?: number | null }) {
+  const w = healthLine(c, recent);
   if (!w) return null;
   return (
     <div className="dk-why" role="status" data-tone={w.tone === "amb" ? "amb" : undefined}>
@@ -20,7 +20,7 @@ export function WhyLine({ c, onShowLog }: { c: DockerContainer; onShowLog: () =>
         {w.cause && <div className="dk-cause">{w.cause}</div>}
         {w.raw && <details className="dk-fold"><summary>details</summary><code>{w.raw}</code></details>}
       </div>
-      <button type="button" className="dk-chip sm ghost" onClick={onShowLog} title="Scroll the log to the last error">Show in log</button>
+      <button type="button" className="dk-chip sm ghost" onClick={onShowLog} data-tip="Scroll the log to the last error">Show in log</button>
     </div>
   );
 }
@@ -53,8 +53,8 @@ export function FactCards({ c, stat, onOpenPort }: { c: DockerContainer; stat?: 
         <div className="k">Ports</div>
         <div className="pls v">
           {ports.length ? ports.map((p, i) => p.kind === "web"
-            ? <button key={i} type="button" className="dk-port" data-port="web" title={p.title} onClick={() => onOpenPort(p.url!)}><ExtIcon size={12} />{p.label}</button>
-            : <span key={i} className="dk-port" data-port={p.kind === "off" ? "off" : "plain"} title={p.title}>{p.label}</span>)
+            ? <button key={i} type="button" className="dk-port" data-port="web" data-tip={p.title} onClick={() => onOpenPort(p.url!)}><ExtIcon size={ICON.xs} />{p.label}</button>
+            : <span key={i} className="dk-port" data-port={p.kind === "off" ? "off" : "plain"} data-tip={p.title}>{p.label}</span>)
             : <span className="dk-port" data-port="none">none published</span>}
         </div>
       </div>

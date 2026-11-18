@@ -75,6 +75,7 @@ const SIZES = new Set(["text-[10px]", "text-[10.5px]", "text-[11px]"]);
 const EXEMPT: { file: string; match: string; why: string }[] = [
   { file: "TasksPanel.tsx", match: "onClick={onAdd}", why: "the submit of the comment box, sized against the box" },
   { file: "PrPanel.tsx", match: "data-merge-button", why: "the dock's Merge pull request is the surface's one primary action: 30px like the mockup's prime hit, sized against the 54px dock band, not a chip" },
+  { file: "BrowserPanel.tsx", match: "onMouseMove={(e) => { if ((e.movementX || e.movementY) && hint !== i) setHint(i); }}", why: "a row of the address bar's suggestion list, a menu item sized by HIT and the list, not a chip in a toolbar" },
   { file: "PrPanel.tsx", match: "onClick={copyNumber}", why: "the PR number inside a 14px title line — it is sized against the heading it sits in, not against a toolbar" },
 ];
 

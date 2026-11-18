@@ -3,7 +3,7 @@
  * with the owner's own board left exactly as it was.
  */
 import { afterAll, describe, expect, it } from "bun:test";
-import { board, fileInLane, lanesFor, LANES, voice } from "../src/lib/prLanes.ts";
+import { board, fileInLane, lanesFor, LANES, voice } from "../../shared/prLanes.ts";
 import { singleLogin } from "../src/lib/prSearch.ts";
 import { askPerson, __forgetPeople } from "../src/lib/personBoard.ts";
 import { api } from "../src/lib/api.ts";

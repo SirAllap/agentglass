@@ -12,6 +12,7 @@
  * the size you are about to be.
  */
 import { describe, expect, it } from "bun:test";
+import { servicesCoveredByTools } from "../src/lib/toolsView.ts";
 
 const pane = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url)).text();
 
@@ -19,7 +20,11 @@ describe("before the answer arrives", () => {
   it("draws the providers it already knows about", () => {
     // Gated on `status &&`, the whole list waited on a fetch it did not need.
     expect(pane).not.toContain("{status && PROVIDERS");
-    expect(pane).toContain("{PROVIDERS.filter((p) => shown(p.id)).map((p) => (");
+    // The list is PROVIDERS minus the services a missing tool already speaks
+    // for; with no answer yet nothing is covered, so every provider draws.
+    expect(pane).toContain("const listed = PROVIDERS.filter((p) => !covered.has(p.id));");
+    expect(pane).toContain("{listed.filter((p) => shown(p.id)).map((p) => (");
+    expect(servicesCoveredByTools(null).size).toBe(0);
   });
 
   it("says Checking rather than guessing a state", () => {

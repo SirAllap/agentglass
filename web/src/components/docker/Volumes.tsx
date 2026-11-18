@@ -143,10 +143,10 @@ function VolumeCard({ i, max, measured, readOnly, selected, armed, pending, menu
       <div className="dk-xt">
         <Shape worn={worn} />
         <div className="nm">
-          <b className="dk-xn" title={v.name}>{volumeLabel(v.name)}</b>
+          <b className="dk-xn" data-tip={v.name}>{volumeLabel(v.name)}</b>
           {i.kind === "nm"
-            ? <span className="dk-kind" data-k="nm" title="Installed dependencies. The next install rebuilds this volume."><CubeIcon size={ICON.xs} />node_modules</span>
-            : <span className="dk-kind" title="Holds data that is not stored anywhere else"><CylinderIcon size={ICON.xs} />data</span>}
+            ? <span className="dk-kind" data-k="nm" data-tip="Installed dependencies. The next install rebuilds this volume."><CubeIcon size={ICON.xs} />node_modules</span>
+            : <span className="dk-kind" data-tip="Holds data that is not stored anywhere else"><CylinderIcon size={ICON.xs} />data</span>}
         </div>
         <RemoveButton label={`Remove ${v.name}`} off={!i.removable} reason={i.why} readOnly={readOnly} pending={pending} lock={i.kind === "data"} onClick={onArm} />
         <MoreButton label={v.name} open={menuOpen} onMenu={onMenu} />
@@ -160,7 +160,7 @@ function VolumeCard({ i, max, measured, readOnly, selected, armed, pending, menu
       <div className="dk-xf">
         <ContainerChips cs={i.holders} none="nothing attached" onGo={onGoContainer} />
         <Held v={v} />
-        <span className="dk-xage" title={last ? `${last.via} · ${last.branch ?? "detached"} · ${last.at}` : undefined}>
+        <span className="dk-xage" data-tip={last ? `${last.via} · ${last.branch ?? "detached"} · ${last.at}` : undefined}>
           {last ? `written ${sinceLabel(last.at)}` : "no writes seen"}
         </span>
       </div>

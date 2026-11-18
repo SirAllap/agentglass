@@ -3,12 +3,15 @@ import { api } from "../lib/api.ts";
 import { ICON } from "../lib/iconSize.ts";
 import { SettingsCard } from "./SettingsKit.tsx";
 import { INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
-import { SettingRow, Switch } from "./SettingRow.tsx";
-import { Button } from "./workspace/Chrome.tsx";
+import { SettingRow, Switch, Toggle } from "./SettingRow.tsx";
+import { Select } from "./Select.tsx";
+import { useJiraUnits } from "../lib/jiraUnits.ts";
+import { sessionStartStatusNames } from "../lib/sessionStartMoveStatus.ts";
+import { Button } from "./workspace/Chrome.tsx";import { DockerLeftovers } from "./CleanupDockerLeftovers.tsx";
 import { BoxIcon, BranchIcon, CrossIcon, DoneIcon, FileIcon, FolderIcon, ImageFileIcon, MergeIcon, RefreshIcon, SearchIcon, SparkleIcon, StashIcon, TerminalIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { BellIcon, LayersIcon, ShieldIcon } from "./settingsNavIcons.tsx";
 import {
-  BRIEFS_HELP, CLEANUP_KIND_ROWS, DEFAULT_DAYS, MODE_BADGE, NO_EVIDENCE_ROOT, NO_OTHER_FOLDERS, OTHER_FOLDERS_HELP, addPattern, addRoot, briefsOf, checkBriefsDir, withBriefsDir, bulkLine, dropRoot, rootsOf, cleanupModes, daysOf, daysState, filterProjects, includeOf, isCustom, modeOf, nowLine, projectName, readPick,
+  BRIEFS_HELP, TEARDOWN_HELP, CLEANUP_KIND_ROWS, DEFAULT_DAYS, MODE_BADGE, NO_EVIDENCE_ROOT, NO_OTHER_FOLDERS, OTHER_FOLDERS_HELP, addPattern, addRoot, briefsOf, checkBriefsDir, withBriefsDir, teardownOf, checkTeardownScript, withTeardownScript, bulkLine, dropRoot, rootsOf, cleanupModes, daysOf, daysState, filterProjects, includeOf, isCustom, modeOf, nowLine, projectName, readPick,
   repoSlug, retryPlan, runPlan, saveLine, showList, showSearch, stillThere, tickState, toggleRoot, toggleShown, valuesOf, withKind, writePick, writePlan,
   type CleanupKind, type CleanupMode, type KindRow, type ModeCard, type ProjectValues, type RootResult, type RootWrite,
 } from "../lib/cleanupSettings.ts";
@@ -29,6 +32,74 @@ function DaysField({ days, dis, onText, onCommit }: { days: { on: boolean; shown
       <span className="agx-cl-days">days</span>
       <Switch on={days.on} />
     </span>
+  );
+}
+
+/** The free-text fallback for the status field, when Jira's own statuses could not be read. */
+function MoveStatusTextField({ text, onChange, onSave, busy }: { text: string; onChange: (v: string) => void; onSave: () => void; busy: boolean }) {
+  return (
+    <div data-setting="cleanup.moveCardStatus" className="agx-cl-evadd">
+      <input className={`${INPUT} agx-cl-evin`} style={INPUT_STYLE} value={text} spellCheck={false} placeholder="e.g. In Review"
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.currentTarget as HTMLInputElement).blur(); } }}
+        onBlur={() => { if (!busy) onSave(); }} aria-label="Status to move it to" />
+      {busy && <span className="agx-cl-mute" role="status">Saving…</span>}
+    </div>
+  );
+}
+
+/**
+ * "Move the card too": one more step of the same merge cleanup plan, same
+ * shape as the flow's Session start move (`flow.sessionStart.move` /
+ * `OrchestrationPane.tsx`'s `SessionStartMoveRow`) — a switch plus the
+ * status it lands on, read from the project's Jira statuses when they are
+ * known.
+ */
+function MoveCardRow({ root, dis }: { root: string; dis: boolean }) {
+  const [on, setOn] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("");
+  const [statusBusy, setStatusBusy] = useState(false);
+  const [text, setText] = useState("");
+  const { state } = useJiraUnits();
+  useEffect(() => {
+    let live = true;
+    void api.settingAt("cleanup.moveCard", root).catch(() => null).then((r) => { if (live && r?.ok) setOn(r.value === true); });
+    void api.settingAt("cleanup.moveCardStatus", root).catch(() => null).then((r) => {
+      if (!live || !r?.ok) return;
+      const v = typeof r.value === "string" ? r.value : "";
+      setStatus(v); setText(v);
+    });
+    return () => { live = false; };
+  }, [root]);
+  const flip = async () => {
+    setBusy(true);
+    const r = await api.settingAtSet("cleanup.moveCard", !on, root).catch(() => ({ ok: false, applied: undefined as boolean | undefined, error: "" }));
+    setBusy(false);
+    if (r.ok && r.applied !== false) setOn(!on);
+  };
+  const saveStatus = async (v: string) => {
+    setStatusBusy(true);
+    const r = await api.settingAtSet("cleanup.moveCardStatus", v, root).catch(() => ({ ok: false, applied: undefined as boolean | undefined, error: "" }));
+    setStatusBusy(false);
+    if (r.ok && r.applied !== false) { setStatus(v); setText(v); }
+  };
+  const names = sessionStartStatusNames(state);
+  const canPick = names.length > 0;
+  return (
+    <div className="agx-cl-ev" data-cl-kind="move-card" aria-label="Move the card too">
+      <span hidden data-setting="cleanup.moveCard" />
+      <Toggle settingId="cleanup.moveCard" on={on} disabled={busy || dis} onClick={() => void flip()}
+        label="Move the card too"
+        hint="On: this merge's cleanup also moves the card to the status below, through the move door (Settings ▸ Jira ▸ Move cards between steps). Off: the card stays where it was." />
+      <SettingRow settingId="cleanup.moveCardStatus" label="Status to move it to"
+        hint={canPick ? "Read from your Jira projects; matched by name, case-insensitively, against the card's own moves when the plan runs."
+          : state.kind === "loading" ? "Reading your statuses…" : "Could not read your statuses, so type the name as Jira shows it."}
+        control={canPick
+          ? <div data-setting="cleanup.moveCardStatus"><Select value={status} busy={statusBusy} onChange={(v) => void saveStatus(v)}
+              options={[{ value: "", label: "Not set" }, ...names.map((nm) => ({ value: nm, label: nm }))]} /></div>
+          : <MoveStatusTextField text={text} onChange={setText} onSave={() => { if (text.trim() !== status) void saveStatus(text.trim()); }} busy={statusBusy} />} />
+    </div>
   );
 }
 
@@ -65,6 +136,9 @@ export function CleanupSettings({ onChip }: { onChip?: (c: HeaderChip | null) =>
   const [briefs, setBriefs] = useState("");
   const [briefsText, setBriefsText] = useState("");
   const [briefsWhy, setBriefsWhy] = useState("");
+  const [teardown, setTeardown] = useState("");
+  const [teardownText, setTeardownText] = useState("");
+  const [teardownWhy, setTeardownWhy] = useState("");
   const [patterns, setPatterns] = useState<string[]>([]);
   const [patternText, setPatternText] = useState("");
   const [patternWhy, setPatternWhy] = useState("");
@@ -108,7 +182,7 @@ export function CleanupSettings({ onChip }: { onChip?: (c: HeaderChip | null) =>
       .then(([m, d, i, e, cfg, o]) => {
         if (!live) return;
         setMode(modeOf(m.value)); setDays(daysState(d.value)); setInclude(includeOf(i.value)); setRoots(rootsOf(e.value)); setRootText(""); setRootWhy("");
-        setBriefs(briefsOf(cfg.value)); setBriefsText(briefsOf(cfg.value)); setBriefsWhy(""); setPatterns(rootsOf(o.value)); setPatternText(""); setPatternWhy(""); setProblem(null); setWaits(false);
+        setBriefs(briefsOf(cfg.value)); setBriefsText(briefsOf(cfg.value)); setBriefsWhy(""); setTeardown(teardownOf(cfg.value)); setTeardownText(teardownOf(cfg.value)); setTeardownWhy(""); setPatterns(rootsOf(o.value)); setPatternText(""); setPatternWhy(""); setProblem(null); setWaits(false);
       }).catch(() => { if (live) setProblem("Could not read this project's settings."); });
     return () => { live = false; };
   }, [root, drafting]);
@@ -176,6 +250,14 @@ export function CleanupSettings({ onChip }: { onChip?: (c: HeaderChip | null) =>
     const cur = await api.settingAt("cleanup.config", root).catch(() => null);
     if (!cur?.ok) { setBriefsWhy("Could not read this project's cleanup settings."); return; }
     if (await write("cleanup.config", withBriefsDir(cur.value, r.dir))) { setBriefs(r.dir); setBriefsText(r.dir); }
+  };
+  const saveTeardown = async () => {
+    const r = checkTeardownScript(teardownText);
+    if (!r.ok) { setTeardownWhy(r.why); return; }
+    setTeardownWhy("");
+    const cur = await api.settingAt("cleanup.config", root).catch(() => null);
+    if (!cur?.ok) { setTeardownWhy("Could not read this project's cleanup settings."); return; }
+    if (await write("cleanup.config", withTeardownScript(cur.value, r.path))) { setTeardown(r.path); setTeardownText(r.path); }
   };
   const savePatterns = async (next: string[]) => {
     const was = patterns;
@@ -245,7 +327,7 @@ export function CleanupSettings({ onChip }: { onChip?: (c: HeaderChip | null) =>
 
   const page = (
     <>
-      <SettingsCard wide title="After a PR is merged" icon={<SparkleIcon size={ICON.md} />} desc="What happens to its local leftovers: Docker, worktree, branch, notes and tab. Only on this computer."
+      <SettingsCard wide title="After a merge" icon={<SparkleIcon size={ICON.md} />} desc="What happens to its local leftovers: Docker, worktree, branch, notes and tab. Only on this computer."
         status={list && root ? <span className="agx-cl-for" data-draft={drafting ? "" : undefined} title={drafting ? undefined : root}>{forWho}</span> : undefined}>
         {none ? <p className="agx-cl-empty">No project is open yet. Open one and its choice shows here.</p> : (
           <div className="agx-cl-body">
@@ -269,24 +351,25 @@ export function CleanupSettings({ onChip }: { onChip?: (c: HeaderChip | null) =>
             <div className="agx-cl-now" aria-live="polite"><em>NOW</em><span>{nowText}</span></div>
             {problem && <div role="alert" className="agx-cl-problem"><WarningIcon size={ICON.sm} />{problem}</div>}
             <SettingRow
-              agentExempt label="Also clean up merged PRs older than"
+              settingId="cleanup.autoCleanDays" agentExempt label="Also clean up merged PRs older than"
               hint="Old merged PRs are cleaned on their own, with the same safety blocks. Off by default."
               onClick={dis ? undefined : () => void flipDays(!days.on)} role="switch" ariaChecked={days.on}
               control={<DaysField days={days} dis={dis} onText={(shown) => setDays({ on: days.on, shown })} onCommit={() => void commitDays()} />} />
           </div>
         )}
       </SettingsCard>
-      <SettingsCard wide title="What to include" icon={<LayersIcon size={ICON.md} />} desc="Untick a kind and it is never touched, in any mode.">
+      <SettingsCard wide title="What to clean" icon={<LayersIcon size={ICON.md} />} desc="Untick a kind and it is never touched, in any mode.">
         <div className="agx-cl-body">
           <div className="agx-cl-incl">
             {CLEANUP_KIND_ROWS.map((k) => {
               const Ic = KIND_ICON[k.icon];
               return (
-                <label key={k.id} className="agx-cl-irow" data-cl-kind={k.id}>
+                <button key={k.id} type="button" role="switch" aria-checked={include.includes(k.id)} disabled={dis} aria-label={`Include ${k.name}`}
+                  className="agx-cl-irow" data-cl-kind={k.id} onClick={() => void tick(k.id, !include.includes(k.id))}>
                   <span className="agx-cl-tile"><Ic size={ICON.md} /></span>
                   <span className="agx-cl-tx"><b>{k.name}</b><span>{k.text}</span></span>
-                  <input type="checkbox" checked={include.includes(k.id)} disabled={dis} aria-label={`Include ${k.name}`} onChange={(e) => void tick(k.id, e.target.checked)} />
-                </label>
+                  <span aria-hidden><Switch on={include.includes(k.id)} /></span>
+                </button>
               );
             })}
           </div>
@@ -314,10 +397,23 @@ export function CleanupSettings({ onChip }: { onChip?: (c: HeaderChip | null) =>
               <span className="agx-cl-mute">{BRIEFS_HELP}</span>
               <span className="agx-cl-evadd">
                 <input className={`${INPUT} agx-cl-evin`} style={INPUT_STYLE} value={briefsText} disabled={dis} placeholder="~/orbit-notes/briefs" aria-label="Briefs folder"
-                  onChange={(e) => { setBriefsText(e.target.value); setBriefsWhy(""); }} onKeyDown={(e) => { if (e.key === "Enter") void saveBriefs(); }} />
-                <Button size="compact" tone="primary" disabled={dis || briefsText.trim() === briefs} onClick={() => void saveBriefs()}>{briefsText.trim() ? "Save folder" : "Turn off"}</Button>
+                  onChange={(e) => { setBriefsText(e.target.value); setBriefsWhy(""); }} onKeyDown={(e) => { if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur(); }}
+                  onBlur={() => { if (briefsText.trim() !== briefs) void saveBriefs(); }} />
               </span>
               {briefsWhy && <span role="alert" className="agx-cl-problem"><WarningIcon size={ICON.sm} />{briefsWhy}</span>}
+            </div>
+          )}
+          {!drafting && include.includes("docker") && <DockerLeftovers root={root} dis={dis} write={write} />}
+          {!drafting && include.includes("worktree") && (
+            <div className="agx-cl-ev" data-cl-kind="teardown-script" aria-label="Teardown script">
+              <b>Teardown script (runs before the worktree is removed)</b>
+              <span className="agx-cl-mute">{TEARDOWN_HELP}</span>
+              <span className="agx-cl-evadd">
+                <input className={`${INPUT} agx-cl-evin`} style={INPUT_STYLE} value={teardownText} disabled={dis} placeholder="scripts/teardown.sh" aria-label="Teardown script"
+                  onChange={(e) => { setTeardownText(e.target.value); setTeardownWhy(""); }} onKeyDown={(e) => { if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur(); }}
+                  onBlur={() => { if (teardownText.trim() !== teardown) void saveTeardown(); }} />
+              </span>
+              {teardownWhy && <span role="alert" className="agx-cl-problem"><WarningIcon size={ICON.sm} />{teardownWhy}</span>}
             </div>
           )}
           {!drafting && include.includes("worktree") && (
@@ -344,6 +440,9 @@ export function CleanupSettings({ onChip }: { onChip?: (c: HeaderChip | null) =>
           </div>
         </div>
       </SettingsCard>
+      {!drafting && root && <SettingsCard wide title="Move the card after merge" icon={<MergeIcon size={ICON.md} />} desc="One more step of the same plan, off until you turn it on.">
+        <MoveCardRow root={root} dis={dis} />
+      </SettingsCard>}
     </>
   );
   if (!list) return page;

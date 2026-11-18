@@ -20,16 +20,21 @@ import type { TmuxCmdBody } from "../../lib/tmuxCmd.ts";
 import { OTHER, type TabGroup } from "../../lib/tabGroups.ts";
 import { stripZones, type StripItem } from "../../lib/stripZones.ts";
 import { peekSentence, prText } from "../../lib/peekCard.ts";
+import { seatGlyphTone } from "../../lib/seatGlyph.ts";
 import { windowMark } from "../../lib/windowMark.ts";
 import { needYouJump } from "../../lib/needYouJump.ts";
 import { branchPr, windowBranches } from "../../lib/windowGit.ts";
 import { altDigit } from "../../lib/termKeys.ts";
+import { ctrlAltDigit, savedOrder, slotOrder } from "../../lib/sessionSlots.ts";
 import { registerStripDoors } from "../../lib/termStripHost.ts";
 import { appChordFor, chordLabel } from "../../lib/keybindings.ts";
 import { edgeMask, useTabStripScroll } from "../../lib/tabStrip.ts";
 import { keepTermFocus } from "../../lib/keepFocus.ts";
 import { BellIcon } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
+import { api, IS_DEMO } from "../../lib/api.ts";
+import { agentsOf, subscribeAgents } from "../../lib/fleetAgents.ts";
+import { canStopWorker, newestWins, spendRowTries, windowsWithoutRow, workerInWindow, type NamedAgentRow } from "../../lib/workerTab.ts";
 import { ContextMenu, MenuItem } from "../ContextMenu.tsx";
 import type { ConfirmSpec } from "../ConfirmDialog.tsx";
 import { CTRL_H, INPUT, INPUT_STYLE, LINE, tintEdge } from "../workspace/Chrome.tsx";
@@ -103,6 +108,9 @@ export interface TermStripProps {
 const tabMark = (w: TmuxWindow) =>
   windowMark({ name: w.name || "shell", status: w.status, flags: w.flags, dead: w.dead, exitCode: w.exit, restored: w.restored, wasRunning: w.was });
 
+/** Re-reads per window that has no named-agent row yet, on the fleet's change events. */
+const MAX_ROW_TRIES = 3;
+
 export function TermStrip(p: TermStripProps) {
   const { windows, groups, projects, active, kept, cmd, onPick, focusTerm } = p;
   const lockedSession = p.session.list.find((s) => s.name === p.session.name)?.locked === true;
@@ -143,6 +151,46 @@ export function TermStrip(p: TermStripProps) {
   const [dropOn, setDropOn] = useState<string | null>(null);
   const [alt, setAlt] = useState(false);
   const chipRef = useRef<HTMLButtonElement>(null);
+
+  // Which tabs are workers: one read when the window list changes (a worker's
+  // start and end both do), never on a timer. Ended rows stay: the tab is kept.
+  // A new worker's window shows up before its row does, so the fleet's own
+  // change event (no extra poll) re-reads while some window still has no row;
+  // each window gets at most MAX_ROW_TRIES of those, so a plain shell tab
+  // never keeps it going.
+  const [workerRows, setWorkerRows] = useState<NamedAgentRow[] | null>(null);
+  const windowKey = windows.map((w) => w.id).join(",");
+  const rowsRef = useRef<NamedAgentRow[] | null>(null);
+  rowsRef.current = workerRows;
+  const idsRef = useRef<string[]>([]);
+  idsRef.current = windows.map((w) => w.id);
+  const triesRef = useRef(new Map<string, number>());
+  const seqRef = useRef(newestWins());
+  const fleetKeysRef = useRef("");
+  const readRows = () => {
+    let live = true;
+    const n = seqRef.current.start();
+    void api.namedAgents(true).then((r) => { if (live && r?.ok && seqRef.current.accept(n)) setWorkerRows(r.result?.agents ?? []); }).catch(() => {});
+    return () => { live = false; };
+  };
+  useEffect(() => {
+    if (IS_DEMO) return;
+    return readRows();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [windowKey]);
+  useEffect(() => {
+    if (IS_DEMO) return;
+    return subscribeAgents(() => {
+      /* Only a session that was not there before can bring a row: other agent events are not a try. */
+      const keys = agentsOf().map((a) => a.key).sort().join(",");
+      if (keys === fleetKeysRef.current) return;
+      fleetKeysRef.current = keys;
+      const waiting = spendRowTries(triesRef.current, windowsWithoutRow(rowsRef.current, idsRef.current), idsRef.current, MAX_ROW_TRIES);
+      if (!waiting.length) return;
+      readRows();
+    });
+  }, []);
+  const workerOf = (id: string) => workerInWindow(workerRows, id);
 
   // A menu whose window or project has gone closes, rather than staying in
   // state with nothing drawn and popping back up when one of that name returns.
@@ -193,6 +241,39 @@ export function TermStrip(p: TermStripProps) {
     window.addEventListener("keyup", up);
     window.addEventListener("blur", off);
     return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); window.removeEventListener("blur", off); setAlt(false); };
+  }, [p.shown]);
+
+  // Ctrl+Alt+1..9 goes to the session in that slot; holding Ctrl+Alt alone for a
+  // moment opens the sessions dialog, which shows the slots and reorders them.
+  // Capture phase, so it answers before the app's pane chords on the same keys.
+  const sessionRef = useRef({ list: p.session.list, name: p.session.name, cmd });
+  sessionRef.current = { list: p.session.list, name: p.session.name, cmd };
+  useEffect(() => {
+    if (!p.shown) return;
+    let held: ReturnType<typeof setTimeout> | null = null;
+    const stop = () => { if (held) { clearTimeout(held); held = null; } };
+    const down = (e: KeyboardEvent) => {
+      const n = ctrlAltDigit(e);
+      if (n) {
+        stop();
+        const s = sessionRef.current;
+        const name = slotOrder(s.list, savedOrder())[n - 1]?.name;
+        if (!name) return;
+        e.preventDefault(); e.stopPropagation();
+        if (name !== s.name) s.cmd({ cmd: "session", name });
+        return;
+      }
+      if ((e.key === "Control" || e.key === "Alt") && e.ctrlKey && e.altKey && !e.shiftKey && !e.metaKey) {
+        stop();
+        held = setTimeout(() => { held = null; setManageOpen(true); }, 450);
+        return;
+      }
+      stop();
+    };
+    window.addEventListener("keydown", down, true);
+    window.addEventListener("keyup", stop, true);
+    window.addEventListener("blur", stop);
+    return () => { stop(); window.removeEventListener("keydown", down, true); window.removeEventListener("keyup", stop, true); window.removeEventListener("blur", stop); };
   }, [p.shown]);
 
   // The app's chords (Ctrl+Alt+J / Ctrl+Alt+N / Ctrl+Shift+T) answer through here.
@@ -314,6 +395,8 @@ export function TermStrip(p: TermStripProps) {
         renaming={renaming === w.id} moving={moving === w.id}
         clientCols={p.clientCols}
         dnd={dnd(w)}
+        worker={workerOf(w.id)}
+        seatProject={w.seat ? groupOfWindow.get(w.id)?.label : undefined}
         onSelect={() => onPick(w.id)}
         onClose={() => p.closeWindows([w.id], { anchor: tabEl(w.id) })}
         onStartRename={() => setRenaming(w.id)}
@@ -345,7 +428,7 @@ export function TermStrip(p: TermStripProps) {
           color: "var(--text3)", borderLeft: LINE, height: CTRL_H.compact, lineHeight: `${CTRL_H.compact}px`,
           background: g && dropOn === `group:${g.key}` && dragging ? "color-mix(in srgb, var(--primary) 16%, transparent)" : undefined,
         }}
-        title={`${it.name} — kept in the strip. Right-click for its menu; drop a tab here to move it into ${it.name}.`}>
+        data-tip={`${it.name} — kept in the strip. Right-click for its menu; drop a tab here to move it into ${it.name}.`}>
         <span className="max-w-[14ch] truncate inline-block align-bottom">{it.name}</span>
       </span>
     );
@@ -400,6 +483,9 @@ export function TermStrip(p: TermStripProps) {
           </>
         )}
         <div className="my-0.5" style={{ borderTop: LINE }} />
+        {canStopWorker(workerOf(w.id)) ? (
+          <MenuItem danger onClick={() => { close(); const n = workerOf(w.id)!.name; void api.agentStop(n).catch(() => {}); }}>Stop worker</MenuItem>
+        ) : null}
         <MenuItem danger onClick={() => { close(); p.closeWindows([w.id], { anchor: tabEl(w.id) }); }}>Close window</MenuItem>
       </ContextMenu>
     );
@@ -479,19 +565,19 @@ export function TermStrip(p: TermStripProps) {
           1-9 window · c new · Esc
         </span>
       )}
-      {/* A badge and nothing more: a phone on this tmux can resize or scroll a
-          window with nobody touching it, and this is the one place that says why. */}
+      {/* A badge and nothing more: a phone on this window can resize or scroll
+          it with nobody touching it, and this is the one place that says why. */}
       {p.phones > 0 && (
-        <span title="A phone is attached to a session on this tmux, so a window may be sized or scrolled by it"
+        <span data-tip="A phone is on this window, so it may be sized or scrolled by it"
           className="shrink-0 px-2 inline-flex items-center rounded-lg text-[10px] font-semibold"
           style={{ height: CTRL_H.strip, color: "var(--text3)", background: "var(--surface-inset)", border: tintEdge("var(--text)", 14) }}>
-          {p.phones > 1 ? `${p.phones} phones attached` : "phone attached"}
+          {p.phones > 1 ? `${p.phones} phones on this window` : "phone on this window"}
         </span>
       )}
       <span className="shrink-0 flex items-center gap-1">
         {needN > 0 && (
           <button type="button" disabled={!jump} onClick={() => { if (jump) onPick(jump); }}
-            title={`Go to the window that needs you  ${chordLabel(appChordFor("windows.waiting"))}`}
+            data-tip={`Go to the window that needs you  ${chordLabel(appChordFor("windows.waiting"))}`}
             className="inline-flex items-center gap-1 pl-2 pr-2 rounded-lg text-[11px] font-semibold whitespace-nowrap transition-colors hover:brightness-125"
             style={{
               height: CTRL_H.strip, color: "var(--warning-ink)",
@@ -513,6 +599,7 @@ export function TermStrip(p: TermStripProps) {
       )}
       {manageOpen && (
         <ManageSessions sessions={p.session.list} current={p.session.name} engine={p.session.engine} prefix={p.session.prefix} needsYou={zones.needYou}
+          onSwitch={(name) => cmd({ cmd: "session", name })}
           onEnd={(name) => cmd({ cmd: "endsession", name })}
           onLock={(name, after) => cmd({ cmd: "locksession", name, after })}
           onClose={() => { setManageOpen(false); focusTerm(); }} />
@@ -529,6 +616,7 @@ export function TermStrip(p: TermStripProps) {
             pr: peekWin.id === active ? p.activePr ?? null : peekGit?.id === peekWin.id ? peekGit.pr : null,
             sentence: peekSentence(peekWin.status, tabMark(peekWin).title),
             mark: tabMark(peekWin).mark ? { kind: tabMark(peekWin).mark!, label: tabMark(peekWin).label } : null,
+            seat: (() => { const t = seatGlyphTone(peekWin.seat, tabMark(peekWin).mark); return t ? { tone: t, project: groupOfWindow.get(peekWin.id)?.label ?? "this project" } : null; })(),
           }} />
       )}
     </StripFrame>

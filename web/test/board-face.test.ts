@@ -102,7 +102,7 @@ describe("the three empty-looking screens", () => {
 });
 
 describe("the panel's board fetch", () => {
-  const start = panel.indexOf('api.prList(root, "mine", stateSel, force)');
+  const start = panel.indexOf("loadBoardLists(root, stateSel, force)");
   const end = panel.indexOf("}, [root, stateSel, listState.fetchedAt, boardTick]);", start);
   const fetch = panel.slice(start, end);
   it("found its own effect", () => {

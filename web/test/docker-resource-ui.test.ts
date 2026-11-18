@@ -10,8 +10,8 @@ import { imagesView, networkMemberCounts, networksView } from "../src/lib/docker
 import { volumesView } from "../src/lib/dockerVolumeView.ts";
 import { READ_ONLY_REASON } from "../src/lib/dockerState.ts";
 import {
-  imageAnswers, imageHit, imageMenu, imageShape, networkAnswers, networkHit, networkLinks, networkMenu, networkShape,
-  sectionsOf, stripeWidths, volumeAnswers, volumeHit, volumeMenu, volumeShape,
+  imageAnswers, imageBuiltLabel, imageHit, imageMenu, imageShape, networkAnswers, networkHit, networkLinks, networkMenu,
+  networkShape, sectionsOf, stripeWidths, volumeAnswers, volumeHit, volumeMenu, volumeShape,
 } from "../src/lib/dockerResourceUi.ts";
 
 const GB = 1e9;
@@ -206,5 +206,28 @@ describe("the disk bar while something is being freed", () => {
 
   test("the dangling ids are the ones the card would remove, not the worktree-gone ones", () => {
     expect(m.danglingIds).toEqual(["dd3f9a1c2b7e"]);
+  });
+});
+
+describe("the built-date label", () => {
+  test("a real Unix-seconds timestamp formats as a date", () => {
+    expect(imageBuiltLabel(1_700_000_000)).toBe("built 2023-11-14");
+  });
+
+  test("0, negative or NaN all mean docker did not say — never 1970 or the literal NaN", () => {
+    expect(imageBuiltLabel(0)).toBe("build date unknown");
+    expect(imageBuiltLabel(-5)).toBe("build date unknown");
+    expect(imageBuiltLabel(NaN)).toBe("build date unknown");
+  });
+
+  test("missing is unknown too, whether that's null, undefined or an empty string", () => {
+    expect(imageBuiltLabel(null)).toBe("build date unknown");
+    expect(imageBuiltLabel(undefined)).toBe("build date unknown");
+    expect(imageBuiltLabel("")).toBe("build date unknown");
+    expect(imageBuiltLabel("   ")).toBe("build date unknown");
+  });
+
+  test("docker's own relative string passes through untouched", () => {
+    expect(imageBuiltLabel("3 hours ago")).toBe("built 3 hours ago");
   });
 });

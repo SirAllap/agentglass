@@ -29,15 +29,11 @@ import { Trajectory } from "./Trajectory.tsx";
 import { DEFAULT_CFG, useFlightPlan } from "./useFlightPlan.ts";
 import { BLANK, usePilotRoster } from "./usePilotFeed.ts";
 import { monthSpend, historyRows, goOutcome } from "../../lib/flightPlan.ts";
+import { useNow } from "../../lib/visibleInterval.ts";
 
 const FLOW = ["Request", "Flight plan", "Mockup", "Preflight", "Findings", "Go / No-go", "Launch"];
 const NO_HANDLED: Handled = { fixed: 0, contested: 0, dismissed: 0 };
 
-function useNow(active: boolean, ms = 1000): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => { if (!active) return; setNow(Date.now()); const t = setInterval(() => setNow(Date.now()), ms); return () => clearInterval(t); }, [active, ms]);
-  return now;
-}
 
 /**
  * THE FLIGHT PLAN. A request becomes a plan, a reader with no context reviews it,
@@ -281,7 +277,7 @@ export function FlightPlanView({ active }: { active: boolean }) {
         : null}
       <div className="r">
         <div className="seg" role="group" aria-label="Flight plan sections">
-          <button type="button" aria-pressed={tab === "plans"} onClick={() => show("plans")}>Flying{!off && live > 0 && <span className="c" title={`${live} ${live === 1 ? "builder" : "builders"} live`}>{live}</span>}</button>
+          <button type="button" aria-pressed={tab === "plans"} onClick={() => show("plans")}>Flying{!off && live > 0 && <span className="c" data-tip={`${live} ${live === 1 ? "builder" : "builders"} live`}>{live}</span>}</button>
           <button type="button" aria-pressed={tab === "history"} onClick={() => show("history")}>History</button>
           <button type="button" aria-pressed={tab === "settings"} onClick={() => show("settings")}>Settings</button>
         </div>

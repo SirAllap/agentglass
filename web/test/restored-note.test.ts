@@ -17,11 +17,8 @@ describe("the restore note", () => {
     expect(restoredNote(0)).toBe("Restored 0 windows.");
   });
 
-  it("is what Settings shows, and the blurb no longer promises scrollback", () => {
-    const s = src("components/SettingsModal.tsx");
-    expect(s).toContain("setNote(restoredNote(r.restored ?? 0))");
-    const hint = s.slice(s.indexOf("When the host reboots, the engine's tmux dies"), s.indexOf("Nothing here touches your own tmux"));
-    expect(hint).not.toContain("scrollback,");
-    expect(hint).toContain("not what scrolled past");
+  it("is what Settings shows", () => {
+    const s = src("components/settings/pages/TerminalPage.tsx");
+    expect(s).toContain("restoredNote(r.restored ?? 0)");
   });
 });

@@ -412,3 +412,10 @@
   .agx-pol-rail { grid-template-columns: 1fr; }
   .agx-pol-arrow { width: auto; height: 14px; transform: rotate(90deg); }
 }
+
+/* Inside a Settings section the section is the one card: Polaris draws flat in it on the house spacing
+   (12px), with a hairline between its blocks and no border of its own. */
+[data-section] .agx-polaris { gap: 0; margin: 0; }
+[data-section] .agx-polaris .agx-pol-pinned { padding: 12px; }
+[data-section] .agx-polaris .agx-pol-head { padding: 0; border: 0; border-radius: 0; background: transparent; }
+[data-section] .agx-polaris .agx-pol-panel { border: 0; border-radius: 0; background: transparent; padding: 12px; }

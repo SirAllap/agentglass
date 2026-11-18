@@ -5,6 +5,8 @@
  * surface over a bisecting checkout; every button is a mutation under guard.
  */
 import { useEffect, useState } from "react";
+import { RangeStrip } from "./git/DotStrip.tsx";
+import { rangeShare, stepsLeft } from "../lib/gitStrips.ts";
 import { GitDialog, DialogError, DialogSkeleton } from "./GitDialog.tsx";
 import { UNREACHABLE } from "../lib/gitDialog.ts";
 import { api } from "../lib/api.ts";
@@ -27,9 +29,11 @@ export function BisectModal({ root, initialGood, onClose, onReset, onOpenCommit,
   const [good, setGood] = useState(initialGood ?? "");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  /** The widest range seen: the whole bar. */
+  const [widest, setWidest] = useState(0);
 
   const refresh = async () => {
-    try { setSt(await api.gitBisectStatus(root)); } catch { setError(UNREACHABLE); }
+    try { const r = await api.gitBisectStatus(root); setSt(r); if (r.remaining != null) setWidest((w) => Math.max(w, r.remaining!)); } catch { setError(UNREACHABLE); }
   };
   useEffect(() => { void refresh(); }, [root]);
 
@@ -62,7 +66,7 @@ export function BisectModal({ root, initialGood, onClose, onReset, onOpenCommit,
   const running = st?.bisecting && !st.firstBad;
   const done = st?.bisecting && !!st.firstBad;
 
-  const title = running ? "Does the bug reproduce here?" : done ? "Found the first bad commit" : "Find the bad commit?";
+  const title = running ? `Does the bug show at ${st?.current?.sha.slice(0, 7) ?? "this commit"}?` : done ? "Found the first bad commit" : "Find the bad commit?";
   const subtitle = running
     ? (st?.remaining != null ? `${st.remaining} revision${st.remaining === 1 ? "" : "s"} left to test${st.steps != null ? `, roughly ${st.steps} step${st.steps === 1 ? "" : "s"}` : ""}.` : "Test the checked-out commit and say good or bad.")
     : done ? "This commit introduced the bug."
@@ -80,14 +84,15 @@ export function BisectModal({ root, initialGood, onClose, onReset, onOpenCommit,
 
       {running && st.current && (
         <div className="space-y-3">
+          <RangeStrip share={rangeShare(st.remaining, widest)} caption={stepsLeft(st.steps) || "Narrowing down"} />
           <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg" style={{ background: "var(--surface-inset)", border: EDGE }}>
             <span className="shrink-0 font-mono text-[10.5px]" style={{ color: "var(--info-ink)" }}>{st.current.sha.slice(0, 7)}</span>
-            <span className="min-w-0 flex-1 truncate text-[11.5px]" title={st.current.subject} style={{ color: "var(--text)" }}>{st.current.subject}</span>
+            <span className="min-w-0 flex-1 truncate text-[11.5px]" data-tip={st.current.subject} style={{ color: "var(--text)" }}>{st.current.subject}</span>
             <button onClick={() => onOpenCommit(st.current!.sha, st.current!.subject)} className="shrink-0 text-[10px] px-2 py-1 rounded-md" style={{ color: "var(--text2)", border: EDGE }}>view</button>
           </div>
           <div className="flex gap-2">
-            <button onClick={() => void mark("good")} disabled={busy} className="flex-1 text-[11.5px] font-medium py-2 rounded-lg" style={{ background: "color-mix(in srgb, var(--success) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 45%, transparent)", color: "var(--success-ink)", opacity: busy ? .5 : 1 }}><IconLabel icon={<DoneIcon size={ICON.xs} />}>good — bug gone</IconLabel></button>
-            <button onClick={() => void mark("bad")} disabled={busy} className="flex-1 text-[11.5px] font-medium py-2 rounded-lg" style={{ background: "color-mix(in srgb, var(--error) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)", color: "var(--error-ink)", opacity: busy ? .5 : 1 }}><IconLabel icon={<CrossIcon size={ICON.xs} />}>bad — bug here</IconLabel></button>
+            <button onClick={() => void mark("good")} disabled={busy} className="flex-1 text-[11.5px] font-medium py-3 rounded-lg" style={{ background: "color-mix(in srgb, var(--success) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 45%, transparent)", color: "var(--success-ink)", opacity: busy ? .5 : 1 }}><IconLabel icon={<DoneIcon size={ICON.xs} />}>Bug gone (good)</IconLabel></button>
+            <button onClick={() => void mark("bad")} disabled={busy} className="flex-1 text-[11.5px] font-medium py-3 rounded-lg" style={{ background: "color-mix(in srgb, var(--error) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)", color: "var(--error-ink)", opacity: busy ? .5 : 1 }}><IconLabel icon={<CrossIcon size={ICON.xs} />}>Bug here (bad)</IconLabel></button>
           </div>
           <div className="flex justify-end">
             <button onClick={() => void reset()} disabled={busy} className="text-[10.5px] px-2 py-1 rounded-md" style={{ color: "var(--text3)" }}>abort bisect</button>
@@ -99,7 +104,7 @@ export function BisectModal({ root, initialGood, onClose, onReset, onOpenCommit,
         <div className="space-y-3">
           <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg" style={{ background: "color-mix(in srgb, var(--error) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>
             <span className="shrink-0 font-mono text-[10.5px]" style={{ color: "var(--error-ink)" }}>{st.firstBad.sha.slice(0, 7)}</span>
-            <span className="min-w-0 flex-1 truncate text-[11.5px]" title={st.firstBad.subject} style={{ color: "var(--text)" }}>{st.firstBad.subject}</span>
+            <span className="min-w-0 flex-1 truncate text-[11.5px]" data-tip={st.firstBad.subject} style={{ color: "var(--text)" }}>{st.firstBad.subject}</span>
           </div>
           <div className="flex gap-2">
             <button onClick={() => onOpenCommit(st.firstBad!.sha, st.firstBad!.subject)} className="flex-1 text-[11.5px] font-medium py-2 rounded-lg" style={{ background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)", color: "var(--text)" }}>view diff</button>

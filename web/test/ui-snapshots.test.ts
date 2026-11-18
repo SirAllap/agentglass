@@ -380,6 +380,13 @@ describe("machine.disk: the scan and its plan", () => {
     expect(r.untrusted.plan).toEqual([]);
   });
 
+  it("says it is scanning when the first scan has not finished, and carries its age when it has", async () => {
+    const scanning = await LATE_PROVIDERS["machine.disk"](sources({ later: later({ diskClean: async () => ({ lines: [], mounts: [], safeBytes: 0, at: 5, generatedAt: null, state: "scanning" as const, note: "scanning, ask again in a few seconds", problems: [] }) }) }));
+    expect(scanning.state).toMatchObject({ state: "scanning", generatedAt: null, scannedAt: 5 });
+    const ready = await LATE_PROVIDERS["machine.disk"](sources({ later: later({ diskClean: async () => ({ lines: [], mounts: [], safeBytes: 0, at: 5, generatedAt: 6, state: "ready" as const, problems: [] }) }) }));
+    expect(ready.state).toMatchObject({ state: "ready", generatedAt: 6 });
+  });
+
   it("a mount that reports no size has no share", async () => {
     const r = await LATE_PROVIDERS["machine.disk"](sources({ later: later({ diskClean: async () => ({ lines: [], mounts: [{ mount: "/proc", source: "proc", size: 0, free: 0, safeBytes: 0 }], safeBytes: 0, at: 1, problems: [] }) }) }));
     expect((r.state.mounts as { freePct: number | null }[])[0]!.freePct).toBeNull();

@@ -26,7 +26,7 @@ import { describe, expect, it } from "bun:test";
 const VIEWS: Record<string, string> = {
   "Terminal": "TerminalPanel.tsx",
   "Source control": "GitHeader.tsx",
-  "Pull Requests": "PrPanel.tsx",
+  "Pull requests": "PrPanel.tsx",
   "Docker": "docker/Header.tsx",
   "Browser": "BrowserPanel.tsx",
   "Diff": "diff/DiffPage.tsx",

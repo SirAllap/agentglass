@@ -35,10 +35,9 @@ const task = (o: Record<string, unknown> = {}) => ({
 }) as never;
 
 describe("the dock", () => {
-  test("empty, it says Select a card and holds the 620 width", () => {
+  test("empty, it draws nothing, so the board takes the whole width; the width is 620 once a card opens", () => {
     const html = renderToStaticMarkup(React.createElement(JiraDock, { source: {} as never, card: null, writable: false, onTask() {}, onClose() {}, onAllow() {} }));
-    expect(html).toContain("Select a card");
-    expect(html).toContain(`width:${DOCK_W}px`);
+    expect(html).toBe("");
     expect(DOCK_W).toBe(620);
   });
 
@@ -79,9 +78,9 @@ describe("over the list", () => {
     expect(docked).toContain(`width:${DOCK_W}px`);
   });
 
-  test("with no card there is nothing over the list", () => {
+  test("with no card there is nothing over the list and no dock beside it", () => {
     expect(draw(null, true)).toBe("");
-    expect(draw(null, false)).toContain("Select a card");
+    expect(draw(null, false)).toBe("");
   });
 
   test("Esc inside the over-the-list card closes it, one inside another dialog does not", () => {
@@ -114,7 +113,7 @@ describe("the state chip", () => {
     expect(stateStyle("#e5a50a", false, 26).height).toBe(26);
     expect(stateStyle("#e5a50a", false, 22).height).toBe(22);
     const html = renderToStaticMarkup(React.createElement(StateChip, { status: "Done", done: true, h: 22 }));
-    expect(html).toContain("Done");
+    expect(html).toContain(">DONE<");
     expect(html).toContain("<svg");
   });
 
@@ -179,9 +178,11 @@ describe("the sheet", () => {
 });
 
 describe("the dock follows the stored choice", () => {
-  test("JiraDock reads the card mode and hands it to the layout", () => {
+  test("JiraDock reads the stored mode (the pop-out is the card mode's modal) and hands it to the layout", () => {
     const body = fn(at("../src/components/jira/list/JiraDock.tsx"), "export function JiraDock(");
-    expect(body).toContain('useCardMode() === "modal"');
+    expect(body).toContain("useDockState()");
+    expect(body).toContain('over={ctl.mode === "pop"}');
+    expect(at("../src/lib/jiraDockMode.ts")).toContain('card === "modal" ? "pop"');
     expect(body).toContain("<DockLayout");
   });
 });

@@ -140,9 +140,9 @@ export function PaneChipStatus(p: PaneChipStatusProps) {
   return (
     <>
       {c && (
-        <button {...p.stop()} onClick={p.onCard} className="agx-btn agx-ps-card text-[11px]"
+        <button {...p.stop()} onClick={p.onCard} aria-label={`Card ${c.id}`} className="agx-btn agx-ps-card text-[11px]"
           style={{ ["--sc" as string]: c.statusColor || "var(--text4)", height: HIT }}
-          title={`${c.id}${c.status ? ` · ${c.status}` : ""}${c.priority ? ` · ${c.priority}` : ""}\n${c.inApp ? "Open it in Tasks" : "Open it in the tracker"}`}>
+          data-tip={`${c.id}${c.status ? ` · ${c.status}` : ""}${c.priority ? ` · ${c.priority}` : ""} — ${c.inApp ? "Open it in Tasks" : "Open it in the tracker"}`}>
           <span className="agx-ps-tile" style={{ color: c.priority === "urgent" ? "var(--error)" : c.priority === "high" ? "var(--warning)" : c.priority === "low" ? "var(--text3)" : "var(--info)" }}>
             <Svg sw={2.4}><path d="M4 22V4" /><path d="M4 4h13l-2 4 2 4H4" /></Svg>
           </span>
@@ -171,7 +171,7 @@ export function PaneChipStatus(p: PaneChipStatusProps) {
         </span>
       )}
       {!pr && p.worktree && (
-        <button {...p.stop()} onClick={p.onNew} title="No pull request from this branch yet — opens Source control"
+        <button {...p.stop()} onClick={p.onNew} data-tip="No pull request from this branch yet — opens Source control"
           className="agx-btn shrink-0 flex items-center gap-1 rounded-md px-1.5 text-[11px] whitespace-nowrap"
           style={{ height: HIT, color: "var(--text3)", border: "1px dashed var(--border2)" }}>
           + {p.words ? "PR" : ""}

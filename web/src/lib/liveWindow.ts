@@ -10,6 +10,8 @@ import { api } from "./api.ts";
 import { requestWorktreeJump } from "./worktreeJump.ts";
 
 export type LiveWindow = { session: string; windowId: string; paneId: string; name: string; path: string;
+  /** The name agentglass gave it when it opened it: a tab somebody renamed is still this work. */
+  given?: string;
   /** The agent in it has ended its turn: the window is open, nobody is editing. */
   idle?: true };
 
@@ -69,7 +71,8 @@ export function useLiveWindow(root: string, name: string, path?: string): LiveWi
     return () => { stale = true; };
   }, [root, name, path, t]);
   // Another card's answer must never show on this one while its own is out.
-  return w && w.name === name ? w : null;
+  // A tab somebody renamed still answers to the name it was opened as.
+  return w && (w.name === name || w.given === name) ? w : null;
 }
 
 /** Bring that window to the front and show the Terminal. The window is in the

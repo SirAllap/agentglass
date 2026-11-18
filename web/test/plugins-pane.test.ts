@@ -31,7 +31,7 @@ describe("re-consent reads as its own thing", () => {
   test("its own warning colour, not the ordinary disabled styling", () => {
     expect(pane).toMatch(/reconsent && manifestChanged && \(/);
     expect(pane).toContain('<Note tone="warn">');
-    expect(pane).toMatch(/"Asks again", "warn"/);
+    expect(readFileSync(new URL("../src/lib/pluginList.ts", import.meta.url), "utf8")).toMatch(/"Asks again", "warn"/);
   });
 });
 
@@ -44,7 +44,7 @@ describe("a re-consent that only re-hashed the code doesn't claim the manifest m
     expect(pane).toContain("plugin.approvedHash !== null && plugin.approvedHash !== plugin.manifestHash");
     expect(pane).toMatch(/reconsent && manifestChanged && \(/);
     expect(pane).toMatch(/reconsent && !manifestChanged && \(/);
-    expect(pane).toMatch(/the manifest changed since then/);
+    expect(pane).toMatch(/the manifest changed since you approved it/);
     expect(pane).toMatch(/code changed since you approved it/);
   });
 });
@@ -69,15 +69,15 @@ describe("a switch on with nothing running is the failure this page catches", ()
        not changed: the page must be able to say "you switched it on and
        nothing is running", which is the failure a plugin screen exists to
        show and the one an `enabled` flag alone cannot. */
-    expect(pane).toMatch(/Enabled, not running/);
+    expect(readFileSync(new URL("../src/lib/pluginList.ts", import.meta.url), "utf8")).toMatch(/Enabled, not running/);
     expect(pane).toContain("pid ${pid}");
   });
 });
 
 describe("what every row shows", () => {
   test("name, publisher, description, source, and the scope word", () => {
-    expect(pane).toContain("{plugin.name}");
-    expect(pane).toContain("by {plugin.publisher}");
+    expect(pane).toContain("${plugin.name}");
+    expect(pane).toContain("by ${plugin.publisher}");
     expect(pane).toContain("{plugin.description}");
     expect(pane).toContain("formatSource(plugin.source)");
     expect(pane).toContain("SCOPE_WORD[plugin.scope]");
@@ -100,26 +100,20 @@ describe("install takes a local path or a git URL, and cannot enable an unreview
     // switch until something was approved left a new plugin that could never
     // be turned on; it asks instead, with what is being approved.
     expect(pane).toContain("disabled={busy || (!plugin.enabled && !masterOn)}");
-    expect(pane).toMatch(/if \(next && needsReview\) \{\s*const ok = await ask\(/);
+    expect(pane).toMatch(/if \(next && needsReview\) \{[^]*?const ok = await ask\(/);
     expect(pane).toContain("if (!ok) return;");
   });
 });
 
 describe("a plugin that grows does not drag its neighbour with it", () => {
-  test("installed plugins are a grid of cards, and the permissions fold keeps a card's height from depending on its neighbour", () => {
-    // Opening one tile's declaration used to make the tile BESIDE it grow to
-    // match, into a tall box with nothing in the bottom two thirds. The
-    // declaration is folded by default and the footer is pinned to the bottom
-    // (mt-auto), so a row of cards ends on one line whether or not one is open.
-    expect(pane).toContain('className="agx-plugin-grid"');
-    expect(pane).toContain('className="mt-auto flex items-center');
+  test("installed plugins are rows of one section, and the permissions fold keeps a row's height from depending on its neighbour", () => {
+    // Plugins stay a list, drawn as shell rows with their actions on the row, not a grid of cards.
+    // The declaration is folded by default, so one open never moves its neighbour.
+    expect(pane).toContain("function PluginRows(");
+    expect(pane).toContain('<Section id="plugins-installed"');
+    expect(pane).not.toContain("agx-plugin-grid");
     expect(pane).not.toContain("gridTemplateColumns");
-    // Columns by the page's own width, not auto-fit: every card opens on a 16:9
-    // picture, and in one column of a 1065px page that picture alone was 600px
-    // tall. One column under 760px, two from there, three from 1500px, so a wide
-    // screen is filled with cards and not capped at the width of two.
-    expect(CSS).toMatch(/@container agx-settings \(min-width: 760px\) \{ \.agx-plugin-grid \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
-    expect(CSS).toMatch(/@container agx-settings \(min-width: 1500px\) \{ \.agx-plugin-grid \{ grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
+    expect(pane).toContain('<details className="agx-perm ');
   });
 });
 
@@ -178,9 +172,28 @@ describe("the declaration is a named disclosure inside the plugin's row", () => 
 });
 
 describe("Install a plugin is the page header's action", () => {
-  test("published by the list, withdrawn on a plugin's own settings, and not a second button in the Installed row", () => {
-    expect(pane).toContain('useReportHead("plugins", showing && here ? null : { action: { label: "Install a plugin" } }, () => setInstalling(true));');
-    const installed = pane.slice(pane.indexOf('<PageHead title="Installed"'), pane.indexOf("</PageHead>"));
-    expect(installed).not.toContain("Install a plugin");
+  test("Install is a row of the Installed section, and the form opens under it", () => {
+    // The mockup's install row: it stays while the form is open, and only its button goes.
+    expect(pane).toContain('{plugins.length && !installing ? "Install another plugin" : "Install a plugin"}');
+    expect(pane).toMatch(/!installing \? <Button className="agx-plug-w" onClick=\{\(\) => setInstalling\(true\)\}>Install…<\/Button>/);
+    expect(pane).toContain("{installing && <AddPluginCard");
+    // The header carries the counts only, never an Install action.
+    expect(pane).toContain('useReportHead("plugins", master === null ? null : { chips: pluginHeadChips(tally) });');
+    expect(pane).not.toMatch(/useReportHead\([^)]*action/);
+  });
+});
+
+describe("Plugins v2 review fixes", () => {
+  test("Find a plugin (and its Refresh) shows at every count", () => {
+    expect(pane).not.toMatch(/plugins\.length > 1 \|\| q/);
+    expect(pane).toMatch(/label="Find a plugin"/);
+  });
+  test("with the system off, the band's Review opens the details window, which says why it cannot switch on", () => {
+    expect(pane).toMatch(/masterOn \? void setEnabled\(true\) : setViewing\(true\)/);
+    expect(pane).toContain("Plugins are switched off — turn the plugin system on first");
+  });
+  test("the nav reads the page's tally through the store, not a report withdrawn on close", () => {
+    expect(pane).toMatch(/pluginTallyStore\.set\(tally\)/);
+    expect(pane).not.toMatch(/useReportNeeds\("plugins"/);
   });
 });

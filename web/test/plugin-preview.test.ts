@@ -28,30 +28,39 @@ describe("which picture an installed card gets", () => {
 
 describe("the picture is drawn where the listing is drawn", () => {
   test("both cards render it from the entry's own preview", () => {
-        expect(src("PluginsPane.tsx")).toContain("preview={marketEntry(p, catalogue)?.preview}");
+    /* Settings v4: catalogue entries are one row, no art. The component stays for other callers. */
+    // The installed row is compact and has no art; its "View more" modal and the Market tile draw the picture from the entry's own preview.
+    expect(src("PluginsPane.tsx")).toContain("<PluginPreview src={preview}");
     expect(src("plugins/Market.tsx")).toContain("<PluginPreview src={entry.preview}");
   });
   test("a missing or blocked picture is a tile with the mark on it, never a broken image, and the host is not told who asked", () => {
     const p = src("plugins/PluginPreview.tsx");
-    expect(p).toContain("const shown = src && broken !== src");
-    expect(p).toContain("onError={() => setBroken(src)}");
+    expect(p).toContain("const shown = safe && broken !== safe");
+    expect(p).toContain("onError={() => setBroken(safe)}");
     expect(p).toMatch(/: children\}/);
     expect(p).toContain('referrerPolicy="no-referrer"');
   });
   test("an installed plugin gets the mark on its tile, a listing gets its initial", () => {
-    expect(src("PluginsPane.tsx")).toMatch(/<PluginPreview src=\{preview\} name=\{plugin\.name\} tint=\{tint\}>\s*<PluginMark/);
-    expect(src("plugins/Market.tsx")).toMatch(/<PluginPreview src=\{entry\.preview\} name=\{title\} tint=\{tint\}>/);
+    expect(src("PluginsPane.tsx")).toMatch(/<PluginPreview src=\{preview\} name=\{plugin\.name\} tint=\{tint\}><PluginMark/);
+    expect(src("plugins/Market.tsx")).toMatch(/<PluginPreview src=\{entry\.preview\} name=\{title\} tint=\{tint\}>\s*<span[^>]*>\{initial\}/);
   });
 });
 
 describe("a card waiting on a decision", () => {
-  test("keeps its picture on top, with the strip under it and an amber top edge", () => {
+  test("is a row with a tinted band under it: amber for an approval, red stopped, blue update, the fix inside", () => {
+    // Mockup v2: the band is an inset box under the row, edged and tinted in its own hue, holding its one fix button.
     const p = src("PluginsPane.tsx");
-    expect(p.indexOf("<PluginPreview src={preview}")).toBeLessThan(p.indexOf("<Band band={band}>"));
-    expect(p).toContain('band === "approval" ? { borderTopColor: "var(--warning)", borderTopWidth: 2 }');
-    expect(p).toContain('band === "update" ? "var(--info)" : "var(--warning)"');
+    expect(p).toContain("<Band band={band} action={");
+    expect(p).toContain('<div className="agx-plug-band" data-band={band}>');
+    const css = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
+    expect(css).toContain(".agx-plug-band { --hue: var(--warning);");
+    expect(css).toContain('.agx-plug-band[data-band="stopped"] { --hue: var(--error); }');
+    expect(css).toContain('.agx-plug-band[data-band="update"] { --hue: var(--info); }');
+    expect(css).toMatch(/\.agx-plug-band \{[^}]*border: 1px solid color-mix\(in srgb, var\(--hue\)/);
   });
-  test("the page asks for the same list the nav's count comes from", () => {
-    expect(src("SettingsModal.tsx")).toContain("x.approvedFingerprint !== x.fingerprint");
+  test("the page and the nav count the same tally", () => {
+    // The nav's open-time count and the page's chips both come from tallyInstalled (no approval-only count).
+    expect(src("SettingsModal.tsx")).toContain("tallyInstalled(plugs, () => false)");
+    expect(src("SettingsModal.tsx")).not.toContain("x.approvedFingerprint !== x.fingerprint");
   });
 });

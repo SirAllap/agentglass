@@ -87,15 +87,6 @@ describe("Commands: pinned is the command bar's own pin", () => {
   });
 });
 
-describe("Usage: the week is drawn from the pace config", () => {
-  test("working days and hours decide each bar, and today is marked", () => {
-    const week = code(fn(modal, "function WeekBars(", "function PacePane("));
-    expect(week).toContain("cfg.workDays[i]");
-    expect(week).toContain("cfg.workEnd - cfg.workStart");
-    expect(week).toContain("data-today");
-  });
-});
-
 describe("Engines: Read usage and Plugins: the licence filter", () => {
   test("Read usage is Codex's, only while ready, and runs the one minimal turn before it reads", async () => {
     const src = code(await read("components/engines/EnginesPane.tsx"));

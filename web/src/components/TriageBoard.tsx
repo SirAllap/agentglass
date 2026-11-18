@@ -26,15 +26,17 @@ import { eventTip } from "../lib/prCardTips.ts";
 import { tipAttr } from "../lib/tip.ts";
 import { stripMode } from "../lib/laneStrip.ts";
 import { railLinks, rowWord, stackRows } from "../lib/prStackChip.ts";
-import { externalUrl } from "../lib/externalUrl.ts";
-import { offerFor } from "../lib/leftovers.ts";
-import { leftoverFor, useCleaning, useLeftover } from "../lib/leftoversStore.ts";
+import { elbowsOf, type Elbow } from "../lib/prStackElbow.ts";
+import { StackElbows } from "./StackElbows.tsx";
+import { externalUrl, openExternal } from "../lib/externalUrl.ts";
+import { offerFor, autoRunOf, onDisk } from "../lib/leftovers.ts";
+import { leftoverFor, useAutoEntry, useCleaning, useLeftover } from "../lib/leftoversStore.ts";
 import { applyOff, cardMenu, trackerNameOf, type CardMenuId, type TrackerMode } from "../lib/prCardMenu.ts";
 import { boardScroll, foldable, foldedLanes, laneSorts, setBoardScroll, setFoldedLanes, setLaneSorts, walkable } from "../lib/boardPrefs.ts";
 import { SORT_KEYS, SORT_LABEL, sortCards, type SortKey } from "../lib/prSort.ts";
 import { slipIn } from "../lib/prFilterView.ts";
 import type { PrSummary } from "../../../shared/types.ts";
-import { LANES, lanesFor, LANE_CAP, board as fileAll, fileInLane, type Filed, type LaneId } from "../lib/prLanes.ts";
+import { LANES, lanesFor, LANE_CAP, board as fileAll, fileInLane, type Filed, type LaneId } from "../../../shared/prLanes.ts";
 import { isTrunkBranch, type Stack } from "../lib/prStack.ts";
 import { usePrStacks } from "../lib/usePrStacks.ts";
 import { type Facts } from "../lib/prStackWords.ts";
@@ -49,17 +51,21 @@ import { resultRow, type ResultRow } from "../lib/prResultRow.ts";
 import { repoUsesTracker, trackerBlock } from "../lib/prCardBlock.ts";
 import { Button, CTRL_H, EDGE, LINE, Segmented } from "./workspace/Chrome.tsx";
 import { PrLaneSync } from "./PrLaneSync.tsx";
+import { PrBulkWatch } from "./PrBulkWatch.tsx";
+import { bellTag, cardRulesOf, keepOnBoard, laneToggle, allPicked, leftNote, pickClick, RULE_WORDS, type Anchor } from "../lib/prBulkPick.ts";
+import { usePrWatchState, watchesOf } from "../lib/prWatchStore.ts";
 import { SYNC_DONE_MS, type SyncCardStep } from "../lib/prSyncCards.ts";
 import { CODE_FONT_STYLE } from "./diff/DiffLines.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { cardReviewers } from "../lib/cardReviewers.ts";
+import { reviewTarget, type ReviewTarget } from "../lib/reviewTarget.ts";
 import { askingBehind, behindOf, knownBehind, onBehind } from "../lib/prBehindStore.ts";
 import { refreshPhase } from "../lib/prRefreshing.ts";
 import { onRefreshing, refreshingSince, refreshingVersion } from "../lib/prRefreshingStore.ts";
 import { askConflict, checkingConflict, onConflict } from "../lib/prConflictStore.ts";
 import { onRollup, rollupOf } from "../lib/prRollupStore.ts";
 import { onKnownBlock, withKnownBlock } from "../lib/prKnownBlock.ts";
-import { failureHint, jobIdOf } from "../lib/prFailureHint.ts";
+import { failureHint, jobIdOf } from "../../../shared/prFailureHint.ts";
 import { failureKey, loadCached, summaryOf, useFailureStore } from "../lib/checkFailuresStore.ts";
 import { stamp } from "../lib/whenStamp.ts";
 import { closedHeader, finishedKind } from "../../../shared/prClosed.ts";
@@ -68,16 +74,21 @@ import { cardStep } from "../lib/prKeymap.ts";
 import { unreadOf, type Unread } from "../lib/prUnread.ts";
 import { PrCardMenu } from "./PrCardMenu.tsx";
 import { openCard } from "../lib/openCard.ts";
-import { useTrackerSetup } from "../lib/trackerSetup.ts";
+import { useTrackerSetup, type TrackerSetup } from "../lib/trackerSetup.ts";
+import { prCardTracker } from "../lib/trackerApi.ts";
+import { useTrackerView } from "../lib/trackerView.ts";
+import type { TrackerChoice } from "../../../shared/providers.ts";
 import { matchIndex, prMatches, stepMatch } from "../lib/prBoardFind.ts";
 import { closeFind, openFind, registerEngine, topScope } from "../lib/findScope.ts";
 import { CloseIcon } from "./CloseButton.tsx";
 import { boardFace } from "../lib/boardFace.ts";
 import { useClickupSetup } from "../lib/clickupSetup.ts";
-import { chipFor, gateFacts, notReadyChip, totalOpen } from "../lib/prNotesChip.ts";
+import { chipFor, gateFacts, notReadyChip, totalOpen } from "../../../shared/prNotesChip.ts";
 import { headsOf, loadNotesSummary, notesSummaryVersion, onNotesSummary, refreshOnNotes, summariesOf } from "../lib/prNotesSummaryStore.ts";
 import { onReviewGate, reviewGateOn } from "../lib/reviewGatePref.ts";
 import type { PrNotesSummary } from "../../../shared/pluginUi.ts";
+import { lockReason, useMergeLocks } from "../lib/mergeLocks.ts";
+import { MergeLockEditor } from "./MergeLock.tsx";
 
 /** The tracker bar's tint: the app's own accent, the one an unranked card chip already wears. */
 const ACCENT = "var(--accent, var(--primary))";
@@ -104,6 +115,11 @@ const QUIET_DAYS = 30;
 /* `humanReview.mine` is read by the server for the person running this app. On
    another person's board "you were asked" would name the wrong person, so the
    flag is dropped and the card names the reviewers instead. */
+/** A card of the lane is still being checked (conflict, or how far behind): reads the stores and never asks, so the lane's Sync waits without queueing a comparison of its own. */
+function anyChecking(root: string, rows: readonly PrSummary[]): boolean {
+  return rows.some((p) => !finishedKind(p) && (checkingConflict(root, p) || (knownBehind(root, p.number) === null && askingBehind(root, p.number))));
+}
+
 function notTheOwners(p: PrSummary): PrSummary {
   return p.humanReview?.mine ? { ...p, humanReview: { ...p.humanReview, mine: false } } : p;
 }
@@ -143,9 +159,10 @@ export function TriageBoard({
    *  taskLink.ts for why a convention-shaped id is hidden without one. */
   hasTaskProvider: boolean;
   pinned: (n: number) => boolean;
-  /** `to: "notes"` lands on the Conversation, filtered to what plugins wrote. */
+  /** `to: "notes"` lands on the Conversation, filtered to what plugins wrote; `"review"` on all of it, `"bots"` on the bots' side. */
   /** `how` is only "dblclick" when the whole panel is asked for (lib/prDock.ts); a click docks. */
-  onOpen: (n: number, to?: "notes", how?: "click" | "dblclick") => void;
+  /** `node` is the review's own row to land on once the panel has it — see lib/reviewTarget.ts. */
+  onOpen: (n: number, to?: "notes" | "threads" | "review" | "bots", how?: "click" | "dblclick", node?: string) => void;
   onTogglePin: (p: PrSummary) => void;
   onShowTable: () => void;
   /** Perform the card's one suggested action. Only the ones this app can
@@ -397,8 +414,14 @@ export function TriageBoard({
   const cuSetup = useClickupSetup();
   const noCustomIds = cuSetup?.noCustomIds === true;
   const trackers = useTrackerSetup();
+  /* The repository's own choice, so the chip says what the merge form says on a
+     repository that picked a tracker by hand. */
+  const trackerChoice = useTrackerView(repoSlug)?.choice ?? "auto";
   /* One menu serves every card on the board, opened at a point. */
   const [menu, setMenu] = useState<{ p: Card; x: number; y: number } | null>(null);
+  /* The person's merge locks: the menu offers "Lock merge" and greys Merge with the lock's sentence. */
+  const locks = useMergeLocks(root ?? "");
+  const [lockFor, setLockFor] = useState<null | Card>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
   const repoUses = useMemo(() => repoUsesTracker(cards, hasTaskProvider, noCustomIds), [cards, hasTaskProvider, noCustomIds]);
   /*
@@ -470,13 +493,17 @@ export function TriageBoard({
     const shown = withCard(p, hasTaskProvider).card;
     const task = taskLink(p, hasTaskProvider);
     const cardId = shown ? (shown.customId ?? shown.id) : task?.label;
-    const tracker = trackerNameOf(cardId, trackers);
+    /* One answer for the menu's label and for where its click goes: a menu that
+       says "in Jira" over a press that lands in ClickUp is the same lie the chip
+       told. */
+    const toJira = prCardTracker(p, shown, trackers, trackerChoice) === "jira";
+    const tracker = toJira ? "Jira" : trackerNameOf(cardId, trackers);
     const mode: TrackerMode = !tracker ? "none" : !cardId ? "unlinked"
       : tracker === "Jira" ? "jira" : cuSetup?.writeEnabled === false ? "ro" : "clickup";
     const reviewers = cardReviewers(p.humanReview);
     const view = cardView({
       p, filed: p.filed, reviewers,
-      behind: root ? behindOf(root, p.number) : null, tracker: "none", hasTaskProvider,
+      behind: root ? behindOf(root, p.number) : null, tracker: "none", hasTaskProvider, mergeLock: lockReason(locks, p.number),
     });
     return applyOff(cardMenu({
       p, view, pinned: pinned(p.number), mode, leftovers: (() => { const o = root ? offerFor(leftoverFor(root, p.number, p.state), "card") : null; return o?.button ? o.chip ?? "" : undefined; })(), tracker: tracker ?? undefined, cardId, stacked: !!stacks.of(p.number),
@@ -484,6 +511,7 @@ export function TriageBoard({
       /* The lane's Sync owns the card while it runs: the menu wears the same
          sentence as the footer button, so a right-click cannot send a second one. */
       sync: syncSteps.get(p.number),
+      mergeLock: { set: locks.has(p.number), reason: lockReason(locks, p.number) },
     }), viewer ? { ...menuOff, hideauthor: HIDE_OFF, hidebranch: HIDE_OFF } : menuOff);
   })();
   const pickFromMenu = (id: CardMenuId) => {
@@ -494,7 +522,7 @@ export function TriageBoard({
     const task = taskLink(p, hasTaskProvider);
     switch (id) {
       case "open": onOpen(p.number); return;
-      case "github": window.open(p.url, "_blank", "noopener"); return;
+      case "github": openExternal(p.url); return;
       case "copylink": clip(p.url || ""); return;
       case "copynum": clip(`#${p.number}`); return;
       case "copybranch": clip(p.headRefName); return;
@@ -502,10 +530,13 @@ export function TriageBoard({
       case "copycardname": clip(shown?.title ?? ""); return;
       case "copycardlink": clip(externalUrl(shown?.url) ?? ""); return;
       case "pin": onTogglePin(p); return;
-      case "card":
-        if (shown) openCard(shown.customId || shown.id, shown.customId);
-        else if (task) openCard(task.query, task.label);
+      case "lock": setLockFor(p); return;
+      case "card": {
+        const tracker = prCardTracker(p, shown, trackers, trackerChoice) ?? undefined;
+        if (shown) openCard(shown.customId || shown.id, shown.customId, tracker);
+        else if (task) openCard(task.query, task.label, tracker);
         return;
+      }
       case "update":
         /* A row the Sync refused is still the popover's: its Retry owns the
            re-send, and the same one the card's button presses. */
@@ -517,6 +548,7 @@ export function TriageBoard({
   const menuEl = menu && menuModel && (
     <PrCardMenu menu={menuModel} x={menu.x} y={menu.y} onPick={pickFromMenu} onClose={closeMenu} />
   );
+  const lockEl = lockFor && root ? <MergeLockEditor root={root} number={lockFor.number} title={lockFor.title} onClose={() => setLockFor(null)} /> : null;
   /* The column a filtered-out pull request WOULD sit in: the same filing, so the
      word on a token is the one its own card would carry. */
   const laneOfAll = useMemo(() => {
@@ -535,7 +567,7 @@ const w = lens?.why.get(p.number);
         const c = w?.colour ?? "var(--text3)";
         return (
           <button key={`hidden-${p.number}`} type="button" onClick={() => w && lens?.onOpenRule(w.id)}
-            title={`#${p.number} ${p.title} — hidden by ${w?.name ?? "a rule"}. Click to open the rule.`}
+            data-tip={`#${p.number} ${p.title} — hidden by ${w?.name ?? "a rule"}. Click to open the rule.`}
             className="relative w-full flex items-center gap-2 mb-2 pl-3 pr-2 py-1.5 rounded-lg text-left text-[11px] agx-btn overflow-hidden"
             style={{ border: `1px dashed color-mix(in srgb, ${c} 45%, transparent)`, color: "var(--text3)",
               background: `repeating-linear-gradient(135deg, color-mix(in srgb, ${c} 9%, transparent) 0 6px, transparent 6px 12px)` }}>
@@ -549,6 +581,23 @@ const w = lens?.why.get(p.number);
   /* Alt held shows every hidden card as a slip; the pointer on one lane's "N hidden" shows that lane's. */
   const [altHeld, setAltHeld] = useState(false);
   const [peek, setPeek] = useState<string | null>(null);
+  /* Picked for a bulk action (the selection bar): per board view, so a new view starts with none. Not `selected`,
+     which is the one docked beside the board. Decisions in lib/prBulkPick.ts. */
+  const [picked, setPicked] = useState<Set<number>>(() => new Set());
+  const [anchor, setAnchor] = useState<Anchor | null>(null);
+  const [leftMsg, setLeftMsg] = useState<string | null>(null);
+  const canPick = !!root && !!repoSlug && !results;
+  const pickView = `${root ?? ""}|${repoSlug ?? ""}|${viewer ?? ""}|${results ? "results" : "board"}|${wide ? "wide" : "mine"}`;
+  useEffect(() => { setPicked(new Set()); setAnchor(null); setLeftMsg(null); }, [pickView]);
+  const clearPicked = useCallback(() => { setPicked(new Set()); setAnchor(null); setLeftMsg(null); }, []);
+  /* Esc clears the selection. An open popover hears Esc first (useDismiss, capture) and stops it, so one press closes one thing. */
+  useEffect(() => {
+    if (!picked.size) return;
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape" && !e.defaultPrevented) clearPicked(); };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [picked.size, clearPicked]);
+  const watchState = usePrWatchState();
   useEffect(() => {
     const k = (e: KeyboardEvent) => setAltHeld(e.altKey);
     const off = () => setAltHeld(false);
@@ -575,6 +624,23 @@ const w = lens?.why.get(p.number);
      `settling` is the other half — see the prop. */
   const face = boardFace({ reading: !!loading, settling: !!settling, involved, failed: !!failed, hidden: hidden ?? 0 });
   const waiting = face === "waiting";
+  /* A picked PR that merged or closed is no longer on the board: it drops out and the bar says so once. Not while
+     the board is between reads, when an empty answer means "not back yet", not "gone". */
+  useEffect(() => {
+    if (waiting || !picked.size) return;
+    const r = keepOnBoard(picked, onBoard);
+    if (!r.left.length) return;
+    setPicked(r.picked);
+    const n = r.left[0]!;
+    setLeftMsg(leftNote(n, everyone.find((p) => p.number === n)?.state) + (r.left.length > 1 ? ` (+${r.left.length - 1} more)` : ""));
+  }, [onBoard, waiting, picked, everyone]);
+  const pickedRows = useMemo(() => cards.filter((p) => picked.has(p.number)), [cards, picked]);
+  const tagOf = (n: number) => {
+    if (!repoSlug) return null;
+    const rules = cardRulesOf(watchesOf(watchState, repoSlug, n));
+    const text = bellTag(rules);
+    return text ? { text, aria: `Watching: ${rules.map((r) => RULE_WORDS[r]).join(", ")}` } : null;
+  };
   const rest = total - involved;
   /*
    * Whether `total` can be repeated out loud.
@@ -757,8 +823,18 @@ const w = lens?.why.get(p.number);
     }
     return out;
   }, [cols, lanes, sortOf, stacks]);
+  /* The line the rail does not draw: a card whose true parent is elsewhere in its lane. */
+  const elbows = useMemo(() => {
+    const out = new Map<string, Elbow[]>();
+    for (const l of cols) {
+      const order = sortCards(lanes.get(l.id) ?? [], sortOf(l.id)).map((p) => p.number);
+      const e = elbowsOf(order, (n) => { const b = stacks.of(n)?.base; return b?.kind === "pr" ? b.number : null; }, (n) => rails.get(l.id)?.get(n)?.to, (n) => hiddenLane.get(n) === l.id);
+      if (e.length) out.set(l.id, e);
+    }
+    return out;
+  }, [cols, lanes, sortOf, stacks, rails, hiddenLane]);
   /** A lane is a fixed column: the card's 336px and its air, wider by the gutter when a rail hangs in it. */
-  const laneWidth = (id: string) => LANE_WIDTH_PX + (rails.has(id) ? RAIL_WIDTH_PX : 0);
+  const laneWidth = (id: string) => LANE_WIDTH_PX + (rails.has(id) || elbows.has(id) ? RAIL_WIDTH_PX : 0);
   const setSort = useCallback((id: string, k: SortKey) => {
     setSorts((cur) => {
       const next = { ...cur, [id]: k };
@@ -992,7 +1068,7 @@ const w = lens?.why.get(p.number);
             </div>
             {/* The one thing the banner would otherwise overstate: until GitHub has been asked, only the loaded pull requests were searched. */}
             {closedView.ask && (
-              <div className="agx-srow-ss min-w-0" style={{ marginTop: 0 }} title={closedView.title}>
+              <div className="agx-srow-ss min-w-0" style={{ marginTop: 0 }} data-tip={closedView.title}>
                 <span className="truncate">{closedView.title}</span>
               </div>
             )}
@@ -1039,7 +1115,7 @@ const w = lens?.why.get(p.number);
                       /* The inventory is local and read-only, asked for the rows on screen whoever wrote them; Clean up appears only where offerFor allows it. */
                       const p = { ...trueChecks(r), filed: { lane: "others", reason: r.state === "MERGED" ? "Merged." : "Closed without merging." } } as Card;
                       return (
-                        <CardView p={p} hasTaskProvider={hasTaskProvider} repoUses={repoUses} lazyCard={!!viewer}
+                        <CardView p={p} hasTaskProvider={hasTaskProvider} repoUses={repoUses} lazyCard={!!viewer} trackers={trackers} trackerChoice={trackerChoice}
                           pinned={pinned(p.number)} onOpen={() => onOpen(p.number)} onOpenFull={() => onOpen(p.number, undefined, "dblclick")} onPin={() => onTogglePin(p)}
                           onAct={onAct} onMenu={(c, at) => setMenu({ p: c, ...at })} busy={busy} acting={acting} selected={selected === p.number}
                           root={root} unread={unread.get(p.number)} titleOf={titleOf} factsOf={factsOf} onOpenBase={onOpen} />
@@ -1058,7 +1134,7 @@ const w = lens?.why.get(p.number);
             })()
           ) : resultGrid(closedView.rows, more, closedView.loading)}
         </div>
-        {menuEl}
+        {menuEl}{lockEl}
       </div>
     );
   }
@@ -1075,7 +1151,7 @@ const w = lens?.why.get(p.number);
      * cards with nothing on screen saying which lane you were in. The
      * scrolling belongs to each column, one per lane, below.
      */
-    <div ref={frame} data-board {...(person && viewer ? { "data-person": "" } : {})} tabIndex={0} onKeyDown={onKey} className="relative flex flex-col h-full min-h-0 outline-none">
+    <div ref={frame} data-board {...(person && viewer ? { "data-person": "" } : {})} data-any-picked={picked.size ? "" : undefined} data-bulk-bar={picked.size ? "" : undefined} tabIndex={0} onKeyDown={onKey} className="relative flex flex-col h-full min-h-0 outline-none">
       {person && viewer && <div className="shrink-0 px-4 pt-3 pb-1.5"><PersonBanner login={viewer} name={person.name} onBack={person.onBack} follow={person.follow} /></div>}
       {/*
         * The board's own tools: which of THESE cards, and the ones with news.
@@ -1099,7 +1175,7 @@ const w = lens?.why.get(p.number);
           {(unreadCount > 0 || onlyUnread) && (
             <button onClick={() => onOnlyUnread(!onlyUnread)}
               aria-pressed={onlyUnread}
-              title={onlyUnread
+              data-tip={onlyUnread
                 ? "Show every card again"
                 : `Light only the ${unreadCount} with something said since you last looked`}
               className="agx-btn inline-flex items-center gap-1 rounded-md px-2 text-[10.5px] tabular-nums"
@@ -1128,7 +1204,7 @@ const w = lens?.why.get(p.number);
                   require you to remember which one you pressed. */}
               {(find || onlyLane !== null) && (
                 <button onClick={() => { setFind(""); closeFind(); setOnlyLane(null); }}
-                  title={find ? "Clear the search (Esc)" : "Show every lane again"}
+                  data-tip={find ? "Clear the search (Esc)" : "Show every lane again"} aria-label={find ? "Clear the search" : "Show every lane again"}
                   className="agx-btn rounded grid place-items-center" style={{ width: CTRL_H.compact, height: CTRL_H.compact, color: "var(--text3)" }}><CloseIcon size={ICON.xs} /></button>
               )}
             </span>
@@ -1136,7 +1212,7 @@ const w = lens?.why.get(p.number);
           <button onClick={() => openFind()}
             aria-label="Find in these cards"
             aria-pressed={!!find}
-            title="Find in these cards (⌃F) — number, title, author, branch, labels, assignees, reviewers, card id, card status, card people"
+            data-tip="Find in these cards (⌃F) — number, title, author, branch, labels, assignees, reviewers, card id, card status, card people"
             className="agx-btn shrink-0 grid place-items-center rounded-md"
             style={{ width: MIN_BOX, height: MIN_BOX, color: find ? "var(--primary)" : "var(--text3)", border: EDGE }}>
             <SearchIcon size={ICON.xs} />
@@ -1250,7 +1326,7 @@ const w = lens?.why.get(p.number);
                      */
                     <button onClick={() => toggleFold(l.id, all.length)}
                       aria-expanded={false}
-                      title={`${all.length} ${l.label} — unfold`}
+                      data-tip={`${all.length} ${l.label} — unfold`}
                       className="flex-1 min-h-0 w-full flex flex-col items-center gap-1.5 pt-2 pb-3 overflow-hidden agx-lane-bar"
                       style={{ color: l.tint, "--lane": l.tint } as CSSProperties}>
                       <span className="text-[13px] tabular-nums shrink-0">{waiting ? "…" : all.length}</span>
@@ -1295,7 +1371,7 @@ const w = lens?.why.get(p.number);
                       {all.length > 0 && !waiting ? (
                         <button data-seg={l.id} onClick={(e) => { e.stopPropagation(); setOnlyLane((v) => (v === l.id ? null : l.id)); }}
                           aria-pressed={onlyLane === l.id}
-                          title={onlyLane === l.id ? "Show every lane again" : `Light the ${all.length} in ${l.label.toLowerCase()}, quieten the rest`}
+                          data-tip={onlyLane === l.id ? "Show every lane again" : `Light the ${all.length} in ${l.label.toLowerCase()}, quieten the rest`}
                           className="agx-btn rounded-lg px-1.5 tabular-nums shrink-0"
                           style={{ height: HIT, ...CODE_FONT_STYLE, fontSize: 11, color: onlyLane === l.id ? l.tint : "var(--text3)", background: onlyLane === l.id ? `color-mix(in srgb, ${l.tint} 16%, transparent)` : "transparent" }}>
                           {all.length}
@@ -1311,13 +1387,26 @@ const w = lens?.why.get(p.number);
                           <InfoIcon size={ICON.sm} />
                         </button>
                       )}
-                      <span className="flex-1" />
+                      {/* Select all / Clear lane sits in the header's flexible gap, shown on hover, so Sync, sort and fold keep their place. */}
+                      <span className="flex-1 min-w-0 flex justify-end">
+                        {canPick && !waiting && all.length > 0 && (() => {
+                          const nums = all.map((p) => p.number);
+                          const on = allPicked(picked, nums);
+                          return (
+                            <button type="button" className="agx-pl-selall" data-on={on ? "" : undefined} data-select-lane={l.id}
+                              onClick={(e) => { e.stopPropagation(); setPicked(laneToggle(picked, nums)); setLeftMsg(null); }}>
+                              {on ? "Clear lane" : "Select all"}
+                            </button>
+                          );
+                        })()}
+                      </span>
                       {/* Sync N: the lane's own count of what it may update. Its
                           list opens under this header and never reads another lane. */}
                       {!waiting && onSyncOne && me !== undefined && all.length > 0 && (
                         <PrLaneSync lane={{ id: l.id, label: l.label, tint: l.tint }}
                           rows={(lanes.get(l.id) ?? []).map((p) => ({ p, filed: p.filed }))}
                           me={me} readOnly={readOnly} syncing={syncing}
+                          checking={!!root && anyChecking(root, lanes.get(l.id) ?? [])}
                           behindKnown={(n) => knownBehind(root ?? "", n)} onSyncOne={onSyncOne} onStep={noteSync}
                           onRetryReady={holdLaneRetry} />
                       )}
@@ -1346,7 +1435,7 @@ const w = lens?.why.get(p.number);
                       {canFold && !waiting && (
                         <button onClick={(e) => { e.stopPropagation(); toggleFold(l.id, all.length); }}
                           aria-expanded
-                          title={`Fold ${l.label} — its ${all.length} stay counted`}
+                          data-tip={`Fold ${l.label} — its ${all.length} stay counted`}
                           aria-label={`Fold ${l.label}`}
                           className="shrink-0 grid place-items-center rounded-lg agx-hover"
                           style={{ width: HIT, height: HIT, color: "var(--text4)" }}>
@@ -1356,9 +1445,16 @@ const w = lens?.why.get(p.number);
                     </h3>
                     {/* What the filters took off this lane: a dashed row, and a
                         way to see which. Holding Alt peeks too. */}
+                    {/* No strip, same box: a lane with nothing hidden keeps the empty
+                        drawer so the first card starts at the same height in every lane. */}
+                    {(hiddenHere.length === 0 || waiting) && (
+                      <div data-hidden-in={l.id} data-empty aria-hidden className="agx-pl-hid">
+                        <span className="agx-pl-peek" style={{ visibility: "hidden" }}>Peek</span>
+                      </div>
+                    )}
                     {hiddenHere.length > 0 && !waiting && (
                       <div data-hidden-in={l.id} className="agx-pl-hid"
-                        title={`${hiddenHere.length} hidden by your rules. Hold Alt to see which rule hid each.`}>
+                        data-tip={`${hiddenHere.length} hidden by your rules. Hold Alt to see which rule hid each.`}>
                         <span aria-hidden className="inline-flex gap-0.5 shrink-0">
                           {hiddenHere.slice(0, 8).map((p) => {
                             const c = lens?.why.get(p.number)?.colour ?? "var(--text3)";
@@ -1380,7 +1476,8 @@ const w = lens?.why.get(p.number);
                       eaten away". Cards had `mb-2` between them and nothing after
                       the final one. */}
                   <div ref={(el) => { if (el) laneScrolls.current.set(l.id, el); else laneScrolls.current.delete(l.id); }}
-                    onScroll={remember} className="flex-1 min-h-0 overflow-y-auto agx-scroll pb-2">
+                    onScroll={remember} data-lane-scroll className="relative flex-1 min-h-0 overflow-y-auto agx-scroll pb-2">
+                    {elbows.has(l.id) && !waiting && <StackElbows elbows={elbows.get(l.id)!} />}
                     {waiting ? (
                       /* The shape of the thing being waited for, and no text:
                          a lane cannot honestly say how many it will hold. */
@@ -1403,16 +1500,22 @@ const w = lens?.why.get(p.number);
                     ) : (
                       <>
                         {rows.map((p) => hiddenNums.has(p.number) ? slipOf(p) : (
-                          <CardView key={p.number} p={p as Card} hasTaskProvider={hasTaskProvider} repoUses={repoUses} lazyCard={!!viewer}
+                          <CardView key={p.number} p={p as Card} hasTaskProvider={hasTaskProvider} repoUses={repoUses} lazyCard={!!viewer} trackers={trackers} trackerChoice={trackerChoice}
                             pinned={pinned(p.number)} onOpen={() => onOpen(p.number)} onOpenFull={() => onOpen(p.number, undefined, "dblclick")} onPin={() => onTogglePin(p)}
-                            notes={summaries.get(p.number)} onOpenNotes={() => onOpen(p.number, "notes")}
+                            notes={summaries.get(p.number)} onOpenNotes={() => onOpen(p.number, "notes")} onOpenThreads={() => onOpen(p.number, "threads")}
+                            onOpenReview={(target) => onOpen(p.number, target.lane === "bot" ? "bots" : "review", undefined, target.node)}
                             onAct={onAct} onMenu={(c, at) => setMenu({ p: c, ...at })} busy={busy} acting={acting} selected={selected === p.number}
                             dim={!matches(p) || (onlyLane !== null && onlyLane !== l.id)} root={root}
                             unread={unread.get(p.number)}
                             sync={syncSteps.get(p.number)} onSyncRetry={() => retrySync(p, l.id)}
                             stack={stacks.of(p.number)} titleOf={titleOf} factsOf={factsOf} lit={lit === p.number} onLit={setLit} onOpenBase={onOpen}
                             chain={chain?.members.has(p.number) ? (chain.me === p.number ? "me" : "on") : undefined} onChain={onChain}
-                            rail={rails.get(l.id)?.get(p.number)} gutter={rails.has(l.id)} />
+                            rail={rails.get(l.id)?.get(p.number)} gutter={rails.has(l.id) || elbows.has(l.id)}
+                            picked={picked.has(p.number)} anyPicked={picked.size > 0} watchTag={tagOf(p.number)}
+                            onPick={canPick ? (shift) => {
+                              const r = pickClick(picked, anchor, p.number, l.id, rows.filter((x) => !hiddenNums.has(x.number)).map((x) => x.number), shift);
+                              setPicked(r.picked); setAnchor(r.anchor); setLeftMsg(null);
+                            } : undefined} />
                         ))}
                         {/* Counted, and openable HERE. The cap is what keeps
                             the board a glance on a bad week; the rest of the
@@ -1421,7 +1524,7 @@ const w = lens?.why.get(p.number);
                             panel. The column already scrolls. */}
                         {more > 0 && (
                           <button onClick={() => setOpenLanes((o) => ({ ...o, [l.id]: true }))}
-                            title={`Show the other ${more} in this lane`}
+                            data-tip={`Show the other ${more} in this lane`}
                             className="agx-btn w-full rounded-md py-1 mb-2 text-[11px]"
                             style={{ color: "var(--text3)", border: EDGE }}>
                             Show the other {more}
@@ -1429,7 +1532,7 @@ const w = lens?.why.get(p.number);
                         )}
                         {opened && all.length > LANE_CAP && (
                           <button onClick={() => setOpenLanes((o) => ({ ...o, [l.id]: false }))}
-                            title={`Back to the first ${LANE_CAP}`}
+                            data-tip={`Back to the first ${LANE_CAP}`}
                             className="agx-btn w-full rounded-md py-1 mb-2 text-[11px]"
                             style={{ color: "var(--text4)", border: EDGE }}>
                             Back to the first {LANE_CAP}
@@ -1444,7 +1547,7 @@ const w = lens?.why.get(p.number);
                     )}
                   </div>
                   {!waiting && all.length > 0 && (
-                    <div className="agx-pl-foot" title="Measured from each pull request's last activity">
+                    <div className="agx-pl-foot" data-tip="Measured from each pull request's last activity">
                       <ClockIcon size={ICON.xs} />Median age {medianAge(all)}
                     </div>
                   )}
@@ -1488,14 +1591,17 @@ const w = lens?.why.get(p.number);
           {quiet > 0 && (
             <>
               {(wide || viewer || (totalKnown && rest > 0)) && <span style={{ color: "var(--text4)" }}>·</span>}
-              <span title="Measured from each pull request's last update, which GitHub moves for a push, a comment or a label. Counted only over the ones on this board.">
+              <span data-tip="Measured from each pull request's last update, which GitHub moves for a push, a comment or a label. Counted only over the ones on this board.">
                 {quiet} of these {quiet === 1 ? "has" : "have"} gone {QUIET_DAYS} days without a push or a comment
               </span>
             </>
           )}
         </div>
       )}
-      {menuEl}
+      {/* Mounted while the board can pick, so the toast and its Undo outlive the selection Apply clears. */}
+      {canPick && <PrBulkWatch root={root!} repo={repoSlug!} picked={pickedRows} left={leftMsg} onClear={clearPicked}
+        onKeep={(nums) => { setPicked(new Set(nums)); setAnchor(null); setLeftMsg(null); }} />}
+      {menuEl}{lockEl}
     </div>
   );
 }
@@ -1517,7 +1623,7 @@ function SortButton({ lane, label, value, onPick, only, onOnly }: { lane: string
     <>
       <button ref={anchor} data-sort={lane} onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
         aria-label={`Sort ${label}`} aria-haspopup="menu" aria-expanded={open}
-        title={on ? `Sorted by ${SORT_LABEL[value].toLowerCase()}` : "Sort this lane"}
+        data-tip={on ? `Sorted by ${SORT_LABEL[value].toLowerCase()}` : "Sort this lane"}
         className="ml-auto shrink-0 relative grid place-items-center rounded-lg agx-hover"
         style={{ width: HIT, height: HIT, color: on ? "var(--text2)" : "var(--text4)" }}>
         <svg viewBox="0 0 16 16" width={ICON.sm} height={ICON.sm} fill="none" stroke="currentColor"
@@ -1559,12 +1665,17 @@ export function medianAge(rows: readonly PrSummary[], now = Date.now()): string 
   return h >= 48 ? `${Math.round(h / 24)} d` : `${h} h`;
 }
 
-function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onOpenFull, onPin, notes, onOpenNotes, onAct, onMenu, busy, acting, dim, selected, root, unread, stack, titleOf, factsOf, lit, onLit, onOpenBase, chain, onChain, rail, gutter, lazyCard, sync, onSyncRetry }: {
+function CardView({ p, hasTaskProvider, repoUses, trackers, trackerChoice, pinned, onOpen, onOpenFull, onPin, notes, onOpenNotes, onOpenThreads, onOpenReview, onAct, onMenu, busy, acting, dim, selected, root, unread, stack, titleOf, factsOf, lit, onLit, onOpenBase, chain, onChain, rail, gutter, lazyCard, sync, onSyncRetry, picked, anyPicked, onPick, watchTag }: {
   p: Card; hasTaskProvider: boolean;
+  /** The board's multi-select and the card's bell tag: see PrCard. */
+  picked?: boolean; anyPicked?: boolean; onPick?: (shift: boolean) => void; watchTag?: { text: string; aria: string } | null;
   /** Ask the tracker for this card only once it has been on screen (a person's board: a hundred cards, one request budget). */
   lazyCard?: boolean;
   /** This repository links work items at all: see prCardBlock.ts. */
   repoUses: boolean;
+  /** What is connected, and this repository's own choice between them: the chip resolves its tracker from these. */
+  trackers?: TrackerSetup | null;
+  trackerChoice?: TrackerChoice;
   pinned: boolean;
   /** The pull request is the viewer's own: their face is not drawn beside the age. */
   /** Unread remarks on this one, or null. See prUnread.ts. */
@@ -1608,7 +1719,9 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onOpenFull, on
   /** Double-click: the detail takes the whole panel. */
   onOpenFull?: () => void;
   /** What a plugin's review said about this pull request, when one did. */
-  notes?: PrNotesSummary; onOpenNotes?: () => void;
+  notes?: PrNotesSummary; onOpenNotes?: () => void; onOpenThreads?: () => void;
+  /** The Review cell opens the verdict's review inside this app: `all`, or `bot` for a bot's. */
+  onOpenReview?: (target: ReviewTarget) => void;
   onAct: (p: PrSummary, what: CardAction) => void; busy?: boolean;
   /** The right-click menu, at a point. The card never draws it: one menu serves the board. */
   onMenu: (p: Card, at: { x: number; y: number }) => void;
@@ -1616,6 +1729,7 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onOpenFull, on
   /* Asked for the first time by whoever draws the card, which is the thing that
      knows it is on screen. Null until the answer lands. */
   const fin = finishedKind(p);
+  const held = lockReason(useMergeLocks(root ?? ""), p.number);
   const behind = root && !fin ? behindOf(root, p.number) : null;
   const asking = root && !fin ? askingBehind(root, p.number) : false;
   /* GitHub answers UNKNOWN for a branch it has not looked at lately. The card
@@ -1648,6 +1762,9 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onOpenFull, on
      card this draws and the card a filter reads are the same one. */
   useSyncExternalStore(onCard, cardVersion, () => 0);
   const shown: PrSummary["card"] = lazyCard && !everOn.current ? p.card : withCard(p, hasTaskProvider).card;
+  /* Where this card's chip goes, decided by the one resolver both trackers
+     answer to. ClickUp is null here: it is the tab `openCard` lands on. */
+  const ticketTracker = prCardTracker(p, shown, trackers ?? null, trackerChoice);
   const block = trackerBlock({ card: !!shown, hasId: !!task, checksLoaded: p.checksLoaded, repoUses });
   /* What the card shows in each slot is decided in lib/prCardView.ts, where a
      test can reach it; this only draws it. */
@@ -1660,12 +1777,15 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onOpenFull, on
   const chip = fin ? null : chipFor(notes);
   const leftoverState = useLeftover(root, p);
   const cleaning = useCleaning(root, p.number);
+  const autoRun = onDisk(autoRunOf(useAutoEntry(root, p.number)), leftoverState);
   const cv = cardView({
-    p, filed: p.filed, reviewers, behind, asking, checking: checkingMerge, reading: !fin && stillReading(p), leftoverState, cleaning, unread,
+    p, filed: p.filed, reviewers, behind, asking, checking: checkingMerge, reading: !fin && stillReading(p), leftoverState, cleaning, autoRun, unread,
     busy: working, refreshing, tracker: block, hasTaskProvider,
-    notes: chip && notes ? totalOpen(notes) : undefined, labels: p.labels.map((l) => l.name),
+    notes: chip && notes ? totalOpen(notes) : undefined, labels: p.labels.map((l) => l.name), mergeLock: held,
   });
   const hold = notes && p.filed.lane === "land" ? notReadyChip(notes) : null;
+  /* A review asked for and not answered has nowhere to go: see lib/reviewTarget.ts. */
+  const reviewGo = reviewTarget(reviewers, cv.review.bot, { human: p.humanReview?.nodeId, bot: p.botReview?.nodeId });
   const notesChip: NotesChipView | null = chip
     ? (hold ? { text: hold.text, tone: "error", title: hold.title } : { text: chip.text, tone: chip.tone, title: chip.title })
     : null;
@@ -1675,20 +1795,22 @@ function CardView({ p, hasTaskProvider, repoUses, pinned, onOpen, onOpenFull, on
     rows,
     list: rows.map((row) => ({ row, title: titleOf?.(row.number) ?? `Pull request #${row.number}`, ...rowWord(row, factsOf?.(row.number)) })),
     prev: base?.kind === "pr" ? { number: base.number, branch: base.branch } : null,
+    children: stack.next, siblings: stack.siblings,
     broken: stack.broken === "merged" && base?.kind === "merged" ? `The base #${base.number} is merged and this one still targets its branch.`
       : stack.broken === "closed" && base?.kind === "closed" ? `The base #${base.number} was closed without merging.`
         : stack.broken === "missing" && base?.kind === "missing" ? `The base branch ${base.branch} has no pull request.` : "",
   } : null;
   const hr = p.humanReview as { url?: string } | undefined;
   return (
-    <PrCard cardRef={cardEl} p={p} cv={cv} card={shown} task={task} prOpen={p.state === "OPEN"} age={ago(p.updatedAt)}
-        stripNote={fin ? closedHeader(p, stamp) : undefined} reviewUrl={hr?.url} notesChip={notesChip}
+    <PrCard cardRef={cardEl} p={p} cv={cv} card={shown} task={task} ticketTracker={ticketTracker} prOpen={p.state === "OPEN"} age={ago(p.updatedAt)}
+        stripNote={fin ? closedHeader(p, stamp) : undefined} reviewUrl={hr?.url} reviewTarget={reviewGo} onOpenReview={onOpenReview} notesChip={notesChip}
         eventTip={eventTip({ reason: p.filed.reason, test: p.filed.test, author: p.author, quiet: eventLine(p.filed.reason, p.updatedAt).quiet, at: stamp(p.updatedAt) })}
         pinned={pinned} working={working} locked={!!busy && !working} dim={dim} selected={selected} lit={lit} chain={chain}
+        picked={picked} anyPicked={anyPicked} onPick={onPick} watchTag={watchTag}
         sync={sync} onSyncRetry={onSyncRetry}
         stack={stackView} rail={rail ?? null} gutter={gutter}
         onChain={(members) => onChain?.(members, p.number)} onOpenPr={(n) => onOpenBase?.(n)} onLit={onLit}
-        onOpen={onOpen} onOpenFull={onOpenFull} onOpenNotes={onOpenNotes} onPin={onPin}
+        onOpen={onOpen} onOpenFull={onOpenFull} onOpenNotes={onOpenNotes} onOpenThreads={onOpenThreads} onPin={onPin}
         onAct={(what) => onAct(p, what)} onMenu={(at) => onMenu(p, at)} />
   );
 }
@@ -1713,9 +1835,9 @@ function ResultRowView({ p, view, bare, closed, selected, onOpen, onOpenFull, on
   const lo = offerFor(useLeftover(finished ? root : undefined, p), "closedRow");
   const route = (
     <span className="agx-pc-route min-w-0" style={{ minHeight: 0 }}>
-      <span className="agx-pc-src" title={p.headRefName}><BranchIcon size={ICON.xs} />{p.headRefName}</span>
+      <span className="agx-pc-src" data-tip={p.headRefName}><BranchIcon size={ICON.xs} />{p.headRefName}</span>
       <span aria-hidden className="shrink-0" style={{ color: "var(--text4)" }}>→</span>
-      <span className="agx-pc-dest" data-trunk={isTrunkBranch(p.baseRefName) ? "1" : undefined} title={`${p.headRefName} → ${p.baseRefName}`}><BranchIcon size={ICON.xs} />{p.baseRefName}</span>
+      <span className="agx-pc-dest" data-trunk={isTrunkBranch(p.baseRefName) ? "1" : undefined} data-tip={`${p.headRefName} → ${p.baseRefName}`}><BranchIcon size={ICON.xs} />{p.baseRefName}</span>
     </span>
   );
   return (
@@ -1736,17 +1858,17 @@ function ResultRowView({ p, view, bare, closed, selected, onOpen, onOpenFull, on
         }}>
         <span aria-hidden className="agx-srow-tile"><Icon size={ICON.xs} /></span>
         <div className="min-w-0">
-          <div className="agx-srow-tt" title={p.title}>{p.title}</div>
+          <div className="agx-srow-tt" data-tip={p.title}>{p.title}</div>
           <div className="agx-srow-ss">
             <span className="min-w-0 truncate">#{p.number}{bare ? "" : ` · ${p.author}`}{closed && finished ? ` · ${view.state} ${ago(p.updatedAt)} ago` : ""}{bare && view.why ? ` · ${view.why}` : ""}</span>
             {!closed && !bare && route}
-            {view.why && !bare && <span className="truncate" title={view.why}>· {view.why}</span>}
+            {view.why && !bare && <span className="truncate" data-tip={view.why}>· {view.why}</span>}
           </div>
         </div>
         <span className="flex items-center gap-1.5">
           {closed && !bare && route}
           {view.hiddenBy && (
-            <span className="agx-pc-tag" data-tone="warn" title={`This pull request is not on your board: your rule “${view.hiddenBy}” hides it`}>
+            <span className="agx-pc-tag" data-tone="warn" data-tip={`This pull request is not on your board: your rule “${view.hiddenBy}” hides it`}>
               <EyeIcon size={ICON.xs} />your rule hides it
             </span>
           )}
@@ -1754,8 +1876,8 @@ function ResultRowView({ p, view, bare, closed, selected, onOpen, onOpenFull, on
             : !view.hiddenBy ? <span className="agx-pc-tag">{view.state}</span> : null)}
           {lo.button && (
             <>
-              <span className="agx-pc-tag" data-leftovers="" title={lo.tooltip} style={{ color: "var(--primary-ink)", borderColor: "color-mix(in srgb, var(--primary) 35%, transparent)" }}>{lo.chip}</span>
-              <button type="button" className="agx-cln-ib" data-clean-row="" title={`Clean up local leftovers: ${lo.tooltip}`} aria-label={`Clean up #${p.number}: ${lo.tooltip}`}
+              <span className="agx-pc-tag" data-leftovers="" data-tip={lo.tooltip} style={{ color: "var(--primary-ink)", borderColor: "color-mix(in srgb, var(--primary) 35%, transparent)" }}>{lo.chip}</span>
+              <button type="button" className="agx-cln-ib" data-clean-row="" data-tip={`Clean up local leftovers: ${lo.tooltip}`} aria-label={`Clean up #${p.number}: ${lo.tooltip}`}
                 onClick={(e) => { e.stopPropagation(); onClean?.(); }}><SparkleIcon size={ICON.xs} /></button>
             </>
           )}
@@ -1765,7 +1887,7 @@ function ResultRowView({ p, view, bare, closed, selected, onOpen, onOpenFull, on
             </span>
           )}
         </span>
-        {!closed && <span className="agx-srow-ss" style={{ marginTop: 0 }} title={`Last activity ${ago(p.updatedAt)} ago`}>{ago(p.updatedAt)}</span>}
+        {!closed && <span className="agx-srow-ss" style={{ marginTop: 0 }} data-tip={`Last activity ${ago(p.updatedAt)} ago`}>{ago(p.updatedAt)}</span>}
       </div>
     </div>
   );

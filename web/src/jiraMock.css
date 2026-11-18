@@ -1,0 +1,131 @@
+
+/* The Jira view wears the mockup's own look but faces whatever the app theme is (docs/design-system.md, "The Jira view's own look").
+   It reads the app's own tokens (--bg, --text, --surface-*, ...) rather than redefining them, so it is light on a light theme. */
+.agx-jmock {
+  --jm-sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; --jm-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --jm-acbg: color-mix(in srgb, var(--jira-accent) 24%, var(--surface-card)); --jm-row-cur: color-mix(in srgb, var(--jira-accent) 14%, var(--surface-card));
+  color: var(--text); font-family: var(--jm-sans);
+}
+.agx-jmock > nav[aria-label="Lists"] { background: var(--bg2); }
+.agx-jmock [data-testid="jira-list"] { background: var(--bg); color: var(--text); font-family: var(--jm-sans); }
+.agx-jmock .font-mono, .agx-jmock kbd { font-family: var(--jm-mono); }
+
+/* List: the mockup's six columns, rows 1px apart on a line, an epic header with its bar and its Next button. */
+.agx-jmock .agx-jl-scroll { padding: 0 12px 20px; --jl-cols: 20px 128px minmax(260px, 1fr) 148px 152px 156px 56px; }
+.agx-jmock .agx-jl-caps { padding: 0; border-bottom: 1px solid var(--surface-line); }
+.agx-jmock .agx-jl-capsin { margin: 0; padding: 8px 10px; height: auto; column-gap: 10px; font-family: var(--jm-mono); font-size: 11px; font-weight: 500; letter-spacing: 0.08em; color: var(--text4); }
+.agx-jmock .agx-jl-lane { margin: 14px 0 0; border-radius: 8px; background: transparent; box-shadow: none; }
+.agx-jmock .agx-jl-lane.is-sub { margin: 0; border-radius: 0; box-shadow: none; }
+.agx-jmock .agx-jl-lane > .agx-jl-body > .agx-jl-lane { margin: 0; box-shadow: none; }
+.agx-jmock .agx-jl-body { padding: 0; border: 1px solid var(--surface-line); border-top: 0; border-radius: 0 0 8px 8px; overflow: hidden; }
+.agx-jmock .agx-jl-lane[data-flat="1"] > .agx-jl-body, .agx-jmock .agx-jl-lane[data-folded] > .agx-jl-body { display: block; }
+.agx-jmock .agx-jl-lane[data-folded] > .agx-jl-body { display: none; }
+.agx-jmock .agx-jl-head { height: auto; min-height: 40px; padding: 10px 12px; gap: 12px; border-radius: 8px 8px 0 0; background: var(--bg2); border: 1px solid var(--surface-line); }
+.agx-jmock .agx-jl-lane[data-folded] > .agx-jl-head { border-radius: 8px; }
+.agx-jmock .agx-jl-head:hover { background: var(--bg2); }
+.agx-jmock .agx-jl-head .agx-jl-name { font-family: var(--jm-mono); font-size: 13px; font-weight: 700; }
+.agx-jmock .agx-jl-eph { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.agx-jmock .agx-jl-eph .sub { font-family: var(--jm-mono); font-size: 11px; color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agx-jmock .agx-jl-eph + .agx-jl-stack { display: flex; gap: 2px; width: 160px; height: 6px; padding: 0; border-radius: 3px; overflow: hidden; flex: none; margin-left: auto; }
+.agx-jmock .agx-jl-eph + .agx-jl-stack i { display: block; height: 100%; min-width: 3px; margin: 0; }
+.agx-jmock .agx-jl-next { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--text3); flex: none; }
+.agx-jmock .agx-jl-btn { padding: 4px 10px; min-height: 28px; border: 1px solid var(--border2); border-radius: 6px; font-size: 12px; color: var(--text); background: transparent; cursor: pointer; }
+.agx-jmock .agx-jl-btn:hover { border-color: var(--primary); color: var(--primary-hover); }
+.agx-jmock .agx-jl-btn.pri { background: #7a4ae0; border-color: #7a4ae0; color: #fff; font-weight: 600; }
+.agx-jmock .agx-jl-btn.pri:hover { background: var(--primary-hover); color: #120a2b; }
+/* A status group inside an epic: a quiet line with a dot, the name and a count. */
+.agx-jmock .agx-jl-lane.is-sub > .agx-jl-head { min-height: 0; padding: 5px 12px; gap: 8px; background: var(--bg); border: 0; border-top: 1px solid var(--surface-line); border-radius: 0; cursor: pointer; }
+.agx-jmock .agx-jl-lane.is-sub > .agx-jl-head .agx-jl-name { font-size: 11px; font-weight: 500; color: var(--text3); }
+.agx-jmock .agx-jl-sdot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--t, var(--text4)); }
+.agx-jmock .agx-jl-lane.is-sub > .agx-jl-head .agx-jl-count { height: auto; min-width: 0; padding: 0 6px; border-radius: 4px; font-family: var(--jm-mono); font-size: 11px; background: var(--bg3); color: var(--text3); }
+.agx-jmock .agx-jl-row {
+  min-height: 0; margin: 0; padding: 10px; column-gap: 10px; border-radius: 0; background: var(--bg); box-shadow: none; border-top: 1px solid var(--surface-line);
+}
+.agx-jmock .agx-jl-lane > .agx-jl-head + .agx-jl-body > div:first-child > .agx-jl-row { border-top: 0; }
+.agx-jmock .agx-jl-row:hover { background: var(--bg2); box-shadow: none; }
+.agx-jmock .agx-jl-row[aria-selected="true"] { background: var(--jm-row-cur); box-shadow: inset 2px 0 var(--primary); }
+.agx-jmock .agx-jl-row.is-sub { margin-left: 28px; background: var(--bg); }
+.agx-jmock .agx-jl-row.is-sub .agx-jl-main { padding-left: 0; }
+.agx-jmock .agx-jl-keycell { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.agx-jmock .agx-jl-keyline { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.agx-jmock .agx-jl-keyline .k { font-family: var(--jm-mono); font-size: 11px; color: var(--primary-hover); white-space: nowrap; }
+.agx-jmock .agx-jl-row[data-done] .agx-jl-keyline .k { color: var(--text3); }
+.agx-jmock .agx-jl-tile.lg { width: 18px; height: 18px; border-radius: 4px; font-size: 11px; box-shadow: none; background: color-mix(in srgb, var(--t) 18%, var(--surface-card)); color: var(--t); }
+.agx-jmock .agx-jl-mb { display: flex; gap: 2px; align-items: center; }
+.agx-jmock .agx-jl-mb i { display: block; width: 8px; height: 4px; border-radius: 1px; background: var(--bg4); }
+.agx-jmock .agx-jl-mb i[data-on] { background: var(--success); }
+.agx-jmock .agx-jl-mb i[data-on="mid"] { background: var(--primary); }
+.agx-jmock .agx-jl-ring { display: inline-flex; align-items: center; gap: 4px; font-family: var(--jm-mono); font-size: 11px; color: var(--text3); }
+.agx-jmock .agx-jl-title { font-weight: 400; font-size: 13px; font-family: var(--jm-sans); gap: 0; flex-wrap: wrap; line-height: 1.4; }
+.agx-jmock .agx-jl-title .agx-jl-trunc { white-space: normal; overflow: visible; overflow-wrap: anywhere; flex: 0 1 auto; }
+.agx-jmock [data-dens="compact"] .agx-jl-title .agx-jl-trunc { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The skin's title wraps (flex-wrap), so a title whose one-line width is more than the room left beside the elbow dropped to a line of its own
+   and the elbow stood alone above it. Capped under the line's width it stays on the elbow's line and wraps inside itself. */
+.agx-jmock .agx-jl-row.is-sub .agx-jl-elbow { margin-right: 4px; }
+.agx-jmock .agx-jl-row.is-sub .agx-jl-title .agx-jl-trunc { max-width: calc(100% - 32px); }
+.agx-jmock .agx-jl-row[data-done] .agx-jl-title { color: var(--text3); text-decoration: line-through; text-decoration-color: var(--text4); }
+.agx-jmock .agx-jl-title .tg, .agx-jmock .agx-jl-tag { font-family: var(--jm-mono); font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--bg3); color: var(--text3); margin-left: 6px; white-space: nowrap; }
+.agx-jmock .agx-jl-tag.blk { background: color-mix(in srgb, var(--error) 20%, var(--surface-card)); color: var(--error); }
+.agx-jmock .agx-jl-meta { font-family: var(--jm-mono); font-size: 11px; color: var(--text3); gap: 6px; flex-wrap: wrap; overflow: visible; }
+.agx-jmock [data-dens="compact"] .agx-jl-meta .sp { display: none; }
+.agx-jmock .agx-jl-cell { font-family: var(--jm-sans); font-size: 11px; }
+.agx-jmock .agx-jl-st {
+  display: inline-flex; gap: 6px; align-items: center; padding: 2px 8px; min-height: 26px; border-radius: 5px; background: var(--bg3); border: 1px solid transparent;
+  font-size: 11px; color: var(--text); white-space: nowrap; cursor: pointer; max-width: 100%;
+}
+.agx-jmock .agx-jl-st:hover { border-color: var(--border2); }
+.agx-jmock .agx-jl-st .d { width: 8px; height: 8px; border-radius: 50%; background: var(--d, var(--text4)); flex: none; }
+.agx-jmock .agx-jl-st .c { color: var(--text3); }
+.agx-jmock .agx-jl-agent { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 11px; }
+.agx-jmock .agx-jl-agent .l1 { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.agx-jmock .agx-jl-agent .sm { font-family: var(--jm-mono); font-size: 11px; color: var(--text3); }
+.agx-jmock .agx-jl-live { width: 7px; height: 7px; border-radius: 50%; background: var(--success); flex: none; }
+.agx-jmock .agx-jl-pill { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; font-family: var(--jm-mono); font-size: 11px; line-height: 1; white-space: nowrap; background: var(--bg3); color: var(--text3); }
+.agx-jmock .agx-jl-pill.g { background: color-mix(in srgb, var(--success) 18%, var(--surface-card)); color: var(--success); }
+.agx-jmock .agx-jl-pill.y { background: color-mix(in srgb, var(--warning) 18%, var(--surface-card)); color: var(--warning); }
+.agx-jmock .agx-jl-pill.r { background: color-mix(in srgb, var(--error) 18%, var(--surface-card)); color: var(--error); }
+.agx-jmock .agx-jl-pill.p { background: var(--jm-acbg); color: var(--primary-hover); }
+.agx-jmock .agx-jl-prs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.agx-jmock .agx-jl-prs .agx-jl-pr { opacity: 1; height: auto; padding: 0; border: 0; box-shadow: none; background: none; color: var(--primary-hover); font-family: var(--jm-mono); font-size: 11px; }
+.agx-jmock .agx-jl-pr { opacity: 1; }
+.agx-jmock .agx-jl-av { width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center; font: 600 9px var(--jm-mono); background: color-mix(in srgb, var(--jira-accent) 65%, var(--surface-inset)); color: var(--jira-accent-on); overflow: hidden; }
+.agx-jmock .agx-jl-add { display: flex; gap: 8px; align-items: center; padding: 6px 10px 8px 148px; border-top: 1px solid var(--surface-line); background: var(--bg); }
+.agx-jmock .agx-jl-add input { flex: 0 1 320px; min-width: 0; height: 28px; font-size: 12px; background: transparent; border: 1px dashed var(--border2); border-radius: 6px; padding: 0 9px; color: var(--text); outline: none; }
+.agx-jmock .agx-jl-add input:focus { border-color: var(--primary); }
+.agx-jmock .agx-jl-lane > .agx-jl-body .agx-jl-more { margin: 0; border-radius: 0; }
+/* top bar, tabs, search, chips, key hints */
+.agx-jmock .agx-jm-top { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--surface-line); flex-wrap: wrap; }
+.agx-jmock .agx-jm-top > * { white-space: nowrap; }
+.agx-jmock .agx-jm-sprint { font-family: var(--jm-mono); font-size: 12px; padding: 3px 10px; border: 1px solid var(--surface-line); border-radius: 4px; color: var(--text); background: var(--bg); height: 28px; display: inline-flex; align-items: center; }
+.agx-jmock .agx-jm-sprint[data-empty] { color: var(--text3); }
+.agx-jmock .agx-jm-btn { position: relative; height: 28px; padding: 0 10px; border: 1px solid var(--surface-line); border-radius: 6px; font-size: 12px; color: var(--text); background: transparent; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.agx-jmock .agx-jm-btn:hover { border-color: var(--primary-hover); background: var(--bg3); }
+.agx-jmock .agx-jm-sync { display: inline-flex; flex: none; white-space: nowrap; align-items: center; gap: 6px; font-size: 11px; color: var(--text3); }
+.agx-jmock .agx-jm-sync i { width: 7px; height: 7px; border-radius: 50%; background: var(--success); }
+.agx-jmock .agx-jm-sync[data-stale] i { background: var(--warning); }
+.agx-jmock .agx-jm-keys { display: inline-flex; gap: 4px; align-items: center; flex: none; }
+.agx-jmock .agx-jm-hints { display: flex; gap: 16px; align-items: center; padding: 6px var(--fab-reserve) 6px 14px; border-top: 1px solid var(--surface-line); font-size: 11px; color: var(--text3); background: var(--bg); flex-wrap: nowrap; overflow: hidden; }
+.agx-jmock .agx-jm-hints span { display: inline-flex; gap: 4px; align-items: center; white-space: nowrap; }
+.agx-jmock .agx-jt-tab { padding: 7px 12px; color: var(--text3); border-bottom: 2px solid transparent; border-radius: 0; }
+.agx-jmock .agx-jt-tabw[data-on] .agx-jt-tab { color: var(--text); border-bottom-color: var(--primary); }
+.agx-jmock .agx-jt-n { font: 11px var(--jm-mono); background: var(--bg3); padding: 0 6px; border-radius: 9px; }
+
+/* One scroller per column: the head stays, only that column's cards move, the board never scrolls down. Swimlane rows still share one.
+   Every rule here is the mockup's own look, scoped under .agx-jmock like the rest of the file: unscoped, .agx-jb clipped the
+   real board's own horizontal scroll too (jiraMock.css loads globally, main.tsx), so only the "+N columns" button, which
+   scrolls by script, ever reached the hidden columns - a wheel, a trackpad swipe or a scrollbar drag did not. */
+.agx-jmock .agx-jb { overflow: hidden; }
+.agx-jmock .agx-jb-percol { flex-direction: row; align-items: stretch; overflow-y: hidden; padding-bottom: 0; gap: 12px; }
+.agx-jmock .agx-jb-colbox { gap: 0; min-height: 0; height: 100%; }
+.agx-jmock .agx-jb-colbox > .agx-jb-colhead { flex: none; padding-bottom: 8px; background: var(--bg); }
+.agx-jmock .agx-jb-cards {
+  flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; overflow-x: hidden; overscroll-behavior: auto contain; padding: 2px 2px 12px 0;
+  scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--text) 24%, transparent) transparent;
+}
+.agx-jmock .agx-jb-cards::-webkit-scrollbar { width: 6px; }
+.agx-jmock .agx-jb-cards::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--text) 24%, transparent); border-radius: 3px; }
+.agx-jmock .agx-jl-gpick { display: none; }
+.agx-jmock .agx-jl-face { width: 22px; height: 22px; font-size: 9px; letter-spacing: 0; }
+.agx-jmock .agx-jb-title { font-size: 14px; line-height: 1.4; }
+.agx-jmock .agx-jb-card { padding: 12px; gap: 8px; }
+.agx-jmock [data-slot="dock"] h3 { font-family: var(--jm-mono) !important; font-size: 14px !important; font-weight: 600 !important; line-height: 1.4 !important; letter-spacing: 0 !important; }

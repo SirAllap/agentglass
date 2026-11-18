@@ -80,6 +80,10 @@
   .agx-settings-col > .wfm { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 24px; align-items: start; }
   .agx-settings-col > .wfm > section:has(.wfm-grid) { grid-column: 1 / -1; }
   .agx-settings-col > .wfm > style { display: none; }
+  /* The same, with the page inside its Settings layer (settings/shell/pageLoad.tsx PageSlot, display: contents). */
+  .agx-settings-col > [data-page-slot] > .wfm { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 24px; align-items: start; }
+  .agx-settings-col > [data-page-slot] > .wfm > section:has(.wfm-grid) { grid-column: 1 / -1; }
+  .agx-settings-col > [data-page-slot] > .wfm > style { display: none; }
 }
 
 /* An editor that is wider than a form reads: its fields stop at a line length, the foot still spans. */

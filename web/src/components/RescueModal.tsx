@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { WorktreeLeftovers, LeftoverEntry } from "../../../shared/types.ts";
 import { GitDialog, RefStrip } from "./GitDialog.tsx";
+import { TileStrip } from "./git/DotStrip.tsx";
+import { rescueTiles } from "../lib/gitStrips.ts";
 import { preselected, fmtBytes, rescueKey, rescuePicks } from "../lib/goneCleanup.ts";
 import { DoneIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
@@ -136,6 +138,7 @@ export function RescueModal({ reports, progress, onCancel, onConfirm }: {
       <div className="px-4">
         <RefStrip head={reports.map((r) => groupOf(r.path)).join(", ")} base="main checkout" tone="warn" />
       </div>
+      <TileStrip tiles={rescueTiles(reports, (w, f) => on.has(rescueKey(w, f)))} />
       <div ref={listRef} className="agx-scroll overflow-y-auto overflow-x-hidden px-2.5" style={{ opacity: working ? 0.45 : 1, pointerEvents: working ? "none" : "auto" }}>
       {nothingToOffer && (
         <div className="px-3 py-6 text-[11.5px] text-center" style={{ color: "var(--text3)" }}>

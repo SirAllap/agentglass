@@ -60,15 +60,48 @@ export function oldPathFor(rows: readonly ChangeRow[], root: string, path: strin
   return rows.find((r) => r.repoRoot === root && r.path === path)?.oldPath;
 }
 
+/** Every field of the type, so a field added later is compared without anyone remembering to.
+ *  Every field is a primitive (compared with `!==`) except `commit`, which is compared by its own
+ *  fields. An object or array field would differ on every read and defeat the memo: add its own
+ *  case here. A test pins this. */
+const sameRow = (x: ChangeRow, y: ChangeRow): boolean => {
+  const keys = new Set([...Object.keys(x), ...Object.keys(y)]) as Set<keyof ChangeRow>;
+  for (const k of keys) {
+    if (k === "commit") {
+      const c = x.commit, d = y.commit;
+      if (!c !== !d || (c && d && (c.hash !== d.hash || c.subject !== d.subject || c.author !== d.author || c.at !== d.at))) return false;
+    } else if (x[k] !== y[k]) return false;
+  }
+  return true;
+};
+
 export function rowsDiffer(a: ChangeRow[], b: ChangeRow[]): boolean {
   if (a.length !== b.length) return true;
-  for (let i = 0; i < a.length; i++) {
-    const x = a[i]!, y = b[i]!;
-    if (x.key !== y.key || x.changedAt !== y.changedAt || x.additions !== y.additions ||
-        x.deletions !== y.deletions || x.staged !== y.staged || x.status !== y.status) return true;
-  }
+  for (let i = 0; i < a.length; i++) if (!sameRow(a[i]!, b[i]!)) return true;
   return false;
 }
+
+/** The fresh list, but every row that did not change keeps the object it had, so a memoised row
+ *  does not re-render because a neighbour moved. Returns `prev` itself when nothing differs. */
+export function mergeRows(prev: ChangeRow[], next: ChangeRow[]): ChangeRow[] {
+  if (!rowsDiffer(prev, next)) return prev;
+  const old = new Map(prev.map((r) => [r.key, r]));
+  return next.map((r) => { const o = old.get(r.key); return o && sameRow(o, r) ? o : r; });
+}
+
+/** Whether a view that just came back on screen must read again. Nothing it could not have heard
+ *  about changed (no git push since the last read) and the last read is inside the safety window:
+ *  what it shows is as fresh as a refresh would make it, so it sends nothing. */
+export function mustReadOnShow(lastReadAt: number | null, dirty: boolean, now: number, safetyMs = SAFETY_MS): boolean {
+  return lastReadAt === null || dirty || now < lastReadAt || now - lastReadAt >= safetyMs;
+}
+
+/** Pushes heard that no successful read has seen yet. */
+export const hasUnseenPush = (seq: number, seen: number): boolean => seq !== seen;
+
+/** After a skipped show: how long until the window the last read opened ends. */
+export const skipDelay = (lastReadAt: number, now: number, safetyMs = SAFETY_MS): number =>
+  Math.max(0, Math.min(safetyMs, lastReadAt + safetyMs - now));
 
 export type RowsState = {
   rows: ChangeRow[];
@@ -88,15 +121,25 @@ export function useChangeRows(mode: DiffMode, active: boolean): RowsState & { re
   const inFlight = useRef(false);
   const alive = useRef(true);
   useEffect(() => () => { alive.current = false; }, []);
+  /* A hidden view hears git pushes too, only to mark what it shows stale: on the way back it reads
+     once if so, and sends nothing if not. */
+  const lastRead = useRef<number | null>(null);
+  /* A counter, not a flag: a push that lands while a read is running must still count as unseen. */
+  const gitSeq = useRef(0);
+  const seenSeq = useRef(0);
+  useEffect(() => subscribeGitChanged(() => { gitSeq.current++; }), []);
 
   const load = useCallback(async () => {
     if (inFlight.current) return; // a burst of git events is still one read
     inFlight.current = true;
     try {
+      const seq = gitSeq.current;
       const r: ChangeRowsResult = await api.gitChangeRows(mode);
+      seenSeq.current = seq; // only a read that worked has seen those pushes
+      lastRead.current = Date.now();
       if (!alive.current) return;
       setState((prev) => ({
-        rows: rowsDiffer(prev.rows, r.rows) ? r.rows : prev.rows,
+        rows: mergeRows(prev.rows, r.rows),
         truncated: r.truncated,
         failed: r.failed ?? [],
         authors: r.authors ?? [],
@@ -112,11 +155,15 @@ export function useChangeRows(mode: DiffMode, active: boolean): RowsState & { re
   }, [mode]);
 
   // Switching mode is a different question, not a refresh of this one.
-  useEffect(() => { setState((s) => ({ ...s, loading: true })); }, [mode]);
+  useEffect(() => { lastRead.current = null; setState((s) => ({ ...s, loading: true })); }, [mode]);
 
   useEffect(() => {
     if (!active) return;
-    void load();
+    let skipTimer: ReturnType<typeof setTimeout> | null = null;
+    const now = Date.now();
+    if (mustReadOnShow(lastRead.current, hasUnseenPush(gitSeq.current, seenSeq.current), now)) void load();
+    // Skipped: read when the window the last read opened ends, so a hidden change waits 15 s in all.
+    else skipTimer = setTimeout(() => { void load(); }, skipDelay(lastRead.current!, now));
     let t: ReturnType<typeof setTimeout> | null = null;
     const off = subscribeGitChanged(() => {
       if (t) clearTimeout(t);
@@ -125,7 +172,7 @@ export function useChangeRows(mode: DiffMode, active: boolean): RowsState & { re
     // Looked-at only, and once on the way back: 240 git reads an hour with the
     // window hidden, for rows nobody could see. The git-changed push stays.
     const stop = pollWhileLooking(() => { void load(); }, SAFETY_MS);
-    return () => { off(); stop(); if (t) clearTimeout(t); };
+    return () => { off(); stop(); if (t) clearTimeout(t); if (skipTimer) clearTimeout(skipTimer); };
   }, [active, load]);
 
   return { ...state, refresh: load };

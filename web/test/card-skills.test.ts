@@ -64,6 +64,26 @@ describe("the tmux window it opens", () => {
     expect(windowName({ id: "86xabc001", customId: "ABC-1234" })).toBe("abc-1234");
   });
 
+  it("is named after the project and the Jira key when the card has one", () => {
+    // The key is what the branch, the commit and the pull request all say, so
+    // the tab says it too: `<project>-<JIRA-KEY>`.
+    expect(windowName(
+      { id: "20042", customId: "ORBIT-1042", url: "https://acme.atlassian.net/browse/ORBIT-1042" },
+      { project: "/home/acme/orbit" },
+    )).toBe("orbit-ORBIT-1042");
+  });
+
+  it("still names the tab after a legacy ClickUp id that only looks like a Jira key", () => {
+    // `ORBIT-1042` is the shape of a ClickUp custom id as well. Only the card's
+    // own Jira address makes it a Jira key, and no tracker answer can change
+    // the name a moment later.
+    expect(windowName({ id: "86xabc001", customId: "ORBIT-1042", url: "https://app.clickup.com/t/86abc" })).toBe("orbit-1042");
+  });
+
+  it("takes the project from the key when the caller names none", () => {
+    expect(windowName({ id: "20042", customId: "ORBIT-1042", url: "https://acme.atlassian.net/browse/ORBIT-1042" })).toBe("orbit-ORBIT-1042");
+  });
+
   it("strips what tmux would read as a target separator", () => {
     // A window whose name contains a dot cannot be selected by name later:
     // tmux reads it as session.window.

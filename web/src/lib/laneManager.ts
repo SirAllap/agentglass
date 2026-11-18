@@ -2,8 +2,8 @@ import { useEffect } from "react";
 import type { BrowserAskFrame } from "../../../shared/types.ts";
 import { api } from "./api.ts";
 import { clientId, setLaneAskHandler } from "./browserBus.ts";
-import { loadProfiles } from "./browserProfiles.ts";
-import { CAN_MAKE_LANES, closeLaneWindow, keepLaneWindows, openLaneWindow } from "./desktop.ts";
+import { loadProfiles, type BrowserProfile } from "./browserProfiles.ts";
+import { CAN_MAKE_LANES, closeLaneWindow, keepLaneWindows, openLaneWindow, vaultCall } from "./desktop.ts";
 
 /**
  * The container slug a new lane's window is given: what `&p=` in its hash
@@ -37,15 +37,77 @@ export function laneSlug(
   return { slug: id };
 }
 
+/** lane id -> the container slug its window attached on, while it is open.
+ *  A full container list must not drop a jar a lane is using. */
+const laneSlugs = new Map<string, string>();
+
+/** The container ids lane windows are attached on now. */
+export function laneContainers(): ReadonlySet<string> {
+  return new Set([...laneSlugs.values()].filter(Boolean));
+}
+
+/** This window's list entry for a container id, if it holds one. */
+function listed(id: string): BrowserProfile | undefined {
+  let store: Storage | null = null;
+  try { store = window.localStorage; } catch { /* blocked */ }
+  return id ? loadProfiles(store).find((p) => p.id === id) : undefined;
+}
+
 async function serveLaneAsk(ask: BrowserAskFrame): Promise<void> {
-  let reply: { ok: boolean; error?: string };
-  if (typeof ask.args.make === "string") {
+  let reply: { ok: boolean; error?: string; value?: unknown };
+  const pull = ask.args.vaultPull as { lane?: unknown; site?: unknown; agent?: unknown; vault?: unknown; onVisit?: unknown; budgetMs?: unknown; deadlineAt?: unknown; container?: unknown; held?: unknown } | undefined;
+  const wipe = ask.args.vaultWipe as { container?: unknown; cookies?: unknown; site?: unknown; agent?: unknown; why?: unknown; sweep?: unknown } | undefined;
+  if (pull && typeof pull === "object" && typeof pull.container === "string") {
+    /* An agent's own container: only one this window's list holds, by id. */
+    const r = listed(pull.container)?.agentMade === true
+      ? await vaultCall("vaultPull", {
+        lane: "", container: pull.container, site: String(pull.site ?? ""), agent: String(pull.agent ?? ""),
+        ...(typeof pull.vault === "string" ? { vault: pull.vault } : {}),
+        onVisit: pull.onVisit === true,
+        /* The server's book: is the vault's sign-in still on record for this container + site. */
+        held: pull.held === true,
+        ...(typeof pull.budgetMs === "number" ? { budgetMs: pull.budgetMs } : {}),
+        ...(typeof pull.deadlineAt === "number" ? { deadlineAt: pull.deadlineAt } : {}),
+      })
+      : { ok: false, code: "refused", error: "that container is not an agent's own in this window's list" };
+    reply = { ok: true, value: r };
+  } else if (wipe && typeof wipe === "object" && typeof wipe.container === "string") {
+    /* A dropped container is not in the list any more, and main wipes by id.
+       One in the list without the flag is the person's, made after the
+       agent's was removed: it lands on the same id, and is never wiped. */
+    const mine = listed(wipe.container);
+    const r = mine && mine.agentMade !== true
+      ? { ok: false, code: "not-agent", error: "that id is a person's container now; nothing was removed" }
+      : await vaultCall("vaultWipe", {
+        container: wipe.container, cookies: Array.isArray(wipe.cookies) ? wipe.cookies : [],
+        ...(typeof wipe.site === "string" ? { site: wipe.site } : {}),
+        ...(typeof wipe.agent === "string" ? { agent: wipe.agent } : {}),
+        ...(typeof wipe.why === "string" ? { why: wipe.why } : {}),
+        /* Without it main removes only the listed names and a rotated or host-only login survives. */
+        ...(wipe.sweep === true ? { sweep: true } : {}),
+      });
+    reply = { ok: true, value: r };
+  } else if (pull && typeof pull === "object") {
+    /* Main's answer rides in `value` whole (counts and names only), so the
+       server can read its `code` (ambiguous, no-ok, refused). A sensitive
+       site is OKed by main's own dialog and main's report to the server:
+       nothing here can say yes. */
+    const r = await vaultCall("vaultPull", {
+      lane: String(pull.lane ?? ""), site: String(pull.site ?? ""), agent: String(pull.agent ?? ""),
+      ...(typeof pull.vault === "string" ? { vault: pull.vault } : {}),
+      /* A sign-in on a first visit: main checks its own setting and deadline. */
+      ...(pull.onVisit === true ? { onVisit: true, ...(typeof pull.budgetMs === "number" ? { budgetMs: pull.budgetMs } : {}) } : {}),
+    });
+    reply = { ok: true, value: r };
+  } else if (typeof ask.args.make === "string") {
     let store: Storage | null = null;
     try { store = window.localStorage; } catch { /* blocked */ }
     const chosen = laneSlug(ask.args.make, ask.args.container, ask.args.name, loadProfiles(store));
     reply = "error" in chosen ? { ok: false, error: chosen.error } : await openLaneWindow(ask.args.make, chosen.slug, chosen.ephemeral === true);
+    if (reply.ok && !("error" in chosen)) laneSlugs.set(ask.args.make, chosen.slug);
   } else if (typeof ask.args.drop === "string") {
     reply = await closeLaneWindow(ask.args.drop);
+    laneSlugs.delete(ask.args.drop);
   } else {
     reply = { ok: false, error: "a lane ask names a lane to make or to drop" };
   }
@@ -67,6 +129,8 @@ export function useLaneManager(): void {
         .catch(() => { /* the server is restarting */ });
     };
     beat();
+    // Liveness, not UI refresh: server/src/lanes.ts drops a lane whose host stops beating
+    // after HOST_GONE_MS (60 s), so this must keep running while the window is hidden.
     const timer = setInterval(beat, 30_000);
     return () => {
       clearInterval(timer);

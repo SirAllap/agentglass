@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { DoorCard } from "../orchestration/DoorValueRow.tsx";
+import { POLARIS_ROWS } from "../orchestration/doorSpecs.ts";
 import { SettingRow } from "../SettingRow.tsx";
 import { Disclosure, ProblemNote, SettingsCard, StatusBadge } from "../SettingsKit.tsx";
 import { LockIcon, StarIcon } from "../../lib/glyphIcons.tsx";
@@ -11,7 +13,7 @@ import { api } from "../../lib/api.ts";
 import { openSettings } from "../../lib/openSettings.ts";
 import { ALSO_NEVER, GUARDRAILS, PRESETS, type PresetId, type SettingsAnswer, type SettingsChange, type StoredPolaris } from "../../../../shared/polaris.ts";
 import {
-  ASSIST_TITLE, assistPrompt, assistState, changeDoor, formatBadge, formatNotice, groupDoors, groupViews, inheritAll, liveQuestion, pickPreset, presetChoices, presetQuestion, presetShown, resetDoors, scopeOf, stampFormat, storedOf, turnOn, undoStamp,
+  ASSIST_TITLE, assistPrompt, assistState, changeDoor, formatBadge, formatNotice, githubLine, groupDoors, groupViews, inheritAll, liveQuestion, pickPreset, presetChoices, presetQuestion, presetShown, resetDoors, scopeOf, stampFormat, storedOf, turnOn, undoStamp,
   type AssistState,
 } from "../../lib/polarisView.ts";
 import { usePolarisSettings } from "./usePolaris.ts";
@@ -37,6 +39,13 @@ function AssistedSetup({ root }: { root: string }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const open = useBenchJob(root, JOB.polarisSetup, ASSIST_TITLE);
+  const [github, setGithub] = useState("");
+  useEffect(() => {
+    let live = true;
+    setGithub("");
+    if (root) void api.polarisGithub(root).then((a) => { if (live && "auth" in a) setGithub(githubLine(a)); }).catch(() => {});
+    return () => { live = false; };
+  }, [root]);
   useEffect(() => {
     let live = true;
     void api.workerRoles().then((r) => { if (live) setState(assistState(r)); }).catch(() => { if (live) setState({ ok: false, why: "Could not read which engine is set." }); });
@@ -59,7 +68,7 @@ function AssistedSetup({ root }: { root: string }) {
   const ready = state?.ok === true;
   return (
     <SettingRow label="Assisted setup" wide
-      hint={ready ? `Opens a terminal with ${state.title}. It asks about your team, then sets the doors you agree to, one group at a time.` : state ? state.why : "Checking which engine is set."}
+      hint={`${ready ? `Opens a terminal with ${state.title}. It checks GitHub, asks about your team, then sets the doors you agree to.` : state ? state.why : "Checking which engine is set."}${github ? ` ${github}` : ""}`}
       control={
         <span className="inline-flex items-center gap-2">
           {state && !state.ok && <Button onClick={() => openSettings("engines")}>See Agent engines</Button>}
@@ -127,7 +136,7 @@ function FormatBanner({ answer, scope, busy, apply }: { answer: SettingsAnswer; 
  * edits that project's own layer (and says where each door comes from), Global and All
  * projects edit the global layer. Off first; the doors by group; the guardrails locked.
  */
-export function PolarisCard({ root }: { root: string }) {
+function PolarisCardBody({ root }: { root: string }) {
   const scope = scopeOf(root);
   const { answer, error, busy, save, reload } = usePolarisSettings(root);
   const [note, setNote] = useState("");
@@ -219,4 +228,19 @@ export function PolarisCard({ root }: { root: string }) {
       <AssistedSetup root={root} />
     </SettingsCard>
   );
+}
+
+/** The card, then the two Polaris settings the card itself does not draw. */
+export function PolarisCard({ root }: { root: string }) {
+  return (
+    <>
+      <PolarisCardBody root={root} />
+      <DoorCard title="Polaris on this project" specs={POLARIS_ROWS} root={root} />
+    </>
+  );
+}
+
+/** The Polaris keys the page above does not draw as doors: the stored switch and the bot logins, one row each. */
+export function PolarisStoredRows({ root }: { root: string }) {
+  return <DoorCard title="Polaris on this project" specs={POLARIS_ROWS} root={root} />;
 }

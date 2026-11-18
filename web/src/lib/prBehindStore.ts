@@ -11,6 +11,7 @@
 // answer is in flight is worse than a card that has not said anything.
 
 import { api } from "./api.ts";
+import { isLooking } from "./usePoll.ts";
 import type { PrLocalHead } from "../../../shared/types.ts";
 
 /** Long enough that switching tabs does not re-ask, short enough that a branch
@@ -26,11 +27,13 @@ const seen = new Map<string, Entry>();
 const inflight = new Set<string>();
 const waiting: { key: string; root: string; number: number; force?: boolean }[] = [];
 const listeners = new Set<() => void>();
+/** Bumped by a forced refresh: an answer asked for before it is about the branch as it WAS (before an Update branch) and must not be kept. */
+const generation = new Map<string, number>();
 let running = 0;
 
 const keyOf = (root: string, number: number) => `${root}::${number}`;
 
-const looking = () => typeof document === "undefined" || (!document.hidden && document.hasFocus());
+const looking = () => typeof document === "undefined" || isLooking(document.hidden);
 
 function tell(): void {
   for (const l of listeners) l();
@@ -46,12 +49,19 @@ function pump(): void {
     const job = waiting.shift()!;
     running++;
     inflight.add(job.key);
+    const gen = generation.get(job.key) ?? 0;
+    const current = () => (generation.get(job.key) ?? 0) === gen;
     api.prBehind(job.root, job.number, job.force)
-      .then((r) => { seen.set(job.key, { at: Date.now(), behind: r.ok ? (r.behind ?? 0) : null, local: r.ok ? (r.local ?? null) : null, refSha: r.ok ? (r.refSha ?? null) : null }); })
+      .then((r) => { if (current()) seen.set(job.key, { at: Date.now(), behind: r.ok ? (r.behind ?? 0) : null, local: r.ok ? (r.local ?? null) : null, refSha: r.ok ? (r.refSha ?? null) : null }); })
       // A failure is remembered too, as "no answer" — otherwise every render
       // queues the same doomed request again.
-      .catch(() => { seen.set(job.key, { at: Date.now(), behind: null, local: null }); })
-      .finally(() => { running--; inflight.delete(job.key); tell(); pump(); });
+      .catch(() => { if (current()) seen.set(job.key, { at: Date.now(), behind: null, local: null }); })
+      .finally(() => {
+        running--; inflight.delete(job.key);
+        /* Asked before the refresh that superseded it: drop it and ask again, so the card and the page cannot end on the old count. */
+        if (!current()) waiting.push({ ...job, force: true });
+        tell(); pump();
+      });
   }
 }
 
@@ -150,7 +160,11 @@ export function forgetOneBehind(root: string, number: number): void {
  */
 export function refreshBehind(root: string, number: number, force = true): void {
   if (!root || !number) return;
-  seen.delete(keyOf(root, number));
+  const key = keyOf(root, number);
+  generation.set(key, (generation.get(key) ?? 0) + 1);
+  seen.delete(key);
+  /* Told, so the page drops the count it holds in state: otherwise it keeps saying 7 while the card, reading the store, has nothing. */
+  tell();
   behindOf(root, number, force);
 }
 
@@ -158,5 +172,18 @@ export function refreshBehind(root: string, number: number, force = true): void 
  *  the panel. */
 export function forgetBehind(): void {
   seen.clear();
+  generation.clear();
   waiting.length = 0;
+}
+
+/**
+ * A held answer by pull request number alone, for a reader that has no checkout path (the Jira tile). Read-only: it never asks.
+ * Two checkouts holding the same number with different answers is not an answer, so it says null then.
+ */
+export function knownBehindByNumber(number: number): number | null {
+  if (!number) return null;
+  const tail = `::${number}`;
+  const found = new Set<number>();
+  for (const [k, v] of seen) if (k.endsWith(tail) && v.behind !== null) found.add(v.behind);
+  return found.size === 1 ? [...found][0]! : null;
 }

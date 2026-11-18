@@ -11,7 +11,7 @@ export const HAIR = LINE;
 
 export type Hue = "primary" | "success" | "warning" | "error" | "info" | "muted";
 export const HUE: Record<Hue, string> = {
-  primary: "var(--primary)", success: "var(--success)", warning: "var(--warning)", error: "var(--error)", info: "var(--info, #3b82f6)", muted: "var(--text3)",
+  primary: "var(--primary)", success: "var(--success)", warning: "var(--warning)", error: "var(--error)", info: "var(--info)", muted: "var(--text3)",
 };
 
 /** A square tile that centres its icon: 22 for a row, 40 for a state card. */
@@ -27,7 +27,7 @@ export function Tile({ hue = "primary", size = 22, children, spin }: { hue?: Hue
 /** A status pill. `title` says what it means in full when the text is short. */
 export function Status({ hue = "muted", children, title, style }: { hue?: Hue; children: ReactNode; title?: string; style?: CSSProperties }) {
   return (
-    <span title={title} className="inline-flex items-center gap-1 whitespace-nowrap rounded-full font-semibold"
+    <span data-tip={title} className="inline-flex items-center gap-1 whitespace-nowrap rounded-full font-semibold"
       style={{ height: 19, padding: "0 8px", fontSize: 11, color: HUE[hue], background: wash(HUE[hue], 11), boxShadow: ring(HUE[hue], 22), ...style }}>
       {children}
     </span>
@@ -75,7 +75,7 @@ export function PaneHead({ title, sub, onBack, backDisabled }: { title: string; 
 /** A disabled control that says why: the reason rides on the wrapper, because a
  *  disabled button gets no hover of its own. */
 export function Why({ reason, children }: { reason?: string; children: ReactNode }) {
-  return <span title={reason || undefined} className="inline-flex" aria-label={reason}>{children}</span>;
+  return <span data-tip={reason || undefined} className="inline-flex" aria-label={reason}>{children}</span>;
 }
 
 /** Footer bar: keys on the left, actions on the right, fixed at the bottom of its pane. */

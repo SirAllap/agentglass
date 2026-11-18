@@ -5,22 +5,32 @@
  * rows are old. Both trackers' boards and card panes use these three, so a state
  * looks the same wherever it turns up and carries the same two buttons.
  */
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { openSettings } from "../../lib/openSettings.ts";
 import { ICON } from "../../lib/iconSize.ts";
 import { CTRL_H, EDGE } from "../workspace/Chrome.tsx";
 
+/** How long a read runs before the skeleton offers Cancel. */
+export const STILL_READING_MS = 8000;
 const BAR_WIDTHS = [80, 60, 72, 50, 66, 58];
 /** The bars of a card pane that is being read: fewer, with no dot, since a card has no rows. */
 export const CARD_BARS = [70, 55, 80, 40, 65];
 
 /** Bars where the rows will be, and one line that says what is being read. */
-export function BoardSkeleton({ label, widths = BAR_WIDTHS, dots = true, lead = 8 }: {
+export function BoardSkeleton({ label, widths = BAR_WIDTHS, dots = true, lead = 8, onCancel }: {
   label: string; widths?: readonly number[]; dots?: boolean;
+  /** Past 8 s the block adds "Still reading… Cancel" when the read can be stopped. */
+  onCancel?: () => void;
   /** The lead's size: 8 is a dot (a card), 16 is a checkbox (a task). */
   lead?: number;
 }) {
+  /* Loading, the pattern: shapes only after 150 ms, so a read that lands at once draws nothing. */
+  const [seen, setSeen] = useState(false);
+  useEffect(() => { const id = setTimeout(() => setSeen(true), 150); return () => clearTimeout(id); }, []);
+  const [slow, setSlow] = useState(false);
+  useEffect(() => { const id = setTimeout(() => setSlow(true), STILL_READING_MS); return () => clearTimeout(id); }, []);
   return (
-    <div className="flex flex-col" style={{ padding: "16px 14px", gap: 16 }} role="status" aria-live="polite">
+    <div className="flex flex-col" style={{ padding: "16px 14px", gap: 16, visibility: seen ? "visible" : "hidden" }} role="status" aria-live="polite">
       {widths.map((w, i) => (
         <div key={i} className="flex items-center" style={{ gap: 12 }} aria-hidden>
           {dots && <div className="agx-skeleton shrink-0" style={{ width: lead, height: lead, borderRadius: lead > 8 ? 5 : 999 }} />}
@@ -28,6 +38,11 @@ export function BoardSkeleton({ label, widths = BAR_WIDTHS, dots = true, lead = 
         </div>
       ))}
       <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>{label}</div>
+      {slow && onCancel && (
+        <div className="flex items-center gap-2 text-[10.5px]" style={{ color: "var(--text3)" }} data-state="still-reading">
+          Still reading…<StateButton onClick={onCancel}>Cancel</StateButton>
+        </div>
+      )}
     </div>
   );
 }
@@ -95,3 +110,51 @@ export const WarnIcon = ({ size = 22 }: { size?: number }) => (
     <path d="M12 3.5 2.8 19.5h18.4z" /><path d="M12 10v4.5M12 17.5v.01" />
   </svg>
 );
+
+/* The five state patterns beyond the three above (docs/design-system.md, "States"). */
+
+/** Empty, collapses: a field, section or list the person cannot fill from here draws nothing. One name so a screen says so. */
+export function StateCollapse(_: { when?: boolean }): null { return null; }
+
+/** Several empty sections as one quiet line, with the one Add that fills them. */
+export function StateFold({ line, adds }: { line: string; adds?: ReadonlyArray<{ label: string; run: () => void }> }) {
+  const [more, setMore] = useState(false);
+  if (!line) return null;
+  const btn = "agx-btn shrink-0 rounded-md px-1.5 py-0.5";
+  return (
+    <div className="flex items-center gap-x-2 gap-y-1 flex-wrap text-[11px] min-w-0" style={{ color: "var(--text4)" }} data-state="fold">
+      <span className="min-w-0 truncate">{line}</span>
+      {adds && adds.length > 0 && <span aria-hidden>·</span>}
+      {adds && adds.length > 0 && <button type="button" className={btn} style={{ color: "var(--text2)" }} aria-expanded={more} onClick={() => setMore((m) => !m)}>+ Add</button>}
+      {more && adds?.map((a) => <button key={a.label} type="button" className={btn} style={{ color: "var(--text2)" }} onClick={() => { setMore(false); a.run(); }}>{a.label}</button>)}
+    </div>
+  );
+}
+
+/** Error: what failed, the cause in one plain line, Try again, and where to change it. */
+export function StateError({ title, cause, onRetry, where, retryLabel = "Try again", children }: { title: string; cause?: string | undefined; onRetry?: () => void; where?: ReactNode; retryLabel?: string; children?: ReactNode }) {
+  /* Where to change it is always said: the caller's own line, or the Settings button. */
+  return (
+    <BoardEmpty tone="error" icon={<WarnIcon />} title={title} body={<>{cause}{where ? <> {where}</> : null}</>}>
+      {onRetry && <StateButton primary onClick={onRetry}>{retryLabel}</StateButton>}
+      {!where && <StateButton onClick={() => openSettings()}>Open settings</StateButton>}
+      {children}
+    </BoardEmpty>
+  );
+}
+
+/** Disconnected: a page state that names the service and why, the one button that connects, and the cached rows below, dimmed, with their age. */
+export function StateDisconnected({ service, why, onConnect, onSettings, age, children, connectLabel = "Reconnect", actions }: {
+  service: string; why: string; onConnect: () => void; onSettings?: () => void; /** Already a phrase: "12m ago". */ age?: string; children?: ReactNode; connectLabel?: string; actions?: ReactNode;
+}) {
+  return (
+    <>
+      <BoardEmpty tone="error" icon={<WarnIcon />} title={`${service} is not connected`} body={age ? `${why} Your last read, ${age}, is shown below.` : why}>
+        <StateButton primary onClick={onConnect}>{connectLabel}</StateButton>
+        {onSettings && <StateButton onClick={onSettings}>Open settings</StateButton>}
+        {actions}
+      </BoardEmpty>
+      {children && <div style={{ opacity: 0.55 }} aria-label={`Cached from ${service}`}>{children}</div>}
+    </>
+  );
+}

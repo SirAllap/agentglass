@@ -69,8 +69,15 @@ describe("Refresh, inside a pull request", () => {
   test("but a different pull request still starts empty", () => {
     /* The one place where clearing is right — the previous pull request's diff
        under this one's title would be a lie — and the fetch key is reset with
-       it so the new one is actually fetched. */
-    const at = src.indexOf("const held = heldDetail(root, selected);");
+       it so the new one is actually fetched.
+       `heldDetail(root, selected)` was the literal anchor here before the
+       cache moved from a root-keyed Map to remoteStore, keyed by the
+       repository's own name (so two worktrees of one repo and the side pane
+       share an entry) — the text itself changed, so this checks what it
+       protects (the diff still resets on a genuinely different pull request)
+       rather than that one exact call. */
+    const at = src.indexOf("const held = heldDetail(");
+    expect(at).toBeGreaterThan(0);
     const effect = src.slice(at, at + 800);
     expect(effect).toContain('setDiff("")');
     expect(effect).toContain('diffFetchedFor.current = "";');

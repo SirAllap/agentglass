@@ -128,7 +128,7 @@ const TONE_INK: Record<"success" | "warning" | "muted", string> = { success: "va
 function NoteMarks({ n, dim }: { n: LocalNote; dim?: boolean }) {
   if (!n.agreement && !n.by?.length) return null;
   const chip = (key: string, text: string, color: string, title?: string) => (
-    <span key={key} title={title} className="shrink-0 text-[9.5px] font-medium px-1.5 py-px rounded tracking-wide"
+    <span key={key} data-tip={title} className="shrink-0 text-[9.5px] font-medium px-1.5 py-px rounded tracking-wide"
       style={{ color, background: `color-mix(in srgb, ${color} 10%, transparent)`, opacity: dim ? 0.7 : 1 }}>
       {text}
     </span>
@@ -164,7 +164,7 @@ export function LocalGlyph({ size = ICON.xs }: { size?: number }) {
 export function LocalMark({ title }: { title?: string }) {
   return (
     <span className="shrink-0 inline-flex items-center gap-1 text-[9.5px] uppercase tracking-wide px-1.5 py-px rounded"
-      title={title ?? "Only on this machine. Never sent to GitHub."}
+      data-tip={title ?? "Only on this machine. Never sent to GitHub."}
       style={{ color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }}>
       <LocalGlyph />
       local
@@ -245,14 +245,14 @@ export function NoteCard({ n, onStatus, onReply, onOpenFile, compact, md = plain
         {n.path && !compact && (
           <button type="button" onClick={() => onOpenFile?.(n.path!, n.line)} disabled={!onOpenFile}
             className="t-mono text-[10.5px] truncate max-w-[34ch] hover:underline shrink min-w-0"
-            style={{ color: "var(--text3)", background: "transparent", border: 0, padding: 0 }} title={`${n.path}${n.line ? `:${n.line}` : ""}`}>
+            style={{ color: "var(--text3)", background: "transparent", border: 0, padding: 0 }} data-tip={`${n.path}${n.line ? `:${n.line}` : ""}`}>
             {n.path.split("/").pop()}{n.line ? `:${n.line}` : ""}
           </button>
         )}
-        {closed && <span className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text4)" }} title={n.statusAgent && n.statusAt ? new Date(n.statusAt).toLocaleString() : undefined}>{n.status}{n.status === "resolved" && n.statusAgent ? ` by ${n.statusAgent.replace(/^agent:/, "")}` : ""}</span>}
+        {closed && <span className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text4)" }} data-tip={n.statusAgent && n.statusAt ? new Date(n.statusAt).toLocaleString() : undefined}>{n.status}{n.status === "resolved" && n.statusAgent ? ` by ${n.statusAgent.replace(/^agent:/, "")}` : ""}</span>}
         {localOnly && (
           <span className="text-[10px] uppercase tracking-wide" style={{ color: "var(--text4)" }}
-            title="Not in the comment published on GitHub: it stays on this machine">local only</span>
+            data-tip="Not in the comment published on GitHub: it stays on this machine">local only</span>
         )}
         <StatusActions n={n} onStatus={onStatus} onReply={onReply ? () => setComposing((v) => !v) : undefined} replying={composing}
           actions={actions} onAction={onAction} />
@@ -298,9 +298,9 @@ export function ReplyThread({ replies, status }: { replies: NoteReply[]; status:
           <div key={r.id} role="listitem" className="min-w-0 rounded-r-md px-2.5 py-1.5"
             style={{ borderLeft: `3px solid color-mix(in srgb, var(--primary) ${tags.length ? 70 : 30}%, var(--surface-line))`, background: "color-mix(in srgb, var(--primary) 5%, transparent)" }}>
             <div className="flex items-center gap-x-1.5 flex-wrap text-[10.5px]" style={{ color: "var(--text3)" }}>
-              <span title={r.by} style={{ color: "var(--text2)", fontWeight: 500 }}>{authorLabel(r.by)}</span>
+              <span data-tip={r.by} style={{ color: "var(--text2)", fontWeight: 500 }}>{authorLabel(r.by)}</span>
               <span style={{ color: "var(--text4)" }}>·</span>
-              <span title={new Date(r.at).toLocaleString()}>{ago(r.at)}</span>
+              <span data-tip={new Date(r.at).toLocaleString()}>{ago(r.at)}</span>
               {tags.map((t) => (
                 <span key={t} className="px-1 rounded" style={{ color: t === "posted on GitHub" ? "var(--warning-ink)" : "var(--primary-ink)", background: "color-mix(in srgb, currentColor 10%, transparent)" }}>{t}</span>
               ))}
@@ -415,7 +415,7 @@ export function RunCard({ run, notes, publisher, onStatus, onReply, onOpenFile, 
           {head.label}
         </span>
         {run.costUsd !== undefined && (
-          <span className="shrink-0 text-[10px] font-medium tabular-nums px-1.5 py-px rounded" title="What this run cost"
+          <span className="shrink-0 text-[10px] font-medium tabular-nums px-1.5 py-px rounded" data-tip="What this run cost"
             style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--text3) 12%, transparent)" }}>
             {costLabel(run.costUsd)}
           </span>
@@ -428,13 +428,13 @@ export function RunCard({ run, notes, publisher, onStatus, onReply, onOpenFile, 
         )}
         <span className="flex-1" />
         {publish}
-        {run.sha && <span className="t-mono text-[10.5px]" style={{ color: "var(--text3)" }} title={run.sha}>{run.sha.slice(0, 7)}</span>}
-        <span className="text-[10.5px]" style={{ color: "var(--text4)" }} title={new Date(run.finishedAt ?? run.startedAt).toLocaleString()}>
+        {run.sha && <span className="t-mono text-[10.5px]" style={{ color: "var(--text3)" }} data-tip={run.sha}>{run.sha.slice(0, 7)}</span>}
+        <span className="text-[10.5px]" style={{ color: "var(--text4)" }} data-tip={new Date(run.finishedAt ?? run.startedAt).toLocaleString()}>
           {ago(run.finishedAt ?? run.startedAt)}
         </span>
       </div>
       <div className="px-3 pb-2 flex items-center gap-2 flex-wrap text-[10.5px]" style={{ color: "var(--text3)" }}>
-        <span title={`Plugin ${run.plugin}${publisher ? `, published by ${publisher}` : ""}`}>{run.plugin}</span>
+        <span data-tip={`Plugin ${run.plugin}${publisher ? `, published by ${publisher}` : ""}`}>{run.plugin}</span>
         {run.meta && <><span style={{ color: "var(--text4)" }}>·</span><span className="truncate">{run.meta}</span></>}
         {bySev.length > 0 && <span style={{ color: "var(--text4)" }}>·</span>}
         {bySev.map(([s, n]) => (

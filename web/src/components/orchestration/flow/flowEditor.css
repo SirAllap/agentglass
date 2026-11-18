@@ -184,11 +184,13 @@
    `flowView.ts`'s BLOCK_W / BLOCK_H; the head is the status strip, then the
    body with a ring, the route, three cells, the exits and one footer. */
 .fe-blk {
-  position: absolute; z-index: 2; display: flex; flex-direction: column; width: 296px; height: 316px;
+  position: absolute; z-index: 2; display: flex; flex-direction: column; width: 296px; height: 332px;
   padding: 0; border: 0; border-radius: 3px 14px 3px 14px; background: var(--surface-card);
   box-shadow: inset 0 0 0 1px var(--surface-line), var(--surface-lift); cursor: grab; text-align: left; user-select: none;
   transition: box-shadow 0.16s, transform 0.16s;
 }
+/* A block never squeezes its own rows: when a rule note adds one, the card has the room for it (measured: 7 px short at 316). */
+.fe-blk:not(.fe-oc) > * { flex-shrink: 0; }
 .fe-blk:hover { transform: translateY(-2px); box-shadow: inset 0 0 0 1px var(--border2), var(--surface-lift); }
 .fe-blk[aria-pressed="true"] { outline: 2px solid var(--hue, var(--info)); outline-offset: 3px; }
 .fe-blk[data-dragging] { cursor: grabbing; box-shadow: 0 14px 30px -16px var(--shadow), 0 0 0 3px color-mix(in srgb, var(--hue) 16%, transparent); }
@@ -429,7 +431,6 @@
 @media (prefers-reduced-motion: reduce) {
   .fe-ed *, .fe-ed *::before, .fe-ed *::after { transition: none !important; animation: none !important; }
 }
-.fe-soon { margin-left: 6px; padding: 0 5px; border-radius: 99px; background: var(--surface-inset); font-size: 9px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; color: var(--text3); }
 .fe-seg > button:disabled { cursor: default; opacity: 0.8; }
 .fe-chainwrap { display: grid; gap: 6px; }
 .fe-switchrow { display: inline-flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text2); cursor: pointer; }
@@ -682,11 +683,14 @@
 .fe-blk .fe-bk-warn { margin: 0 10px 6px; padding: 3px 8px; border-radius: 7px; background: color-mix(in srgb, var(--warning) 14%, transparent); color: var(--warning); font-size: 10px; }
 
 /* ── the orchestrator's card, above the path: the mockup's own `.ob` ── */
-.fe-oc { width: 560px; height: 236px; overflow: visible; cursor: default; background: var(--surface-card); }
+.fe-oc { width: 560px; height: 284px; overflow: visible; cursor: default; background: var(--surface-card); }
 .fe-oc:hover { transform: none; box-shadow: inset 0 0 0 1px var(--border2), var(--surface-lift); }
+/* The card's 1px edge is an inset shadow, and the head and the decision strip paint over it: the outline vanished where they touch the sides. The ring is drawn on top instead. */
+.fe-oc::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px var(--surface-line); pointer-events: none; }
+.fe-oc:hover::after { box-shadow: inset 0 0 0 1px var(--border2); }
 .fe-obh { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 30px; padding: 0 14px; border-radius: 3px 14px 0 0;
   background: linear-gradient(90deg, color-mix(in srgb, var(--g-agents) 14%, var(--bg)), var(--bg)); border-bottom: 1px solid color-mix(in srgb, var(--g-agents) 30%, var(--border)); color: var(--g-agents); font-size: 12px; font-weight: 650; }
-.fe-obs { display: inline-flex; align-items: center; gap: 7px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fe-obs { display: inline-flex; align-items: center; gap: 7px; min-width: 0; padding-left: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } /* 3px: the dot's halo was clipped by overflow */
 .fe-obs i { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--g-agents); box-shadow: 0 0 0 3px color-mix(in srgb, var(--g-agents) 26%, transparent); }
 .fe-obm { flex: none; padding: 1px 9px; border: 1px solid color-mix(in srgb, var(--g-agents) 34%, var(--border)); border-radius: 99px; background: var(--bg); color: var(--text2); font-size: 11.5px; font-weight: 600; }
 .fe-obb { display: flex; align-items: flex-start; gap: 14px; padding: 14px; }
@@ -959,3 +963,65 @@ input.fe-in { height: 36px; border: 1px solid var(--border2); border-radius: 9px
   .fe-nl > summary, .fe-picker, .fe-eh > div { min-width: 0; flex-wrap: wrap; }
   .fe-drawer, .fe-condside { width: 100%; }
 }
+
+/* The board: the same flow as stage columns. Columns scroll sideways inside the centre, never the page. */
+.fe-board { flex: 1 1 auto; min-height: 0; display: flex; align-items: flex-start; gap: 12px; padding: 16px; overflow: auto; background: color-mix(in srgb, var(--bg) 55%, var(--bg2)); }
+.fe-board-empty { align-items: center; justify-content: center; color: var(--text3); font-size: 13px; }
+.fe-bcol { flex: 0 0 260px; display: grid; gap: 8px; padding: 10px; border: 1px solid var(--surface-line); border-radius: 12px; background: var(--surface-inset); }
+.fe-bcolh { margin: 0 0 2px; display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text3); }
+.fe-bcolh span { font-family: var(--font-mono); font-weight: 600; letter-spacing: 0; }
+.fe-bcard { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--border); border-left: 3px solid var(--hue); border-radius: 10px; background: var(--bg); cursor: pointer; min-width: 0; }
+.fe-bcard[aria-pressed="true"] { border-color: var(--accent); border-left-color: var(--hue); box-shadow: 0 0 0 1px var(--accent); }
+.fe-bcard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fe-bcardtop { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.fe-bcardtop b { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.fe-bcard .fe-rt { width: 26px; height: 26px; flex: none; display: grid; place-items: center; border-radius: 8px; background: var(--hue); color: #fff; }
+.fe-bstep { font-family: var(--font-mono); font-size: 11px; color: var(--text3); }
+.fe-bdoes { margin: 0; font-size: 12px; line-height: 1.35; color: var(--text2); }
+.fe-bfoot { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.fe-bfoot small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--text3); }
+.fe-bfoot .fe-sp { flex: 1; }
+.fe-bnext svg { transform: scaleX(-1); }
+
+/* The list view and the Add a step sheet (flowMove.ts decides, these paint). */
+.fl-list { display: grid; gap: 6px; align-content: start; padding: 14px 16px; overflow-y: auto; min-height: 0; max-width: 760px; }
+.fl-row { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
+.fl-row[data-fixed] { background: var(--surface-inset); }
+/* Lifted by a pointer: the row stays as an empty dashed place and a card floats in the hand. By key: the row itself is the card. */
+.fl-row[data-lifted="pointer"] { border-style: dashed; background: transparent; }
+.fl-row[data-lifted="pointer"] > * { visibility: hidden; }
+.fl-row[data-lifted="pointer"] > .fl-n { visibility: visible; }
+.fl-row[data-lifted="key"], .fl-float { border-color: var(--info); background: color-mix(in srgb, var(--info) 8%, var(--bg)); box-shadow: 0 14px 28px -12px var(--shadow), 0 2px 6px var(--shadow); transform: rotate(0.4deg); position: relative; z-index: 2; }
+.fl-float { position: fixed; z-index: 40; margin: 0; pointer-events: none; box-sizing: border-box; }
+@media (prefers-reduced-motion: reduce) { .fl-row[data-lifted="key"], .fl-float { transform: none; } }
+.fl-grip { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 6px; background: transparent; color: var(--text3); cursor: grab; touch-action: none; }
+.fl-grip[data-locked] { cursor: default; }
+.fl-grip:hover:not([data-locked]), .fl-grip[aria-pressed="true"] { background: var(--surface-inset); color: var(--text); }
+.fl-grip:focus-visible { outline: 2px solid var(--info); outline-offset: 1px; }
+.fl-n { flex: none; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 99px; background: var(--surface-inset); color: var(--text2); font-size: 11px; }
+.fl-body { flex: 1 1 auto; min-width: 0; display: grid; gap: 1px; cursor: pointer; }
+.fl-body b, .fl-body small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fl-body small { color: var(--text3); font-size: 11.5px; }
+.fl-why { flex: none; color: var(--warning-ink, var(--warning)); font-size: 11.5px; }
+.fl-slot { padding: 10px; border: 1px dashed var(--info); border-radius: 10px; background: color-mix(in srgb, var(--info) 10%, transparent); color: var(--info-ink, var(--info)); font-size: 12px; font-weight: 600; }
+.fl-slot[data-refused] { border-color: var(--error); background: color-mix(in srgb, var(--error) 8%, transparent); color: var(--error-ink, var(--error)); font-weight: 500; }
+.fl-sheet { width: min(420px, 100%); display: flex; flex-direction: column; min-height: 0; background: var(--bg); border-left: 1px solid var(--border); box-shadow: -24px 0 60px -24px var(--shadow); }
+.fl-lab { display: block; margin: 12px 0 4px; font-size: 12px; font-weight: 700; }
+.fl-help { margin: 0 0 6px; font-size: 11.5px; color: var(--text3); line-height: 1.4; }
+.fl-field { display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+.fl-field[data-bad] { border-color: var(--error); }
+.fl-field input { flex: 1; min-width: 0; height: 32px; border: 0; background: transparent; color: var(--text); font: inherit; outline: none; }
+.fl-field:focus-within { outline: 2px solid var(--info); outline-offset: 1px; }
+.fl-count { flex: none; color: var(--text3); font-size: 11px; }
+.fl-err { margin: 4px 0 0; min-height: 0; font-size: 11.5px; color: var(--error-ink, var(--error)); }
+.fl-seg { display: flex; flex-wrap: wrap; gap: 4px; padding: 3px; border-radius: 9px; background: var(--surface-inset); }
+.fl-seg button { height: 26px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: var(--text2); font: inherit; font-size: 12px; cursor: pointer; }
+.fl-seg button[aria-checked="true"] { background: var(--bg); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,0.12); }
+.fl-req { display: flex; gap: 10px; margin-top: 14px; padding: 10px; border: 1px solid var(--surface-line); border-radius: 10px; background: var(--surface-inset); }
+.fl-req p { margin: 2px 0 0; font-size: 11.5px; color: var(--text3); line-height: 1.4; }
+.fl-where { display: grid; gap: 2px; padding: 6px; border-radius: 10px; background: var(--surface-inset); }
+.fl-where button { display: flex; gap: 8px; align-items: baseline; min-width: 0; padding: 5px 8px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--text2); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.fl-where button b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.fl-where button[aria-checked="true"] { border: 1px dashed var(--info); background: color-mix(in srgb, var(--info) 12%, transparent); color: var(--info-ink, var(--info)); }
+.fl-wrap { display: grid; min-height: 0; overflow-y: auto; align-content: start; }
+.fl-note { margin: 0 16px 12px; padding: 8px 10px; border: 1px dashed var(--error); border-radius: 8px; color: var(--error-ink, var(--error)); font-size: 12px; }

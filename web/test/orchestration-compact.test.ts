@@ -68,10 +68,13 @@ describe("the Fallback block is the one plan rule", () => {
   });
 });
 
+/** Lot 7: Safety and Always refused are drawn by Permissions > Workers. */
+const pview = (o: Parameters<typeof view>[0] = {}) => view({ part: "permWorkers", ...o });
+
 describe("Always refused", () => {
   test("one textarea holds the worker default's commands, one per line, and there is no second field", () => {
     const p = base(); p.workerDefault = { ...p.workerDefault, deny: ["docker compose down", "git push --force"] };
-    const a = view({ policy: p }).slice(view({ policy: p }).indexOf('data-pane="refused"'));
+    const a = pview({ policy: p }).slice(pview({ policy: p }).indexOf('data-pane="refused"'));
     expect(a).toMatch(/<textarea[^>]*aria-label="Also refused here: one command per line"[^>]*>docker compose down\ngit push --force<\/textarea>/);
     expect(a).not.toContain('aria-label="Add a command to refuse"');
     // A placeholder that reads like a real refusal is not a hint: the box is empty until a person writes in it.
@@ -79,15 +82,16 @@ describe("Always refused", () => {
     expect(a).toContain("Why this cannot be changed here");
   });
   test("the Safety card no longer repeats the commands of the default group, and the ceiling keeps its own", () => {
-    const s = view().slice(view().indexOf('data-pane="safety"'));
+    const s = pview().slice(pview().indexOf('data-pane="safety"'));
     expect(s).not.toContain('data-row="also-refuse"');
-    expect(s).toContain('data-row="at-most-also-refuse"');
+    expect(s).toContain('data-row="most-allowed-also-refuse"');
   });
-  test("the Gate's switch is in Safety and limits, with the trust switch, and not on the refused tab", () => {
-    const s = view().slice(view().indexOf('data-pane="safety"'), view().indexOf('data-pane="refused"'));
-    expect(s).toContain("Agents and the settings themselves");
-    expect(s).toContain("Gate: ask me before landing");
-    const a = view().slice(view().indexOf('data-pane="refused"'));
+  test("the Gate's switch and the trust switches are not on Workers: they moved to Changes outside and Main agent", () => {
+    const s = pview().slice(pview().indexOf('data-pane="safety"'), pview().indexOf('data-pane="refused"'));
+    // Lot 7: the trust switches are on Main agent and the Gate once, on Changes outside.
+    expect(s).not.toContain("Gate: ask me before landing");
+    expect(s).not.toContain("Agents and the settings themselves");
+    const a = pview().slice(pview().indexOf('data-pane="refused"'));
     expect(a).not.toContain("Gate: ask me before landing");
     expect(a).not.toContain("Ask when it runs");
   });
@@ -98,17 +102,21 @@ describe("Always refused", () => {
 });
 
 describe("the save bar and the chip", () => {
-  test("the bar ends the column, saves both envelopes together and is drawn only while something changed", () => {
-    // Nothing changed: no bar at all, rather than a bar with a dead button.
+  test("there is no save bar: both envelopes are written at once, and Undo writes them back", () => {
     expect(view()).not.toContain("data-savebar");
-    const bar = paneSrc.slice(paneSrc.indexOf("{dirty && ("));
-    expect(bar).toContain("data-savebar");
-    expect(bar).toContain("Discard");
-    expect(paneSrc).toContain('void save(withEnvelopes(policy, env), "envelope")');
+    expect(paneSrc).not.toContain("data-savebar");
+    // One serialized write of both envelopes (two quick edits must not overwrite each other); Undo calls it again with the old pair.
+    expect(paneSrc).toContain('save(withEnvelopes(policyNow.current, to), "envelope")');
+    expect(paneSrc).toContain("() => putEnv(was, to, row)");
   });
-  test("the chip beside the scope says the page is saved, for the scope on screen", () => {
-    expect(view()).toContain("Saved for all projects");
-    expect(view({ root: "/w/orbit", projects: ["/w/orbit"], scope: "project" })).toContain("Saved for orbit");
+  test("the one scope control says which scope is on screen, and no save chip sits beside it", () => {
+    const all = view();
+    expect(all).toContain("Applies to");
+    expect(all).toContain('<span class="whitespace-nowrap">All projects</span>');
+    const own = view({ root: "/w/orbit", projects: ["/w/orbit"], scope: "project" });
+    expect(own).toContain('<span class="whitespace-nowrap">orbit</span><span aria-hidden="true" class="inline-flex opacity-70"><svg');
+    expect(own).not.toContain("Only orbit");
+    expect(own).not.toContain("Saved for");
   });
   test("the header chip is the setup in force, or says there is none", () => {
     const label = (id: string) => id;

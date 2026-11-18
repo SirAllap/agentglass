@@ -26,10 +26,11 @@
  * looks empty says why.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { BoardSkeleton } from "../tasks/BoardState.tsx";
 import { api } from "../../lib/api.ts";
 import { ICON } from "../../lib/iconSize.ts";
-import { externalUrl } from "../../lib/externalUrl.ts";
-import { ExternalIcon } from "../browser/icons.tsx";
+import { httpsLink } from "../../../../shared/pluginSafe.ts";
+import { ExternalIcon, UpIcon } from "../browser/icons.tsx";
 import { Portal } from "../Portal.tsx";
 import { CloseButton } from "../CloseButton.tsx";
 import { LAYER } from "../../lib/layers.ts";
@@ -38,8 +39,9 @@ import { PluginPreview } from "./PluginPreview.tsx";
 import { PLUGIN_CTRL_H } from "../../lib/pluginCard.ts";
 import { EmptyState, FIELD_SELECT, StatusBadge } from "../SettingsKit.tsx";
 import { Select } from "../Select.tsx";
-import { InfoIcon, SearchIcon } from "../../lib/glyphIcons.tsx";
+import { CloudOffIcon, DoneIcon, InfoIcon, SearchIcon } from "../../lib/glyphIcons.tsx";
 import { PageHead } from "./PageHead.tsx";
+import { marketRailCount, marketSummary, tileChip } from "../../lib/pluginCard.ts";
 import type { Catalogue, DeviceScope, InstallSource, PublicPlugin } from "../../../../shared/types.ts";
 
 /** The list this project publishes, on its own site, and the same document
@@ -266,8 +268,8 @@ export function Market({ installed, onInstalled, onLoaded, onSettings }: {
     /* A section of the page like Installed above it, not a card holding cards:
        two borders between the eye and the text. Its listings are the same
        tiles, with what installing gets you read before it is installed. */
-    <section aria-label="Market" className="mb-8">
-      <PageHead title="Market" summary={state.kind === "ok" ? `${all.length} ${all.length === 1 ? "plugin" : "plugins"} · ${free} not installed` : undefined}>
+    <section data-section="plugins-market" data-section-kind="normal" data-section-count={marketRailCount(state.kind, all.length)} aria-labelledby="sec-plugins-market" className="mb-8 scroll-mt-[var(--agx-rail-band,16px)]">
+      <PageHead id="plugins-market" title="Market" summary={marketSummary(state.kind, all.length, free)}>
         <RefreshButton onRefresh={() => void load()} busy={state.kind === "loading"} title="Refresh the market" />
       </PageHead>
 
@@ -306,13 +308,18 @@ export function Market({ installed, onInstalled, onLoaded, onSettings }: {
         )}
       </div>
 
-      {state.kind === "loading" && <EmptyState><StatusBadge tone="checking">Checking</StatusBadge> Reading the market…</EmptyState>}
+      {state.kind === "loading" && <BoardSkeleton label="Reading the market…" widths={[70, 50]} dots={false} />}
 
+      {/* A whole card, not a line: the error as it came, and what still works without the market. */}
       {state.kind === "error" && (
-        <EmptyState>
-          <StatusBadge tone="err">Unreachable</StatusBadge> The market did not answer: {state.error}{" "}
-          <Button onClick={() => void load()}>Try again</Button>
-        </EmptyState>
+        <div className="agx-plug-unreach" role="alert">
+          <span className="agx-plug-unreach-pic" aria-hidden><CloudOffIcon size={ICON.rail} /></span>
+          <div className="min-w-0">
+            <b><StatusBadge tone="err">Unreachable</StatusBadge>The market did not answer</b>
+            <p><code className="t-mono">{state.error}</code><br />What you installed keeps working. Installing from a folder or a git address still works too.</p>
+            <Button onClick={() => void load()}>Try again</Button>
+          </div>
+        </div>
       )}
 
       {state.kind === "ok" && shown.length > 0 && (
@@ -398,7 +405,7 @@ export function Offer({ entry, owner, onInstalled, mode, was = null, onSettings 
   };
 
   const caps = capabilityChips(entry);
-  const repo = externalUrl(entry.source.url);
+  const repo = httpsLink(entry.source.url);
   const tint = tintOf(entry.id);
   const ref = entry.source.ref;
   const commit = ref && COMMIT.test(ref) ? ref : null;
@@ -415,28 +422,24 @@ export function Offer({ entry, owner, onInstalled, mode, was = null, onSettings 
     <article className="flex flex-col min-w-0 rounded-xl overflow-hidden"
       style={{ background: "var(--surface-card)", border: LINE, boxShadow: "var(--surface-lift)" }}>
       <PluginPreview src={entry.preview} name={title} tint={tint}>
-        <span aria-hidden className="grid place-items-center rounded-xl text-[28px] font-semibold" style={{
-          width: 72, height: 72, color: tint,
-          background: `color-mix(in srgb, ${tint} 15%, transparent)`,
-          border: `1px solid color-mix(in srgb, ${tint} 32%, transparent)`,
-        }}>{initial}</span>
+        <span aria-hidden className="text-[28px] font-semibold" style={{ color: tint }}>{initial}</span>
       </PluginPreview>
       <div className="flex flex-col gap-3 p-4 flex-1 min-w-0">
-      <div className="flex items-center gap-3 min-w-0">
+      {/* Mark, name block, chip. The block keeps a floor width, so a chip that does not fit drops to its own line instead of squeezing the name into one letter per line. */}
+      <div className="agx-mtile-hd">
         <span aria-hidden className="agx-market-tile shrink-0 grid place-items-center rounded-lg text-[15px] font-semibold" style={{
           width: 36, height: 36, color: tint,
           background: `color-mix(in srgb, ${tint} 15%, transparent)`,
           border: `1px solid color-mix(in srgb, ${tint} 32%, transparent)`,
         }}>{initial}</span>
-        <div className="min-w-0 flex-1">
-          <div className="text-[14px] font-semibold break-words" style={{ color: "var(--text)" }}>{title}</div>
-          <div className="text-[11.5px] t-dim break-words">by {entry.publisher || owner}</div>
+        <div className="agx-mtile-who">
+          <div className="agx-mtile-name">{title}</div>
+          <div className="agx-mtile-by" data-tip={`by ${entry.publisher || owner}`}>by {entry.publisher || owner}</div>
         </div>
-        {mode === "installed" && <StatusBadge tone="ok">Installed</StatusBadge>}
-        {mode === "update" && <StatusBadge tone="warn">Update available</StatusBadge>}
+        {tileChip(mode) && <span className="agx-mtile-chip"><StatusBadge tone={tileChip(mode)!.tone} icon={mode === "installed" ? <DoneIcon size={ICON.xs} /> : <UpIcon size={ICON.xs} />}>{tileChip(mode)!.label}</StatusBadge></span>}
       </div>
-      <p className="m-0 text-[12.5px] leading-snug" style={{ color: "var(--text2)", display: "-webkit-box", WebkitLineClamp: 4, WebkitBoxOrient: "vertical", overflow: "hidden" }}
-        title={entry.description}>{entry.description}</p>
+      {/* Three lines and a fixed floor, so the tiles of one row line up; the whole text is in Read the listing. */}
+      <p className="m-0 text-[12.5px] leading-snug agx-mtile-desc" style={{ color: "var(--text2)" }}>{entry.description}</p>
       {/* Plain tags, not seven chips on two rows: every one of those chips
           was the same weight as the plugin's name. Three at most, then "+N more". */}
       {(caps.chips.length > 0) && (
@@ -446,18 +449,18 @@ export function Offer({ entry, owner, onInstalled, mode, was = null, onSettings 
               style={{ height: 20, color: c.ok ? "var(--success-ink)" : "var(--text2)", border: c.ok ? tintEdge("var(--success)", 45) : EDGE,
                 background: c.ok ? "color-mix(in srgb, var(--success) 10%, transparent)" : undefined }}>{c.text}</span>
           ))}
-          {caps.more > 0 && <span className="text-[10.5px] inline-flex items-center t-dim" style={{ height: 20 }} title={[...(entry.scope ? [SCOPE_LABEL[entry.scope]] : []), ...(entry.draws ?? []).map((d) => DRAWS_WORD[d] ?? d)].join(", ")}>+{caps.more} more</span>}
+          {caps.more > 0 && <span className="text-[10.5px] inline-flex items-center t-dim" style={{ height: 20 }} data-tip={[...(entry.scope ? [SCOPE_LABEL[entry.scope]] : []), ...(entry.draws ?? []).map((d) => DRAWS_WORD[d] ?? d)].join(", ")}>+{caps.more} more</span>}
         </div>
       )}
       {(ref || entry.sha256) && (
         <div className="flex items-center gap-2 px-3 rounded-lg min-w-0 text-[11px]" style={{ minHeight: 30, background: "var(--surface-inset)", border: EDGE, color: "var(--text2)" }}>
           {/* Filled when the listing names bytes (a hash the install holds the tree to), hollow when it names only a pointer. */}
           <span aria-hidden className="agx-pin-dot shrink-0" data-pinned={entry.sha256 ? "true" : undefined}
-            title={entry.sha256 ? "The install refuses files that do not hash to this listing" : "Not pinned to a content hash"} />
-          {ref && <span className="t-mono shrink-0" style={{ color: "var(--text)" }} title={ref}>{commit ? commit.slice(0, 7) : ref}</span>}
-          {entry.sha256 && <span className="t-mono truncate" title={entry.sha256}>sha256 {entry.sha256.slice(0, 12)}…</span>}
+            data-tip={entry.sha256 ? "The install refuses files that do not hash to this listing" : "Not pinned to a content hash"} />
+          {ref && <span className="t-mono shrink-0" style={{ color: "var(--text)" }} data-tip={ref}>{commit ? commit.slice(0, 7) : ref}</span>}
+          {entry.sha256 && <span className="t-mono truncate" data-tip={entry.sha256}>sha256 {entry.sha256.slice(0, 12)}…</span>}
           <span className="flex-1" />
-          {entry.license && <span className="shrink-0" title="Licence, as the listing states it">{entry.license}</span>}
+          {entry.license && <span className="shrink-0" data-tip="Licence, as the listing states it">{entry.license}</span>}
         </div>
       )}
       <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-[11.5px] t-dim">
@@ -625,7 +628,7 @@ export function WhatIsCloned({ entry }: { entry: Entry }) {
     <Fact label="What is cloned">
       <span className="t-mono text-[11.5px] break-all" style={{ color: "var(--text2)" }}>
         {entry.source.url}
-        {commit ? <> at <span title={ref}>{ref.slice(0, 7)}</span></> : ref ? `@${ref}` : ""}
+        {commit ? <> at <span data-tip={ref}>{ref.slice(0, 7)}</span></> : ref ? `@${ref}` : ""}
       </span>
       <span className="block text-[11px] t-dim mt-1">
         {commit

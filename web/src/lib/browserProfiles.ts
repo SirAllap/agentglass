@@ -28,6 +28,13 @@ export interface BrowserProfile {
    *  dev origin is and why. Absent
    *  is the same as false, so a profile saved before this existed opens off. */
   identify?: boolean;
+  /** When a tab last used this container, in ms. Absent on a container saved
+   *  before this existed, which reads as "idle since forever" — see `droppable`. */
+  usedAt?: number;
+  /** An agent's own ask made it. Ids are slugs of names, so a container the
+   *  person makes later can land on a removed agent container's id: only this
+   *  flag, never the id, lets the vault sign it in or wipe it. */
+  agentMade?: boolean;
 }
 
 export const DEFAULT_PROFILE: BrowserProfile = { id: "", name: "Default" };
@@ -104,21 +111,22 @@ export function mintProfileId(name: string, taken: readonly string[]): string {
   return `p${Date.now().toString(36).slice(-6)}`;
 }
 
-type Made = { profiles: BrowserProfile[]; profile: BrowserProfile } | { error: string };
+/** `dropped` is the idle agent container given up to make room, when one was. */
+type Made = { profiles: BrowserProfile[]; profile: BrowserProfile; dropped?: BrowserProfile } | { error: string };
 
 /** A person's profile. The reserved namespace is not theirs to take: an agent's
  *  container and a person's must never be able to collide by name. */
-export function addProfile(profiles: readonly BrowserProfile[], rawName: string): Made {
+export function addProfile(profiles: readonly BrowserProfile[], rawName: string, room?: Room, by?: "agent"): Made {
   const name = rawName.trim().slice(0, 24);
   if (!name) return { error: "give it a name" };
   if (isAgentContainer(name)) return { error: "that name is reserved for an agent's own container" };
-  return mintNamed(profiles, name);
+  return mintNamed(profiles, name, room, by === "agent");
 }
 
 /** An agent's container. The name arrives namespaced by the relay, and it is
  *  ALWAYS minted — never resolved against the existing list, which is what put
  *  a worker named like a person's profile inside the person's logins. */
-export function mintAgentProfile(profiles: readonly BrowserProfile[], rawName: string): Made {
+export function mintAgentProfile(profiles: readonly BrowserProfile[], rawName: string, room?: Room): Made {
   /* No cap here: `agent:` + a legal 64-character name is 70, and slicing it
      made a container the relay's own `agentContainerName` never matched. The
      relay validates the name; a stored profile name is not a path. */
@@ -126,16 +134,109 @@ export function mintAgentProfile(profiles: readonly BrowserProfile[], rawName: s
   if (!isAgentContainer(name)) return { error: "an agent's container name is namespaced by the relay" };
   const mine = profiles.find((p) => p.name.toLowerCase() === name.toLowerCase());
   if (mine) return { profiles: [...profiles], profile: mine };
-  return mintNamed(profiles, name);
+  return mintNamed(profiles, name, room, true);
 }
 
-function mintNamed(profiles: readonly BrowserProfile[], name: string): Made {
-  if (profiles.length >= MAX_PROFILES) return { error: `${MAX_PROFILES} profiles is the limit` };
+function mintNamed(profiles: readonly BrowserProfile[], name: string, room?: Room, agentMade = false): Made {
+  let dropped: BrowserProfile | undefined;
+  if (profiles.length >= MAX_PROFILES) {
+    dropped = room ? droppable(profiles, room)[0] : undefined;
+    if (!dropped) return { error: FULL_REFUSAL };
+    profiles = profiles.filter((p) => p.id !== dropped!.id);
+  }
+  /* A dropped id is never minted again: its partition may still be mid-wipe,
+     and an agent handed it would see the last one's cookies, then lose its own
+     login when the wipe lands. Every agent id starts `agent`, so two names
+     colliding on 12 letters is the normal case, not a rare one. */
+  const taken = [...profiles.map((p) => p.id), ...(room?.retired ?? []), ...(dropped ? [dropped.id] : [])];
   // The default is not in the list and cannot be shadowed by a second "Default".
   if (name.toLowerCase() === DEFAULT_PROFILE.name.toLowerCase()) return { error: "that name is taken" };
   if (profiles.some((p) => p.name.toLowerCase() === name.toLowerCase())) return { error: "that name is taken" };
-  const profile = { id: mintProfileId(name, profiles.map((p) => p.id)), name };
-  return { profiles: [...profiles, profile], profile };
+  const profile: BrowserProfile = {
+    id: mintProfileId(name, taken), name, ...(room ? { usedAt: room.now } : {}), ...(agentMade ? { agentMade: true } : {}),
+  };
+  return { profiles: [...profiles, profile], profile, ...(dropped ? { dropped } : {}) };
+}
+
+/** What a full list may give up, and when. */
+export interface Room {
+  /** Container ids with a tab open in them. */
+  busy: ReadonlySet<string>;
+  /** Container ids a lane window is attached on. */
+  lanes: ReadonlySet<string>;
+  now: number;
+  /** Ids of containers dropped before, never handed out again — see `retireIds`. */
+  retired?: ReadonlySet<string>;
+}
+
+/** An agent's container left idle this long may be dropped to make room. */
+export const IDLE_DROP_MS = 24 * 60 * 60 * 1000;
+
+export const FULL_REFUSAL = `${MAX_PROFILES} containers is the limit: Settings ▸ Browser ▸ Containers ▸ Remove unused`;
+
+/**
+ * The containers that may go, oldest first.
+ *
+ * Only an agent's own (`agent:*`): a person's container is theirs to remove.
+ * Never one with a tab open, never one a lane window is attached on, and never
+ * one used in the last day. A container saved before `usedAt` existed has no
+ * date and counts as the oldest — those are exactly the leftovers of workers
+ * long gone that filled the list.
+ */
+export function droppable(profiles: readonly BrowserProfile[], room: Room): BrowserProfile[] {
+  return profiles
+    .filter((p) => isAgentContainer(p.name) && !room.busy.has(p.id) && !room.lanes.has(p.id))
+    .filter((p) => room.now - (p.usedAt ?? 0) > IDLE_DROP_MS)
+    .sort((a, b) => (a.usedAt ?? 0) - (b.usedAt ?? 0));
+}
+
+/** The line the person's log gets when a container is dropped to make room. */
+export function droppedNote(p: BrowserProfile): string {
+  const since = p.usedAt ? new Date(p.usedAt).toISOString().slice(0, 10) : "before use was recorded";
+  return `dropped container ${p.name}, idle since ${since}`;
+}
+
+/**
+ * "Remove unused" in Settings, served by whoever holds the live list.
+ *
+ * The Browser panel registers while it is mounted: it knows which containers
+ * have a tab open, and it owns the list. With no panel mounted there is no tab
+ * open anywhere, and Settings reads the stored list itself (`unusedFromStore`).
+ */
+export interface UnusedContainers { list(): BrowserProfile[]; remove(ids: readonly string[]): number }
+let unused: UnusedContainers | null = null;
+export function setUnusedContainers(h: UnusedContainers | null): void { unused = h; }
+export function unusedContainers(): UnusedContainers | null { return unused; }
+
+/** The panel-less half: the stored list, with a container's saved strip
+ *  counting as a tab so a container the person will reopen is kept. */
+export function unusedFromStore(
+  store: Pick<Storage, "getItem" | "setItem"> | null, saved: (id: string) => number, lanes: ReadonlySet<string>, now: number,
+  /** The ids a confirm counted: only those go, and only while still droppable. */
+  only?: readonly string[],
+): { gone: BrowserProfile[]; kept: BrowserProfile[] } {
+  const all = loadProfiles(store);
+  const busy = new Set(all.filter((p) => saved(p.id) > 0).map((p) => p.id));
+  const gone = droppable(all, { busy, lanes, now }).filter((p) => !only || only.includes(p.id));
+  const ids = new Set(gone.map((p) => p.id));
+  return { gone, kept: all.filter((p) => !ids.has(p.id)) };
+}
+
+/** Mark these containers used now. Same list back when nothing moved, so a
+ *  caller can skip the save; a stamp less than an hour old is left alone.
+ *  `closed` lost its last tab just now: always stamped, because idle starts
+ *  there — a tab open 30 h with no strip change left a 30 h old stamp. */
+export function touchProfiles(
+  profiles: readonly BrowserProfile[], ids: ReadonlySet<string>, now: number, closed: ReadonlySet<string> = new Set(),
+): readonly BrowserProfile[] {
+  let moved = false;
+  const next = profiles.map((p) => {
+    if (closed.has(p.id) && p.usedAt !== now) { moved = true; return { ...p, usedAt: now }; }
+    if (!ids.has(p.id) || now - (p.usedAt ?? 0) < 60 * 60 * 1000) return p;
+    moved = true;
+    return { ...p, usedAt: now };
+  });
+  return moved ? next : profiles;
 }
 
 /** Forget the name. The partition's cookies stay where they are — see the note
@@ -150,6 +251,26 @@ export function profileName(profiles: readonly BrowserProfile[], id: string): st
 }
 
 const KEY = "agx_browser_profiles";
+const RETIRED_KEY = "agx_browser_retired";
+/** Enough that a retired id comes back only long after its wipe finished. */
+const MAX_RETIRED = 256;
+
+/** Ids of dropped containers, newest last. Unreadable reads as none. */
+export function retiredIds(store: Pick<Storage, "getItem"> | null): Set<string> {
+  try {
+    const doc: unknown = JSON.parse(store?.getItem(RETIRED_KEY) ?? "[]");
+    return new Set(Array.isArray(doc) ? doc.filter((id): id is string => typeof id === "string" && SLUG.test(id)) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/** Mark ids as dropped, before their wipe starts, so no mint reuses them. */
+export function retireIds(store: Pick<Storage, "getItem" | "setItem"> | null, ids: readonly string[]): void {
+  const all = [...retiredIds(store)].filter((id) => !ids.includes(id));
+  const next = [...all, ...ids.filter(isProfileId).filter(Boolean)].slice(-MAX_RETIRED);
+  try { store?.setItem(RETIRED_KEY, JSON.stringify(next)); } catch { /* private mode, quota, no store */ }
+}
 
 /**
  * Read the list back, defensively.
@@ -167,12 +288,18 @@ export function loadProfiles(store: Pick<Storage, "getItem" | "setItem"> | null)
     if (!Array.isArray(doc)) return [];
     const out: BrowserProfile[] = [];
     for (const p of doc) {
-      const { id, name, identify } = (p ?? {}) as Record<string, unknown>;
+      const { id, name, identify, usedAt, agentMade } = (p ?? {}) as Record<string, unknown>;
       if (typeof id !== "string" || typeof name !== "string" || !id || !SLUG.test(id)) continue;
       if (out.some((o) => o.id === id)) continue;
       /* No name cap here either: `addProfile` already bounds a person's name,
          and an agent's container is `agent:` + a legal 64-character name. */
-      out.push({ id, name, ...(identify === true ? { identify: true } : {}) });
+      out.push({
+        id, name,
+        ...(identify === true ? { identify: true } : {}),
+        ...(typeof usedAt === "number" && Number.isFinite(usedAt) && usedAt > 0 ? { usedAt } : {}),
+        /* A reserved `agent:` name is never a person's (addProfile refuses it). */
+        ...(agentMade === true || isAgentContainer(name) ? { agentMade: true } : {}),
+      });
     }
     return out.slice(0, MAX_PROFILES);
   } catch {

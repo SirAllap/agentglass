@@ -75,8 +75,8 @@ describe("the panel's own timers", () => {
 
   it("the open pull request's local and behind ticks check that the window is looked at", async () => {
     const panel = await src("components/PrPanel.tsx");
-    expect(panel).toContain("setInterval(() => { if (looking()) again(); }, 30_000)");
-    expect(panel).toContain("setInterval(() => { if (looking()) read(); }, 8_000)");
+    expect(panel).toContain("pollWhileLooking(again, 30_000)");
+    expect(panel).toContain("pollWhileLooking(read, 8_000)");
   });
 
   it("the board's list poll waits for focus as well as visibility, and returns on focus", async () => {

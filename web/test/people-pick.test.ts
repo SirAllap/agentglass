@@ -15,6 +15,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { menuUnder, PICK_W, PICK_H } from "../src/lib/menuPos.ts";
 import { orderMembers } from "../src/lib/peopleOrder.ts";
+import { filterPeople } from "../src/lib/personRow.ts";
 
 const W = 1400, H = 900;
 const at = (o: Partial<{ top: number; bottom: number; left: number }>) =>
@@ -69,7 +70,56 @@ describe("one picker", () => {
     // Putting two people on and taking yourself off is one thought.
     const pick = read("components/PeoplePick.tsx");
     expect(pick).not.toContain("onPick(m); p.onClose()");
-    expect(pick).toContain("onClick={() => p.onPick(m)}");
+    expect(pick).toContain("const m = byId.get(id); if (m) p.onPick(m);");
+  });
+});
+
+/*
+ * The box at the top of the list. A Jira person is picked in four places — the
+ * card's own assignee (the hand-over writes it), the step dialog, and a block's
+ * "Start at" and "a person…" — and all four are this one picker, so the box,
+ * the filter, Enter and Escape are learned once.
+ */
+describe("the box in the list", () => {
+  const read = (p: string) => readFileSync(new URL("../src/" + p, import.meta.url), "utf8");
+  const pick = read("components/PeoplePick.tsx");
+  const code = (s: string) => s.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+  const ada = { name: "Ada Tester", email: "ada@acme.test" };
+  const lin = { name: "Lin Tester", email: "lin@orbit.test" };
+
+  test("it filters by name and by email, whatever the case, and keeps the order", () => {
+    expect(filterPeople([ada, lin], " ADA ")).toEqual([ada]);
+    expect(filterPeople([ada, lin], "orbit.test")).toEqual([lin]);
+    expect(filterPeople([ada, lin], "")).toEqual([ada, lin]);
+    expect(filterPeople([ada, lin], "nobody")).toEqual([]);
+  });
+
+  test("it is the first thing in the list and has the focus when the list opens", () => {
+    // The one card owns the box: it is autofocused and sits before the rows.
+    const card = read("components/PickerCard.tsx");
+    expect(code(card)).toContain("autoFocus");
+    expect(card.indexOf("autoFocus")).toBeLessThan(card.indexOf('role="listbox"'));
+    expect(code(pick)).toContain("keep");
+    expect(code(pick)).toContain("search={");
+  });
+
+  test("Enter takes the top match and Escape closes the list", () => {
+    // Keys are the card's (lib/pickerCard.keyAction): Enter picks the cursor row, which starts on top.
+    const card = read("components/PickerCard.tsx");
+    expect(code(card)).toContain("onPick(a.id)");
+    expect(code(card)).toContain("onClose()");
+    expect(code(pick)).toContain("onClose={p.onClose}");
+  });
+
+  test("every Jira person picker is this one", () => {
+    expect(read("components/TrackerPeoplePick.tsx")).toContain("<PeoplePick");
+    expect(read("components/jira/JiraPeoplePick.tsx")).toContain("<PeoplePick");
+    expect(read("components/StepBlocks.tsx")).toContain("<PeoplePick");
+    expect(read("components/jira/JiraStepDialog.tsx")).toContain("<JiraPeoplePick");
+  });
+
+  test("a Jira block's list is never short enough to do without the box", () => {
+    expect(read("components/StepBlocks.tsx")).toContain('alwaysFilter={p.tracker === "jira"}');
   });
 });
 

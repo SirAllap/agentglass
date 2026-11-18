@@ -7,8 +7,10 @@
  */
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { api } from "./api.ts";
-import { stateOfRow, type LeftoverState } from "./leftovers.ts";
+import { stateOfRemaining, stateOfRow, type LeftoverState } from "./leftovers.ts";
 import { isRunning, subscribeRuns } from "./cleanupEvents.ts";
+import { autoEntryFor, type AutoEntry } from "./housekeeping.ts";
+import { housekeeping } from "./housekeepingStore.ts";
 
 const cache = new Map<string, LeftoverState>();
 const asked = new Set<string>();
@@ -50,7 +52,27 @@ subscribeRuns((e) => {
   for (const k of [...cache.keys()]) {
     if (!k.startsWith(mine)) continue;
     touched = true;
-    if (left === 0) cache.set(k, { kind: "none" }); else cache.delete(k);
+    // what is left comes from the report's own re-read when it has one (see stateOfRemaining); no re-read, ask again
+    if (left === 0) cache.set(k, { kind: "none" }); else if (e.report?.remaining) cache.set(k, stateOfRemaining(e.report.remaining.items)); else cache.delete(k);
+  }
+  if (touched) bump();
+});
+
+/**
+ * The server cleans merged pull requests on its own (cleanupAuto), and that run is not one this window started, so the run
+ * subscription above never hears it: the card kept saying "blocked" over a branch that was already gone. An entry whose state or
+ * end changed drops what is kept for its pull request, and the card asks again.
+ */
+const seenAuto = new Map<string, string>();
+housekeeping.subscribe(() => {
+  let touched = false;
+  for (const e of housekeeping.list()) {
+    const k = `${e.repo}#${e.pr}`, sig = `${e.state}|${e.ended_at ?? ""}`;
+    if (seenAuto.get(k) === sig) continue;
+    const first = !seenAuto.has(k);
+    seenAuto.set(k, sig);
+    if (first && e.state === "cleaning") continue;
+    for (const c of [...cache.keys()]) if (c.includes(`#${e.pr}:`)) { cache.delete(c); touched = true; }
   }
   if (touched) bump();
 });
@@ -73,6 +95,12 @@ export function useCleaning(root: string | undefined, pr: number): boolean {
     return subscribeRuns((e) => { if (e.repo === root && e.pr === pr) setOn(e.phase === "start"); });
   }, [root, pr]);
   return on;
+}
+
+/** The automatic cleanup's entry for this pull request, re-read when the Housekeeping list changes (the same frames the top bar reads). */
+export function useAutoEntry(root: string | undefined, pr: number): AutoEntry | undefined {
+  const entries = useSyncExternalStore(housekeeping.subscribe, housekeeping.list, housekeeping.list);
+  return root ? autoEntryFor(entries, root, pr) : undefined;
 }
 
 /** Re-renders its caller when any row of the store changes (a read lands, a run ends). */

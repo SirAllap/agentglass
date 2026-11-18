@@ -5,6 +5,7 @@
  * Theme tokens only, so light and dark both come from index.css.
  */
 import { EDGE, LINE } from "../workspace/Chrome.tsx";
+import { MIN_BOX } from "../../lib/iconSize.ts";
 
 export const RESOURCE_CSS = `
 .dk-xs{flex:1;min-height:0;overflow:auto;padding:16px 18px 24px}
@@ -83,7 +84,7 @@ button.dk-pchip:hover{color:var(--primary-ink,var(--primary))}
 .dk-pk .pr:first-child{border-top:0}
 .dk-pk .pr[data-head=true]{grid-template-columns:1fr auto;background:var(--surface-inset);color:var(--text3)}
 .dk-pk .pr[data-foot=true]{color:var(--text4)}
-.dk-pk .lk{border:0;background:transparent;padding:0;color:var(--info);text-align:left;font:inherit;cursor:pointer;min-height:20px}
+.dk-pk .lk{border:0;background:transparent;padding:0;color:var(--info);text-align:left;font:inherit;cursor:pointer;min-height:${MIN_BOX}px}
 .dk-pk .pr .r{text-align:right}
 
 .dk-dsk{padding:16px 18px 24px;display:flex;flex-direction:column;gap:14px;flex:1;min-height:0;overflow:auto}

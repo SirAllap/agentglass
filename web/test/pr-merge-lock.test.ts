@@ -142,12 +142,13 @@ describe("the handler is the guard, the DOM only shows it", () => {
 describe("everything on the merge row is locked while it runs", () => {
   const overview = fnBody("function MergeScope(");
   it("Merge, the method menu, update branch, close and draft all read the lock", () => {
-    expect(overview).toMatch(/const mergeDisabled = busy \|\| !!mergeWork \|\| !!refusal/);
+    expect(overview).toMatch(/const mergeDisabled = busy \|\| !!mergeWork \|\| !!landing \|\| !!refusal/);
     expect(overview).toMatch(/title=\{`Merge method: \$\{MERGE_LABEL\[method\]\}`\}\s*disabled=\{busy \|\| !!mergeWork\}/);
     for (const label of ["Close", "To draft"]) expect(overview).toContain(label);
-    expect(code).toMatch(/<Overview\s+d=\{d\} root=\{root\} busy=\{busy \|\| !!mergeWork\}/);
+    // the lock is this pull request's own: another one's merge holds the button through `landing`, not `busy`
+    expect(code).toMatch(/<Overview[\s\S]{0,900}?\bd=\{d\} root=\{root\} busy=\{busy \|\| mergeWork\?\.n === d\.number\}/);
   });
   it("the button says Merging… while it runs", () => {
-    expect(code).toContain('setMergeWork("Merging…")');
+    expect(code).toContain('setMergeWork({ n: detail.number, what: "Merging…" })');
   });
 });

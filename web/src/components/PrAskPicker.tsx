@@ -24,7 +24,8 @@ import { Button, CTRL_H, EDGE, INPUT, INPUT_STYLE, LINE } from "./workspace/Chro
 import { AssignPicker, Face, useAskAssign } from "./AssignPicker.tsx";
 import { AskedExtras, sendExtras } from "./AskedExtras.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { DoneIcon, FlagIcon, LinkIcon, LockIcon, SearchIcon, UndoIcon, WarningIcon, CrossIcon, CheckboxIcon } from "../lib/glyphIcons.tsx";
+import { TrackerBadge } from "./TrackerBadge.tsx";
+import { DoneIcon, LinkIcon, LockIcon, SearchIcon, UndoIcon, WarningIcon, CrossIcon } from "../lib/glyphIcons.tsx";
 import { askView, togglePick, type AskMode, type AskRow } from "../lib/prAskWho.ts";
 import { askSource } from "../lib/prPeopleSource.ts";
 import { handOverPlan, nextStatuses, statusTone, type StatusTone, type StepId, type TrackerKind } from "../lib/prHandOver.ts";
@@ -32,6 +33,7 @@ import { applyResult, startSteps, type Outcome, type Outcomes } from "../lib/prA
 import { runSteps, type Runner } from "../lib/prApplyRun.ts";
 import { cardSuggestions, mirrorLinked, readLinks, withLink, writeLinks, type CardMember } from "../lib/prCardPeople.ts";
 import { loadUse, recordPicks } from "../lib/personUsage.ts";
+import { loadPairs, pairPick, pairRows, pairedFirst, recordPairs, type JiraPair } from "../lib/jiraPairs.ts";
 import { reviewerRoster } from "../lib/prReviewers.ts";
 import { ownersOf } from "../lib/codeowners.ts";
 import { cardOf, onCard, putCard } from "../lib/prCardStore.ts";
@@ -210,7 +212,7 @@ export function usePrCardSide(o: { d: PrDetail; setup: Setup; on: boolean }): Ca
 function useJiraFinds(side: CardSide, on: boolean): { search: (q: string) => void; found: CardPerson[] } {
   const [found, setFound] = useState<CardPerson[]>([]);
   const task = side.task;
-  const toPerson = (p: { id: string; key: string; name: string; avatar?: string }): CardPerson => ({ id: p.id, key: p.key, ident: p.id, name: p.name, initials: initialsOf(p.name), ...(p.avatar ? { avatar: p.avatar } : null) });
+  const toPerson = (p: { id: string; key: string; name: string; avatar?: string; email?: string }): CardPerson => ({ id: p.id, key: p.key, ident: p.id, name: p.name, initials: initialsOf(p.name), ...(p.avatar ? { avatar: p.avatar } : null), ...(p.email ? { email: p.email } : null) });
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const search = useCallback((q: string) => {
     if (timer.current) clearTimeout(timer.current);
@@ -241,8 +243,10 @@ const sys = (k: TrackerKind | null) => (k === "jira" ? "Jira" : "ClickUp");
 const UNREACHABLE = "Could not reach the server";
 const said = (error: string | undefined): Outcome => ({ state: "fail", ...(error && error !== UNREACHABLE ? { error } : null) });
 
-export function PrAskPicker({ d, repo, anchor, mode: startMode, handOver, source, setup, deps, onClose }: {
+export function PrAskPicker({ d, repo, anchor, panelBox, mode: startMode, handOver, source, setup, deps, onClose }: {
   d: PrDetail; repo: string; anchor: DOMRect; mode: AskMode; handOver?: boolean;
+  /** The box the picker must stay inside (the pull request's body); absent for a hand-over from a card's menu. */
+  panelBox?: { left: number; top: number; right: number; bottom: number } | null;
   source: AskSourceData; setup: Setup; deps: AskDeps; onClose: () => void;
 }) {
   const [mode, setMode] = useState<AskMode>(handOver ? "reviewers" : startMode);
@@ -259,6 +263,9 @@ export function PrAskPicker({ d, repo, anchor, mode: startMode, handOver, source
   const [linksTick, setLinksTick] = useState(0);
   const links = useMemo(() => (side.kind ? readLinks(side.kind) : {}), [side.kind, linksTick]);
   const [linking, setLinking] = useState<string | null>(null);
+  /* The reviewer→account pairs this machine learned; read once for the pickers, and grown by a card write below. */
+  const [pairs, setPairs] = useState<JiraPair[]>([]);
+  useEffect(() => { let live = true; void loadPairs().then((p) => { if (live) setPairs(p); }); return () => { live = false; }; }, []);
 
   const readOnly = !!side.blocked;
   const reviewing = mode === "reviewers" || !!handOver;
@@ -302,11 +309,13 @@ export function PrAskPicker({ d, repo, anchor, mode: startMode, handOver, source
   };
   /* The review step adds nobody when it is also meant to move the card and the status is left where it is. */
   const ensuredNow = side.moveOn && !(statusPick && statusPick !== now) ? [] : side.ensured;
+  /* The accounts these logins were paired with, as rows: with nothing typed Jira has found nobody, so these are the only rows for them. */
+  const paired = useMemo(() => pairRows(picked, pairs).map((p) => ({ ...p, initials: initialsOf(p.name) })), [picked, pairs]);
   const pool = useMemo(() => {
     const m = new Map<string, CardPerson>();
-    for (const p of [...(side.roster ?? []), ...jira.found, ...mirrored.matched.map((x) => x.member), ...side.onCard, ...ensuredNow]) m.set(p.key, m.get(p.key) ?? p);
+    for (const p of [...(side.roster ?? []), ...jira.found, ...mirrored.matched.map((x) => x.member), ...side.onCard, ...ensuredNow, ...paired]) m.set(p.key, m.get(p.key) ?? p);
     return m;
-  }, [side.roster, jira.found, side.onCard, ensuredNow, mirrored]);
+  }, [side.roster, jira.found, side.onCard, ensuredNow, mirrored, paired]);
   const chosen: CardPerson[] = useMemo(() => {
     const base = mirror ? mirrored.matched.map((x) => x.member as CardPerson) : own.flatMap((k) => (pool.get(k) ? [pool.get(k)!] : []));
     const ids = new Set(base.map((p) => p.key));
@@ -367,6 +376,12 @@ export function PrAskPicker({ d, repo, anchor, mode: startMode, handOver, source
         const r = await TRACKERS.jira.setPeople!(task, { set: add[0]?.key ?? null }).catch(() => ({ ok: false, error: UNREACHABLE } as CardWriteResult));
         if (r.ok) { if (r.task) { task = r.task; sd.advance(r.task); } res["card-assign"] = { state: "ok" }; }
         else { good = false; res["card-assign"] = said(r.conflict ? "somebody changed this card while you had it open" : r.error); }
+        /* The reviewer picked here and the account that ended on the card: one pair, kept on this machine. */
+        const who = add[0];
+        if (r.ok && who) {
+          const picks = pairPick(live.current.picked, who);
+          if (picks.length) { await recordPairs(picks); setPairs(await loadPairs()); }
+        }
       }
       if (has("card-status")) {
         const opt = (sd.options ?? []).find((x) => x.toStatus === to);
@@ -411,10 +426,19 @@ export function PrAskPicker({ d, repo, anchor, mode: startMode, handOver, source
   const editCard = (keys: string[]) => { setOwn(keys); setMirrorSet(false); };
   const chosenKeys = chosen.filter((p) => !p.lock).map((p) => p.key);
   const [q2Focus, setQ2Focus] = useState(false);
-  const cand = useMemo(() => cardSuggestions<CardPerson>({
-    q: q2, onCard: side.onCard, roster: side.kind === "jira" ? null : side.roster, found: jira.found,
-    skip: linking ? [] : chosen.map((c) => c.key), limit: q2.trim() ? 4 : 6,
-  }), [q2, side.onCard, side.kind, side.roster, jira.found, chosen, linking]);
+  const cand = useMemo(() => {
+    const rows = cardSuggestions<CardPerson>({
+      q: q2, onCard: side.onCard, roster: side.kind === "jira" ? null : side.roster, found: jira.found,
+      skip: linking ? [] : chosen.map((c) => c.key), limit: q2.trim() ? 4 : 6,
+    });
+    /* A paired account first, only for the logins this picker has picked: the rest keep their order. */
+    const at = new Map(pairedFirst(rows.map((x) => x.person), { logins: picked, pairs }).map((p, i) => [p.key, i] as const));
+    const sorted = [...rows].sort((a, b) => (at.get(a.person.key) ?? rows.length) - (at.get(b.person.key) ?? rows.length));
+    /* And the paired accounts the slice has no row for at all: with nothing typed, they are the whole offer. */
+    const skip = linking ? new Set<string>() : new Set(chosen.map((c) => c.key));
+    const have = new Set(sorted.map((r) => r.person.key));
+    return [...paired.filter((p) => !have.has(p.key) && !skip.has(p.key)).map((person) => ({ person, why: null })), ...sorted];
+  }, [q2, side.onCard, side.kind, side.roster, jira.found, chosen, linking, picked, pairs, paired]);
   const pickCand = (p: CardPerson) => {
     if (linking) { setLink(linking, p); if (!mirror) setOwn([...chosenKeys.filter((k) => k !== p.key), p.key]); setLinking(null); }
     else editCard([...chosenKeys, p.key]);
@@ -440,7 +464,7 @@ export function PrAskPicker({ d, repo, anchor, mode: startMode, handOver, source
         </>);
       case "reading": case "missing": return (
         <>
-          <b className="text-[12px]" style={{ color: "var(--text)" }}>On the card · {side.label}</b>
+          <span className="inline-flex items-center gap-1.5"><b className="text-[12px]" style={{ color: "var(--text)" }}>On the card · {side.label}</b><TrackerBadge tracker={side.kind} /></span>
           <span className="text-[11.5px]" style={{ color: side.state === "missing" ? "var(--warning-ink)" : "var(--text3)" }}>
             {side.state === "reading" ? "Reading the card…" : side.error || `${sys(side.kind)} could not find it`}
           </span>
@@ -448,8 +472,8 @@ export function PrAskPicker({ d, repo, anchor, mode: startMode, handOver, source
       case "ready": return (
         <div className="grid gap-1.5 min-w-0" style={{ gridTemplateColumns: "minmax(0, 1fr)" }} aria-disabled={readOnly || undefined}>
           <div className="inline-flex items-center gap-1.5 text-[11px] rounded-lg self-start" style={{ background: "var(--surface-inset)", padding: "4px 8px" }}>
-            <span style={{ color: side.kind === "jira" ? "var(--info)" : "var(--primary)" }}>{side.kind === "jira" ? <FlagIcon size={ICON.xs} /> : <CheckboxIcon size={ICON.xs} />}</span>
             <b>On the card</b><span style={{ color: "var(--text3)" }}>· {side.label}</span>
+            <TrackerBadge tracker={side.kind} />
           </div>
           <div className="flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-wide" style={{ color: "var(--text4)" }}>
             <span>Status now</span><span className="ml-auto normal-case tracking-normal font-normal"><CardStatus status={now} kind={side.kind} /></span>
@@ -496,10 +520,14 @@ export function PrAskPicker({ d, repo, anchor, mode: startMode, handOver, source
             </div>)}
           {side.kind === "jira" && mirrored.matched.length + own.length > 1 && (
             <div className="text-[11px]" style={{ color: "var(--text3)" }}>Jira puts one person on a card: {chosen[0]?.name}.</div>)}
-          <label className="relative flex items-center" style={{ opacity: readOnly ? 0.5 : 1 }}>
+          <label className="relative flex items-center" data-card-people="" style={{ opacity: readOnly ? 0.5 : 1 }}>
             <span className="absolute left-2 pointer-events-none" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.xs} /></span>
             <input value={q2} disabled={readOnly || locked} onChange={(e) => { setQ2(e.target.value); jira.search(e.target.value); }}
               onFocus={() => setQ2Focus(true)} onBlur={() => setQ2Focus(false)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); if (linking) setLinking(null); setQ2(""); setQ2Focus(false); e.currentTarget.blur(); }
+                else if (e.key === "Enter" && cand[0]) { e.preventDefault(); e.stopPropagation(); pickCand(cand[0].person); }
+              }}
               placeholder={linking ? `Link ${linking} to…` : "Add someone to the card"} aria-label={linking ? `Link ${linking} to a ${sys(side.kind)} person` : "Add someone to the card"} autoComplete="off" spellCheck={false}
               className={`w-full ${INPUT}`} style={{ ...INPUT_STYLE, height: 26, fontSize: 11.5, paddingLeft: 28 }} />
           </label>
@@ -576,7 +604,7 @@ export function PrAskPicker({ d, repo, anchor, mode: startMode, handOver, source
       onToggle={toggle} onRemoveChip={(id) => setPicked((p) => p.filter((x) => x !== id))} onPopChip={() => setPicked((p) => p.slice(0, -1))}
       onRerequest={(r) => { void deps.rerequest(r.id); }}
       onRemoveHeld={(r) => { void deps.remove(mode, r.id); }}
-      onDone={done} onClose={onClose} anchor={anchor}
+      onDone={done} onClose={onClose} anchor={anchor} panelBox={panelBox ?? null}
       footer={footer}>
       {cardBlock}
     </PeoplePicker>

@@ -7,7 +7,8 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { DockerDisk, DockerImage } from "../../shared/types.ts";
-import { BUILD_CACHE_BUDGET, diskMath, imageBytes } from "../src/lib/dockerDisk.ts";
+import { BUILD_CACHE_BUDGET, diskMath, imageBytes, orphanUniqueBytes } from "../src/lib/dockerDisk.ts";
+import { imagesView } from "../src/lib/dockerResources.ts";
 
 const disk = (over: Partial<DockerDisk> = {}): DockerDisk => ({
   images: 4_000_000_000, containers: 300_000_000, volumes: 3_000_000_000, buildCache: 8_000_000_000,
@@ -105,6 +106,25 @@ describe("the legend", () => {
     expect(d.legend.map((l) => l.key)).toEqual(["images", "cache", "volumes", "containers"]);
     expect(d.legend[0]!.canGo).toBe(0.8 * GB);
   });
+
+  /* The repro: `docker system df` says 58 images, 41.24 GB, 15.35 GB
+     reclaimable. Only one image in that 15.35 GB is an orphan (worktree
+     gone) or dangling — the rest are plain idle images, reclaimable too but
+     invisible to the orphan/dangling lists. Before this fix the legend's
+     "images" row showed only the orphan+dangling slice (0.8 GB here), which
+     is a different, smaller number than the Images header's own "unused"
+     (`imageReclaimable`, from the same `system df`) — the two views
+     disagreeing about the same daemon. */
+  test("'images, can go' is the daemon's own imageReclaimable, not just the orphan+dangling rows", () => {
+    const d = dm(disk({ orphans: [gone("a:old", 0.8 * GB)], imageReclaimable: 15.35 * GB }), []);
+    expect(d.legend[0]!.canGo).toBe(15.35 * GB);
+    expect(d.legend[0]!.canGo).not.toBe(d.orphanBytes + d.danglingBytes);
+  });
+
+  test("without imageReclaimable (older fixture, or the first paint): falls back to orphan+dangling, same as before", () => {
+    const d = dm(disk({ orphans: [gone("a:old", 0.8 * GB)] }), [img("d1", "200MB", { dangling: true })]);
+    expect(d.legend[0]!.canGo).toBe(d.orphanBytes + d.danglingBytes);
+  });
 });
 
 describe("the three reclaim cards", () => {
@@ -144,9 +164,40 @@ describe("the sentence under the total", () => {
   });
 });
 
+describe("gone with their worktree: one computation, used by both views", () => {
+  const orphans = [gone("acme/orbit-api:old", 0.8 * GB), gone("acme/orbit-web:old", 0.3 * GB)];
+
+  test("orphanUniqueBytes just sums each orphan's own (already-unique) bytes", () => {
+    expect(orphanUniqueBytes(orphans)).toBe(1.1 * GB);
+    expect(orphanUniqueBytes([gone("a:old", null)])).toBe(0);
+  });
+
+  test("the Disk card's orphanBytes and the Images banner's gone-bytes agree, fed the same orphans", () => {
+    const diskBytes = dm(disk({ orphans }), []).orphanBytes;
+    const images = [img("acme/orbit-api:old", "0.8GB"), img("acme/orbit-web:old", "0.3GB")];
+    const bannerRest = imagesView(images, [], orphans).rest;
+    expect(diskBytes).toBe(1.1 * GB);
+    expect(bannerRest).toContain("1.1 GB of it gone with their worktree");
+  });
+});
+
 describe("the budget", () => {
   test("defaults to the app's own, so a call without one cannot invent a number", () => {
     expect(diskMath(disk({ buildCache: BUILD_CACHE_BUDGET }), []).cacheOver).toBe(0);
     expect(diskMath(disk({ buildCache: BUILD_CACHE_BUDGET + GB }), []).cacheOver).toBe(GB);
+  });
+});
+
+describe("reclaimableBy: the legend and the total are one set of numbers", () => {
+  test("cache and containers promise only what a button frees; docker's figure is a secondary line", () => {
+    const m = dm(disk({ images: 10 * GB, buildCache: 5 * GB, containers: 2 * GB, volumes: 3 * GB,
+      reclaimableBy: { images: 4 * GB, containers: GB, volumes: 3 * GB, buildCache: 2 * GB } }), []);
+    const go = Object.fromEntries(m.legend.map((l) => [l.key, l.canGo]));
+    expect(go).toEqual({ images: 4 * GB, cache: m.cacheOver, volumes: 0, containers: 0 });
+    expect(m.back).toBe(m.legend.reduce((n, l) => n + l.canGo, 0));
+    expect(m.back).toBe(4 * GB + m.cacheOver);
+    const says = Object.fromEntries(m.legend.map((l) => [l.key, l.dockerSays]));
+    expect(says.cache).toBe(2 * GB);
+    expect(says.containers).toBe(GB);
   });
 });

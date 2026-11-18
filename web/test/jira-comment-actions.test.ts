@@ -15,14 +15,19 @@ const slice = (src: string, from: string, to: string): string => {
 describe("what a comment offers", () => {
   test("edit and delete are for your own comment only, and reply only where Jira threads", async () => {
     const src = await read("components/jira/JiraActivity.tsx");
-    const bar = slice(src, "{act && mode === \"read\" && (", "{/* Asked in place");
-    expect(bar).toContain("{act.reply && (");
-    expect(bar).toContain("{c.mine && (");
-    // Both of the destructive pair sit inside the `mine` branch.
-    const mine = bar.slice(bar.indexOf("{c.mine && ("));
+    const bar = slice(src, "{mode === \"read\" && (act || link) && (", "{/* Asked in place");
+    expect(bar).toContain("{act?.reply && (");
+    expect(bar).toContain("{act && c.mine && (");
+    // Both of the destructive pair sit inside the `mine` branch, which needs writes on.
+    const mine = bar.slice(bar.indexOf("{act && c.mine && ("));
     expect(mine).toContain('label="Edit"');
     expect(mine).toContain('label="Delete"');
-    expect(bar.slice(0, bar.indexOf("{c.mine && ("))).not.toContain('label="Delete"');
+    expect(bar.slice(0, bar.indexOf("{act && c.mine && ("))).not.toContain('label="Delete"');
+    // Copy link is a read: offered with writes off too, and it calls nothing on Jira.
+    const copy = slice(bar, "{link && (", "{copied &&");
+    expect(copy).toContain('label="Copy link"');
+    expect(copy).not.toContain("act.");
+    expect(bar).toContain('"Link copied"');
   });
 
   test("a delete is asked in place, says it cannot be undone, and the first press sends nothing", async () => {
@@ -38,7 +43,7 @@ describe("what a comment offers", () => {
 
   test("a changed comment sends the people it named back, and an empty one is refused before the request", async () => {
     const card = await read("components/jira/JiraCard.tsx");
-    expect(card).toContain("api.jiraCommentEdit(key, c.id, text, c.mentions ?? [])");
+    expect(card).toContain("api.jiraCommentEdit(key, c.id, text, editRoster(c.mentions ?? [], offered.current.named(text)))");
     const act = await read("components/jira/JiraActivity.tsx");
     const save = slice(act, "const save = async () => {", "const drop = async");
     expect(save).toContain('A comment cannot be empty: delete it instead');
@@ -48,6 +53,8 @@ describe("what a comment offers", () => {
   test("the edited and the restricted markers are drawn from the comment", async () => {
     const src = await read("components/jira/JiraActivity.tsx");
     expect(src).toContain("{c.edited && ");
+    expect(src).toContain("editedLabel(c.at, c.editedAt)");
+    expect(src).toContain("tipAttr(editedTip(c.editedAt, c.editedBy))");
     expect(src).toContain("{c.restricted && (");
     expect(src).toContain("Restricted to {c.restricted}");
   });

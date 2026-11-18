@@ -26,7 +26,7 @@ export function AnswerCard<A extends string>({ id, tone, icon, n, word, detail, 
   return (
     <button type="button" className="dk-ans" style={{ "--tone": tone } as React.CSSProperties} aria-pressed={on}
       disabled={!n} onClick={() => onPick(id)}
-      title={n ? (on ? `Show every ${what} again` : "Show only these") : "Nothing here"}>
+      data-tip={n ? (on ? `Show every ${what} again` : "Show only these") : "Nothing here"}>
       <span className="dk-tile">{icon}</span>
       <span style={{ minWidth: 0 }}>
         <span className="n">{n}</span><span className="w">{word}</span>

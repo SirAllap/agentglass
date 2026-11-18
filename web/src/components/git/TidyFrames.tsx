@@ -58,13 +58,13 @@ function TidyExplain({ f, onArm, onCancel }: { f: TidyFinding; onArm: () => void
             {/* One line each, with its own reason: a worktree owning a branch
                 and a branch having unmerged commits need different answers. */}
             {f.blocked.map((b) => (
-              <span key={b.name} className="block truncate" title={`${b.name} — ${b.why}`}>{b.name} — {b.why}</span>
+              <span key={b.name} className="block truncate" data-tip={`${b.name} — ${b.why}`}>{b.name} — {b.why}</span>
             ))}
           </Says>
         )}
       </div>
       <div className="px-3 pb-3 flex items-center gap-2 flex-wrap">
-        <code className="flex-1 min-w-0 truncate text-[11px] px-2 py-1 rounded" title={f.command ?? ""}
+        <code className="flex-1 min-w-0 truncate text-[11px] px-2 py-1 rounded" data-tip={f.command ?? ""}
           style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg3) 50%, transparent)" }}>{f.command}</code>
         <button onClick={onCancel} className="shrink-0 text-[10.5px] px-2 py-1 rounded-lg"
           style={{ color: "var(--text3)", border: EDGE }}>Cancel</button>
@@ -168,7 +168,7 @@ export function TidyView({ report, root, busy, onRefresh, onOpenStashes }: {
                   title="Open a shell here with the command typed in — you press Enter">
                   <TerminalIcon size={ICON.sm} />Clean up
                 </Button>
-              ) : f.id === "stashes" && <Button onClick={onOpenStashes}><ArrowIcon size={ICON.sm} />Open Stashes</Button>}
+              ) : f.id === "stashes" && <Button onClick={onOpenStashes}><ArrowIcon size={ICON.sm} />Open stashes</Button>}
             </div>
             {/* The names, because a count is not something anybody can agree to.
                 Deleting nine branches is a decision about nine branches. */}
@@ -181,7 +181,7 @@ export function TidyView({ report, root, busy, onRefresh, onOpenStashes }: {
                 const held = f.blocked.find((b) => b.name === i);
                 return (
                   <span key={i} className="text-[10px] px-1.5 py-0.5 rounded truncate max-w-[280px]"
-                    title={held ? `${i} — ${held.why}` : i}
+                    data-tip={held ? `${i} — ${held.why}` : i}
                     style={held
                       ? { color: "var(--text4)", background: "transparent", border: "1px dashed color-mix(in srgb, var(--text3) 35%, transparent)" }
                       : { color: "var(--text2)", background: "color-mix(in srgb, var(--text) 6%, transparent)" }}>

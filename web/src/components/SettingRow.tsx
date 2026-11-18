@@ -153,7 +153,7 @@ export function SettingRow({ label, hint, control, status, actions, below, detai
       <span className="min-w-0">
         <span className="agx-row-name">
           {modified && (
-            <span role="img" aria-label="Changed from default" title="Changed from default"
+            <span role="img" aria-label="Changed from default" data-tip="Changed from default"
               className="inline-block rounded-full mr-2 align-middle"
               style={{ width: 6, height: 6, background: "var(--success)" }} />
           )}
@@ -195,7 +195,7 @@ export function SettingRow({ label, hint, control, status, actions, below, detai
   if (onClick) {
     return (
       <>
-        <button type="button" onClick={onClick} disabled={disabled} role={role} aria-checked={ariaChecked}
+        <button type="button" onClick={onClick} disabled={disabled} role={role} aria-disabled={disabled || undefined} aria-checked={ariaChecked}
           className={`${cls} text-left disabled:cursor-not-allowed`} style={style} data-row={dataRow} {...dataSetting}>{body}</button>
         {moreBelow}
       </>
@@ -290,7 +290,7 @@ export function Fold({ label, hint, children, defaultOpen }: {
   );
 }
 
-export function Toggle({ on, onClick, label, hint, disabled, modified, settingId, detail }: {
+export function Toggle({ on, onClick, label, hint, disabled, modified, settingId, detail, status }: {
   on: boolean; onClick: () => void; label: string; hint: string;
   /** The longer words behind a "Details" link under the row; the hint stays one line. */
   detail?: RowDetail;
@@ -301,9 +301,11 @@ export function Toggle({ on, onClick, label, hint, disabled, modified, settingId
   /** A host that cannot do this at all — the row stays, greyed, saying why in
    *  its hint, because a switch that vanishes reads as a feature you imagined. */
   disabled?: boolean;
+  /** A chip beside the switch, such as the reason it is disabled. */
+  status?: React.ReactNode;
 }) {
   return (
-    <SettingRow label={label} hint={hint} onClick={onClick} disabled={disabled} modified={modified} settingId={settingId} detail={detail}
+    <SettingRow label={label} hint={hint} status={status} onClick={onClick} disabled={disabled} modified={modified} settingId={settingId} detail={detail}
       role="switch" ariaChecked={on}
       /* A real switch: position carries the state, so it reads at a glance
          instead of having to be parsed. */

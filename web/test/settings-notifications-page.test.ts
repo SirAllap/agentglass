@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { modalSource, pagesSource } from "./settingsSource.ts";
 
-const src = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url)).text();
+const src = modalSource();
 
 // Slice a top-level function by its own closing brace, never a fixed window.
 function fn(name: string): string {
@@ -17,14 +18,14 @@ const notif = code(fn("NotificationsSection"));
 const budgetsBody = src.slice(src.indexOf('show("budgets") && ('), src.indexOf('show("notifications") && ('));
 
 describe("notifications page, rebuilt", () => {
-  test("four cards, in order", () => {
-    const at = ["Interrupt me for", "How it reaches you", "Pull requests", "From other apps"].map((t) => notif.indexOf(`<SettingsCard title="${t}"`));
+  test("cards, in order", () => {
+    const at = ["How it reaches you", "Sound and voice", "Interrupt me for", "From other apps"].map((t) => notif.indexOf(`<SettingsCard title="${t}"`));
     expect(at.every((n) => n > -1)).toBe(true);
     expect([...at].sort((a, b) => a - b)).toEqual(at);
   });
 
   test("Silence all is the header control of the first card", () => {
-    const head = notif.slice(notif.indexOf('<SettingsCard title="Interrupt me for"'), notif.indexOf("</SettingsCard>"));
+    const head = notif.slice(notif.indexOf('<SettingsCard title="How it reaches you"'), notif.indexOf("</SettingsCard>"));
     expect(head).toContain("actions={");
     expect(head).toContain('label="Silence all"');
     expect(head).toContain("none: !prefs.none");
@@ -36,15 +37,19 @@ describe("notifications page, rebuilt", () => {
       'label="Mirror this machine\'s notifications"',
       'label="How much of the message"',
     ]) expect(count(notif, l)).toBe(1);
-    expect(count(notif, "Only when the pull request is approved") + count(notif, "only when the pull request is approved")).toBe(1);
-    expect(count(notif, "When somebody says something") + count(notif, "when somebody says something")).toBe(1);
+    // The pull request rows moved to the Git page (lot 4): none here, one there.
+    expect(count(notif, "Checks fail")).toBe(0);
+    expect(count(notif, "Conversation")).toBe(0);
+    // The Git & PRs page draws them from its row table (GIT_ROWS): one row each.
+    expect(count(pagesSource(), 'row("notifications.ciOnlyApproved")')).toBe(1);
+    expect(count(pagesSource(), 'row("notifications.talk")')).toBe(1);
     // Quiet is a setting to find, not a row behind a fold.
     expect(count(notif, "<Fold ")).toBe(0);
   });
 
-  test("Keep Codex usage current moved to budgets", () => {
-    expect(count(src, 'label="Keep Codex usage current"')).toBe(1);
-    expect(budgetsBody).toContain('label="Keep Codex usage current"');
+  test("Check Codex usage in the background moved to budgets", () => {
+    // It lives on the Engines & usage page now (budgets folds into it).
+    expect(count(pagesSource(), '<SettingRow kind="control" label="Check Codex usage in the background"')).toBe(1);
     expect(notif).not.toContain("Codex");
   });
 
@@ -53,8 +58,8 @@ describe("notifications page, rebuilt", () => {
     expect(notif).toContain("prefs.channels[c]");
     expect(notif).toContain("NOTIFY_VOICES");
     expect(notif).toContain("p.onSound");
-    expect(src).toContain("setNotifyVoice(v); setNotifyVoiceState(v)");
-    expect(src).toContain("sound={sound} onSound={onSound}");
+    expect(pagesSource()).toContain("setNotifyVoice(x); setNotifyVoiceState(x)");
+    expect(pagesSource()).toContain("onSound");
     expect(await Bun.file(new URL("../src/lib/sysNotify.ts", import.meta.url)).text()).toContain("agentglass.notifyVoice");
   });
 
@@ -65,8 +70,9 @@ describe("notifications page, rebuilt", () => {
     expect(notif.slice(sound, chime)).not.toContain("<Toggle key=");
   });
 
-  test("the alarm voice is on the reminders row", () => {
-    expect(notif).toContain('k === "reminders"');
+  test("the alarm voice sits with the other voices, under Sound and voice", () => {
+    const sv = notif.slice(notif.indexOf('<SettingsCard title="Sound and voice"'), notif.indexOf('<SettingsCard title="Interrupt me for"'));
+    expect(sv).toContain('label="Alarm voice"');
     expect(notif).toContain("ALARM_VOICES");
   });
 });

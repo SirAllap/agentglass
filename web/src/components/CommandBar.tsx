@@ -18,6 +18,7 @@
 // the second scrolling strip this was meant to replace.
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { BoardSkeleton } from "./tasks/BoardState.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { GearIcon } from "./workspace/icons.tsx";
 import { ContextMenu } from "./ContextMenu.tsx";
@@ -37,6 +38,7 @@ import { keepTermFocus } from "../lib/keepFocus.ts";
 import { CloseButton } from "./CloseButton.tsx";
 import { IconLabel, PlusIcon, StarIcon } from "../lib/glyphIcons.tsx";
 import { INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
+import { EmptyState } from "./ui/EmptyState.tsx";
 
 /**
  * The four git one-liners this row used to hardcode as always-visible chips.
@@ -251,7 +253,7 @@ function CommandRow({ c, font, on, full, onRun, onPin }: {
   const r = c.recipe;
   return (
     <div className="group w-full px-3 py-1.5 flex items-baseline gap-2.5 hover:bg-[color-mix(in_srgb,var(--primary)_10%,transparent)]">
-      <button onClick={() => onRun(c.cmd)} title={r ? r.steps.join("\n") : c.cmd} className="min-w-0 flex-1 text-left flex items-baseline gap-2.5">
+      <button onClick={() => onRun(c.cmd)} data-tip={r ? r.steps.join(" · ") : c.cmd} className="min-w-0 flex-1 text-left flex items-baseline gap-2.5">
         <span className="shrink-0 font-medium" style={{ color: "var(--primary-hover)", fontFamily: font }}>{r ? r.name : c.cmd}</span>
         <span className="min-w-0 flex-1 truncate t-dim2">{c.desc || "—"}</span>
         {/* Marked, because a saved command and a found one behave differently:
@@ -267,7 +269,8 @@ function CommandRow({ c, font, on, full, onRun, onPin }: {
         // you aimed at and missed; 22px square is a thing you press.
         className={`shrink-0 text-[14px] leading-none rounded flex items-center justify-center hover:bg-white/10 ${on ? "" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"}`}
         style={{ width: 22, height: 22, color: on ? "var(--warning)" : "var(--text3)", opacity: !on && full ? 0.3 : undefined }}
-        title={on ? "Unpin" : full ? `${MAX_PINS} pinned already — unpin one first` : `Pin ${r ? r.name : c.cmd} to the bar`}
+        aria-label={on ? "Unpin" : `Pin ${r ? r.name : c.cmd}`}
+        data-tip={on ? "Unpin" : full ? `${MAX_PINS} pinned already — unpin one first` : `Pin ${r ? r.name : c.cmd} to the bar`}
       ><StarIcon size={ICON.xs} filled={on} /></button>
     </div>
   );
@@ -560,7 +563,7 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
             filter input, which autofocuses on its own; closing routes through
             `dismiss` so the focus goes back to the shell rather than nowhere. */}
         <button onMouseDown={keepTermFocus} onClick={() => (open ? dismiss() : setOpen(true))} disabled={!root || IS_DEMO}
-          title="Ready-to-run project commands: Makefile targets & package scripts, with what each one does. Pin the ones you use."
+          data-tip="Ready-to-run project commands: Makefile targets & package scripts, with what each one does. Pin the ones you use."
           className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg whitespace-nowrap"
           style={quiet
             ? { color: "var(--text3)", border: EDGE, opacity: root && !IS_DEMO ? 1 : 0.5 }
@@ -645,7 +648,7 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
                 </div>
               )}
               {!asking && !gitMatches.length && !groups.length && !settingsPageMatches.length && !settingsRowMatches.length && (
-                <div className="px-3 py-2 t-dim2">{cmds ? `No command matches “${query.trim()}”` : "Reading the project…"}</div>
+                <div className="px-3 py-2">{cmds ? <EmptyState>{`No command matches “${query.trim()}”`}</EmptyState> : <BoardSkeleton label="Reading the project…" widths={[70, 50]} dots={false} />}</div>
               )}
             </div>
             <div className="shrink-0 px-3 py-1.5 t-dim2 text-[10.5px] border-t" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
@@ -674,7 +677,7 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
             <button onMouseDown={keepTermFocus} onClick={(e) => pinned(cmd, e.currentTarget.getBoundingClientRect())} disabled={disabled || !root || IS_DEMO}
               className="text-[10px] pl-2 pr-1 py-1 min-w-0 truncate"
               style={{ color: "var(--text2)", fontFamily: font, maxWidth: 180 }}
-              title={decodeCustomPin(cmd) ? `Run ${decodeCustomPin(cmd)!.cmd}` : recipeOf(cmd) ? `Run ${recipeOf(cmd)!.name}` : `Run ${cmd}`}>{decodeCustomPin(cmd)?.label ?? recipeOf(cmd)?.name ?? cmd}</button>
+              data-tip={decodeCustomPin(cmd) ? `Run ${decodeCustomPin(cmd)!.cmd}` : recipeOf(cmd) ? `Run ${recipeOf(cmd)!.name}` : `Run ${cmd}`}>{decodeCustomPin(cmd)?.label ?? recipeOf(cmd)?.name ?? cmd}</button>
             {/* Unpin from inside the chip, in room the padding already holds:
                 hidden rather than absent, so revealing it cannot re-flow the
                 row and nothing can clip it. Going back to the dropdown to find
@@ -687,7 +690,7 @@ export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClo
           // steal the shell's cursor on the way there — see the trigger above.
           <button onMouseDown={keepTermFocus} onClick={() => setOpen(true)} className="text-[10px] px-2 py-1 rounded-md whitespace-nowrap shrink-0"
             style={{ color: "var(--text3)", border: "1px dashed color-mix(in srgb, var(--border) 30%, transparent)" }}
-            title={`Pin up to ${MAX_PINS} commands here — they stay one click away, per repo`}><IconLabel icon={<StarIcon size={ICON.xs} />}>Pin a command</IconLabel></button>
+            data-tip={`Pin up to ${MAX_PINS} commands here — they stay one click away, per repo`}><IconLabel icon={<StarIcon size={ICON.xs} />}>Pin a command</IconLabel></button>
         )}
       </div>
     </>

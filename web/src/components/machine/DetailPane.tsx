@@ -69,7 +69,7 @@ export function DetailPane({ pid, onClose }: { pid: number; onClose: () => void 
                   {shown[v.key] !== undefined ? shown[v.key]
                     : v.masked ? (
                       // The KEY is usually the whole answer; the value is a detail that must not travel to a phone.
-                      <button type="button" onClick={() => void reveal(v.key)} title="Hidden because it looks like a secret. Click to reveal — the desktop app only.">•••••••• <u>show</u></button>
+                      <button type="button" onClick={() => void reveal(v.key)} data-tip="Hidden because it looks like a secret. Click to reveal — the desktop app only.">•••••••• <u>show</u></button>
                     ) : v.value}
                 </FragmentRow>
               ))}
@@ -82,5 +82,5 @@ export function DetailPane({ pid, onClose }: { pid: number; onClose: () => void 
 }
 
 function FragmentRow({ k, children }: { k: string; children: ReactNode }) {
-  return <><span className="k" title={k}>{k}</span><span className="v">{children}</span></>;
+  return <><span className="k" data-tip={k}>{k}</span><span className="v">{children}</span></>;
 }

@@ -23,6 +23,8 @@ import { Dock, Fold, GaugeGlyph, isGlyphShape, useFoldPhaseOf } from "./CanvasDo
 import { fixed, fmt, iconOf, int, num, str, toneOf } from "./canvasRead.ts";
 import { CanvasGlyph } from "./panelGlyph.tsx";
 import { PluginNotRunning } from "./PluginNotRunning.tsx";
+import { useNow } from "../../lib/visibleInterval.ts";
+import { useViewActive } from "../../lib/viewActive.ts";
 
 /**
  * A plugin's LIVE panel: a scene of nodes it changes many times a second, drawn
@@ -92,9 +94,12 @@ function useReducedMotion(): boolean {
   return reduced;
 }
 
-/** True while nobody can see the canvas: the window is hidden, or it is
- *  scrolled or switched away. Motion and the countdown's tick stop then. */
+/** True while nobody can see the canvas: the window is hidden, it is scrolled
+ *  away, or its view is behind another one. Motion and the countdown's tick stop
+ *  then. The last needs the view's word: a `visibility: hidden` view still
+ *  intersects, so the observer alone kept loops and the 1 Hz clock running. */
 function useUnseen(ref: React.RefObject<HTMLElement>): boolean {
+  const viewOn = useViewActive();
   const [hidden, setHidden] = useState(() => typeof document !== "undefined" && document.hidden);
   const [onScreen, setOnScreen] = useState(true);
   useEffect(() => {
@@ -109,7 +114,7 @@ function useUnseen(ref: React.RefObject<HTMLElement>): boolean {
     io.observe(el);
     return () => io.disconnect();
   }, [ref]);
-  return hidden || !onScreen;
+  return hidden || !onScreen || !viewOn;
 }
 
 /** Whether the painted theme is a dark one, by the app's own rule (the
@@ -129,16 +134,6 @@ function useDarkScheme(): boolean {
 }
 
 /** The clock a countdown reads, ticking once a second and only while asked to. */
-function useNow(tick: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!tick) return;
-    setNow(Date.now());
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, [tick]);
-  return now;
-}
 
 /**
  * The scene as it is DRAWN: luminance-bearing props (an orb's light, a lit
@@ -623,7 +618,7 @@ function NodeView({ node: n, ctx }: { node: CanvasNode; ctx: Ctx }): ReactNode {
     case "icon": {
       const icon = iconOf(n.icon);
       return (
-        <span ref={ref} role="img" aria-label={str(n.label) ?? str(n.icon)} title={str(n.label)} className="inline-flex shrink-0 self-start"
+        <span ref={ref} role="img" aria-label={str(n.label) ?? str(n.icon)} data-tip={str(n.label)} className="inline-flex shrink-0 self-start"
           style={{ color: TONE_INK[toneOf(n.tone, "default")] }}>
           {icon && <CanvasGlyph icon={icon} size={ICON.md} />}
         </span>
@@ -692,7 +687,7 @@ function Lane({ node: n, ctx, refCb, loop }: { node: CanvasNode; ctx: Ctx; refCb
       <header data-canvas-loop={loop} className="flex items-center gap-2 px-3 pt-2.5 pb-2 min-w-0">
         {icon && <span className="shrink-0 inline-flex" style={{ color: TONE_INK[tone] }}><CanvasGlyph icon={icon} size={ICON.sm} /></span>}
         <span className="text-[12px] font-semibold truncate min-w-0 flex-1" style={{ color: "var(--text)" }}>{str(n.title)}</span>
-        {sealed && <span className="shrink-0 inline-flex" style={{ color: "var(--text3)" }} title="sealed"><CanvasGlyph icon="lock" size={ICON.sm} /></span>}
+        {sealed && <span className="shrink-0 inline-flex" style={{ color: "var(--text3)" }} data-tip="sealed" role="img" aria-label="sealed"><CanvasGlyph icon="lock" size={ICON.sm} /></span>}
         {closed && <span className="shrink-0 text-[10px] uppercase tracking-wide" style={{ color: "var(--warning-ink)" }}>closed</span>}
       </header>
       <div className="px-3 pb-3 min-w-0 flex flex-col gap-1.5">

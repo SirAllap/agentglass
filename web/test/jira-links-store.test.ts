@@ -5,16 +5,18 @@
 import { afterAll, beforeEach, describe, expect, it } from "bun:test";
 
 const calls: string[] = [];
-let answer: () => Promise<unknown> = async () => ({ ok: true, links: [{ url: "https://github.com/acme/orbit/pull/7", number: 7, title: "acme/orbit#7", resolved: false }] });
+const firstAnswer = async () => ({ ok: true, links: [{ url: "https://github.com/acme/orbit/pull/7", number: 7, title: "acme/orbit#7", resolved: false }] });
+let answer: () => Promise<unknown> = firstAnswer;
 const mod = await import("../src/lib/api.ts");
 const a = mod.api as unknown as Record<string, unknown>;
 const saved = a.jiraLinks;
-a.jiraLinks = (k: string) => { calls.push(k); return answer(); };
+const stub = (k: string) => { calls.push(k); return answer(); };
+a.jiraLinks = stub;
 const { readJiraLinks, addJiraLink, forgetJiraLinks, peekJiraLinks, jiraLinksVersion } = await import("../src/lib/jiraLinks.ts");
 afterAll(() => { a.jiraLinks = saved; forgetJiraLinks(); });
 
 describe("reading a card's links", () => {
-  beforeEach(() => { calls.length = 0; forgetJiraLinks(); });
+  beforeEach(() => { answer = firstAnswer; a.jiraLinks = stub; calls.length = 0; forgetJiraLinks(); });
 
   it("is one request, however many readers ask while it is in flight", async () => {
     const [x, y] = await Promise.all([readJiraLinks("ORBIT-7"), readJiraLinks("ORBIT-7")]);

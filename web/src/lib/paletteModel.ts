@@ -229,8 +229,9 @@ const BROWSABLE = /\.(html?|png|jpe?g|gif|webp|svg|avif|pdf)$/i;
 export const canOpenInBrowser = (name: string): boolean => BROWSABLE.test(name);
 
 /** The address a browser tab loads for a file: the engine's own page route,
- *  which judges the path like every other read. `origin` is the engine's. */
-export const pageUrl = (origin: string, abs: string): string => `${origin}/preview/page?path=${encodeURIComponent(abs)}`;
+ *  which judges the path like every other read. `origin` is the engine's;
+ *  `link` is what /preview/pagelink answered (path plus a one-file ticket). */
+export const pageUrl = (origin: string, link: string): string => `${origin}${link}`;
 
 /* ------------------------------------------------------------------- sizes */
 

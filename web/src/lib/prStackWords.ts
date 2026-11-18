@@ -11,7 +11,7 @@
 // the pull request's own state. Nothing is fetched for it; absent means the
 // next one down, never an error.
 
-import type { LaneId } from "./prLanes.ts";
+import type { LaneId } from "../../../shared/prLanes.ts";
 import type { BaseRef, Stack } from "./prStack.ts";
 
 /** What the app knows about one pull request, whichever list it came from. */

@@ -15,6 +15,7 @@ import { DoneIcon, FolderIcon, WarningIcon } from "../../lib/glyphIcons.tsx";
 import { RIcon } from "../remoteIcons.tsx";
 import { Foot, HUE, Kbd, Status, PaneHead, StateCard, Why, wash } from "./ui.tsx";
 import { FolderField } from "./FolderField.tsx";
+import { useVisibleInterval } from "../../lib/visibleInterval.ts";
 
 type Phase = { t: "form" } | { t: "running"; since: number } | { t: "failed"; why: string; since: number } | { t: "cancelled"; at: string; target: string };
 
@@ -32,11 +33,7 @@ export function CreatePane({ kind, value, setValue, parent, setParent, busyElsew
   useEffect(() => { setPhase({ t: "form" }); }, [kind]);
   // Leaving the pane ends the wait: an answer that lands later must not open a project nobody is looking at.
   useEffect(() => () => { token.current++; }, []);
-  useEffect(() => {
-    if (phase.t !== "running") return;
-    const i = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(i);
-  }, [phase.t]);
+  useVisibleInterval(() => setNow(Date.now()), 1000, phase.t === "running");
 
   const urlBad = isClone ? cloneUrlError(value) : null;
   const nameBad = isClone ? null : nameError(value);

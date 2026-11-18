@@ -14,7 +14,9 @@
  * cardPrStore.ts.
  */
 
+import type { PrCheckRollup } from "../../../shared/types.ts";
 import { inkFor } from "./contrast.ts";
+import { prAddress } from "../../../shared/taskref.ts";
 
 export interface CardPr {
   number: number;
@@ -29,6 +31,54 @@ export interface CardPr {
   link?: "own" | "mention";
   /** For a mention: the item the pull request belongs to. */
   belongsTo?: string;
+  /** Head branch, when the list carries it. */
+  branch?: string;
+  /** Base branch, from the same batched rollup read as the checks. */
+  base?: string;
+  /** Review decision and checks of an open PR, from the project's one batched read (jira/prs?project=). */
+  reviewDecision?: string | null;
+  checks?: PrCheckRollup;
+  /** When the project read took those checks (ms), so a stale read does not look fresh. */
+  checksAt?: number;
+  mergeable?: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+}
+
+/** A PR is the card's own when the card key stands alone in its branch or title (no request: the list already holds both). Linked-on-the-card is added by `withLinkedOwn`. */
+export function withKeyOwn(prs: readonly CardPr[], key: string): CardPr[] {
+  const k = key.trim();
+  if (!k) return [...prs];
+  const re = new RegExp(`(^|[^A-Za-z0-9])${k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![0-9])`, "i");
+  return prs.map((p) => re.test(`${p.branch ?? ""} ${p.title}`) ? { ...p, link: "own" as const, belongsTo: undefined } : p);
+}
+
+/** Old tracker keys a migrated card names in its description ("Migrated from <tracker> LEGACY-123"). */
+export function legacyKeysOf(description: string | undefined): string[] {
+  const out = new Set<string>();
+  for (const m of (description ?? "").matchAll(/Migrated from [^\n]*?\b([A-Z][A-Z0-9_]*-\d+)\b/gi)) out.add(m[1]!.toUpperCase());
+  return [...out];
+}
+
+/**
+ * The one own-vs-mention rule for a Jira card. OWN: the card key stands alone in the PR's branch name or title, or the card is linked to the PR on the site (Jira dev-status). A migrated card's old key counts as its key. MENTION: anything else the search found, i.e. only the body names the card (a parent's PR that lists each sub-task). The server's own reading of the body is not trusted here: a body-only hit with no other key is "own" there, and it must not be for a sub-task.
+ * Every place that treats a PR as the card's own reads `own`; the UI reads `mentions` only to show them as not the card's.
+ */
+export function classifyCardPrs(prs: readonly CardPr[], key: string, linked: readonly { url: string; number: number; title?: string }[] = [], legacy: readonly string[] = []): { own: CardPr[]; mentions: CardPr[] } {
+  const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const keys = [key, ...legacy].map((x) => x.trim()).filter(Boolean);
+  const re = keys.length ? new RegExp(`(^|[^A-Za-z0-9])(${keys.map(esc).join("|")})(?![0-9])`, "i") : null;
+  const addr = (u: string) => prAddress(u)?.url ?? u;
+  const linkedAt = new Set(linked.map((l) => addr(l.url)));
+  const own: CardPr[] = [];
+  const mentions: CardPr[] = [];
+  for (const p of prs) {
+    const isOwn = linkedAt.has(addr(p.url)) || (!!re && re.test(`${p.branch ?? ""} ${p.title}`));
+    if (isOwn) own.push({ ...p, link: "own", belongsTo: undefined });
+    else mentions.push({ ...p, link: "mention" });
+  }
+  for (const l of linked) {
+    if (!own.some((p) => addr(p.url) === addr(l.url))) own.push({ number: l.number, title: l.title ?? "", state: "", url: l.url, link: "own" });
+  }
+  return { own, mentions };
 }
 
 /** A pull request this card only NAMES, as opposed to one cut for it. */
@@ -62,6 +112,23 @@ export function sortedCardPrs(prs: readonly CardPr[]): CardPr[] {
   return [...prs].sort((a, b) =>
     Number(isRelated(a)) - Number(isRelated(b)) || rank(a) - rank(b)
     || Number(!!b.mine) - Number(!!a.mine) || b.number - a.number);
+}
+
+/**
+ * Fold the pull requests a Jira card is LINKED to on the site into the board's
+ * list: a linked one is the card's own whatever its text says (the project
+ * search only reads text), and one the search never found is added with what
+ * the link carries. Pure; the same address is matched by canonical form.
+ */
+export function withLinkedOwn(prs: readonly CardPr[], linked: readonly { url: string; number: number; title?: string }[]): CardPr[] {
+  const key = (u: string) => prAddress(u)?.url ?? u;
+  const out = prs.map((p) => ({ ...p }));
+  for (const l of linked) {
+    const at = out.findIndex((p) => key(p.url) === key(l.url));
+    if (at >= 0) out[at] = { ...out[at]!, link: "own", belongsTo: undefined };
+    else out.push({ number: l.number, title: l.title ?? "", state: "", url: l.url, link: "own" });
+  }
+  return out;
 }
 
 export type CardPrPick =

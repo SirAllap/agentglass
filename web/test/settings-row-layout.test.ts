@@ -14,7 +14,7 @@ const modalSrc = at("../src/components/SettingsModal.tsx");
 const stripComments = (s: string) =>
   s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 const rowCode = stripComments(rowSrc);
-const modalCode = stripComments(modalSrc);
+const modalCode = stripComments(modalSrc + at("../src/components/SettingChoice.tsx"));
 
 /** The body of `function name(` up to its own closing brace. */
 function fnBody(code: string, sig: string): string {

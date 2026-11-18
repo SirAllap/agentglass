@@ -17,6 +17,7 @@
  * in Workspace, so the rail's pip is derived and never set by hand.
  */
 import { api } from "./api.ts";
+import { isLooking } from "./usePoll.ts";
 import type { LanternChair, LanternRow, LanternWatch } from "../components/LanternView.tsx";
 import { attention } from "../../../shared/fieldRules.ts";
 
@@ -40,7 +41,7 @@ const FAST_MS = 5_000;
 
 function emit() { for (const l of listeners) l(); }
 
-const looking = () => typeof document === "undefined" || (!document.hidden && document.hasFocus());
+const looking = () => typeof document === "undefined" || isLooking(document.hidden);
 
 export async function refreshLantern(): Promise<void> {
   if (inFlight) return inFlight;

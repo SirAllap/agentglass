@@ -16,7 +16,8 @@ import { BranchIcon } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import type { Mark } from "../../lib/windowMark.ts";
 import { Portal } from "../Portal.tsx";
-import { WindowMarkIcon } from "./WindowMarkIcon.tsx";
+import { SeatMarkIcon, WindowMarkIcon } from "./WindowMarkIcon.tsx";
+import type { SeatTone } from "../../lib/seatGlyph.ts";
 import { EDGE } from "../workspace/Chrome.tsx";
 
 export interface PeekFacts {
@@ -30,6 +31,9 @@ export interface PeekFacts {
   sentence: string;
   /** The window's mark and its words, so the card opens with the same sign the tab wears. */
   mark?: { kind: Mark; label: string } | null;
+  /** The seat this window holds: the card wears the same alien face as the tab,
+   *  and says whose orchestrator it is (the tab itself carries no native tooltip). */
+  seat?: { tone: SeatTone; project: string } | null;
 }
 
 const GAP = 6;
@@ -106,7 +110,8 @@ export function PeekCard({ facts, rect, warm }: { facts: PeekFacts; rect: DOMRec
           animation: warm ? undefined : "agx-peek-in 120ms cubic-bezier(0.23, 1, 0.32, 1)",
         }}>
         <div className="flex items-center gap-2 min-w-0">
-          {facts.mark && <WindowMarkIcon mark={facts.mark.kind} label={facts.mark.label} />}
+          {facts.seat ? <SeatMarkIcon tone={facts.seat.tone} label={`Orchestrator of ${facts.seat.project}`} />
+            : facts.mark && <WindowMarkIcon mark={facts.mark.kind} label={facts.mark.label} />}
           <span className="min-w-0 break-all font-semibold text-[12px]" style={{ color: "var(--text)" }}>{facts.name}</span>
           {facts.project && <span className="truncate text-[11px]" style={{ color: "var(--text3)" }}>· {facts.project}</span>}
           {facts.number !== null && (
@@ -118,6 +123,7 @@ export function PeekCard({ facts, rect, warm }: { facts: PeekFacts; rect: DOMRec
             {facts.branch && <BranchIcon size={ICON.xs} />}<span className="truncate">{meta}</span>
           </div>
         )}
+        {facts.seat && <div className="font-semibold" style={{ color: "var(--text2)" }}>Orchestrator of {facts.seat.project}</div>}
         <div style={facts.mark?.kind === "needs-you" ? { color: "var(--warning-ink)", fontWeight: 600 } : undefined}>{facts.sentence}</div>
       </div>
     </Portal>

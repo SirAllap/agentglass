@@ -9,11 +9,13 @@ import { CTRL_H, LINE } from "../workspace/Chrome.tsx";
 import { PluginMark } from "./PluginMark.tsx";
 import type { LocalNotes, LocalRun } from "./LocalReview.tsx";
 import { ICON } from "../../lib/iconSize.ts";
-import { notReadyChip } from "../../lib/prNotesChip.ts";
+import { notReadyChip } from "../../../../shared/prNotesChip.ts";
 import { loadNotesSummary, notesSummaryVersion, onNotesSummary, refreshOnNotes, summariesOf } from "../../lib/prNotesSummaryStore.ts";
 import { PublishReview } from "./PublishReview.tsx";
 import { latestRun } from "../../lib/publishReview.ts";
 import type { HeadRead } from "../../../../shared/headCompare.ts";
+import { useVisibleInterval } from "../../lib/visibleInterval.ts";
+import { useViewActive } from "../../lib/viewActive.ts";
 
 /**
  * What a plugin can do to the pull request you are reading, in its header.
@@ -182,7 +184,7 @@ export function PluginPrActions({ number, local, onShowLocal, root, head }: {
 
 function NotReady({ chip, onShowLocal }: { chip: { text: string; title: string }; onShowLocal: () => void }) {
   return (
-    <button type="button" onClick={onShowLocal} title={`${chip.title} — press to read them`} data-not-ready
+    <button type="button" onClick={onShowLocal} data-tip={`${chip.title} — press to read them`} data-not-ready
       className="shrink-0 inline-flex items-center rounded-lg whitespace-nowrap leading-none text-[10.5px] px-2 hover:brightness-125"
       style={{ height: CTRL_H.compact, color: "color-mix(in srgb, var(--error) 80%, var(--text))",
         border: LINE, borderColor: "color-mix(in srgb, var(--error) 50%, transparent)",
@@ -213,11 +215,9 @@ function PluginAction({ p, actions, run, notes, pending, error, onPress, onShowL
   // Ticking, because a review is minutes long and a frozen "1:12" reads as a
   // stuck one. Only while it runs: nothing else here changes by the second.
   const [, tick] = useState(0);
-  useEffect(() => {
-    if (state !== "running") return;
-    const t = setInterval(() => tick((n) => n + 1), 1000);
-    return () => clearInterval(t);
-  }, [state]);
+  // Not behind another view either: the PR board stays mounted when you leave it.
+  const viewOn = useViewActive();
+  useVisibleInterval(() => tick((n) => n + 1), 1000, state === "running" && viewOn);
 
   const tint = p.color ?? "var(--primary)";
   const bad = state === "failed" || !!error;
@@ -245,7 +245,7 @@ function PluginAction({ p, actions, run, notes, pending, error, onPress, onShowL
       background: `color-mix(in srgb, ${bad ? "var(--error)" : tint} ${busy || state === "done" ? 14 : 8}%, transparent)`,
     }}>
       <button type="button" onClick={press} disabled={busy}
-        title={error ?? runTitle(p.name, run, notes.length)}
+        data-tip={error ?? runTitle(p.name, run, notes.length)}
         aria-busy={busy || undefined}
         className="inline-flex items-center gap-1.5 whitespace-nowrap leading-none text-[10.5px] pl-1.5 pr-2 disabled:cursor-default hover:brightness-125"
         style={{ height: CTRL_H.compact, color: `color-mix(in srgb, ${bad ? "var(--error)" : tint} 80%, var(--text))`, background: "transparent", border: 0 }}>

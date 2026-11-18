@@ -77,13 +77,13 @@ export function ContextMenu({ at, head, groups, onPick, onClose }: {
         {head && (
           <div className="px-3.5 pt-1.5 pb-2">
             <div className="truncate" style={{ color: "var(--primary-ink)", fontWeight: 600 }}>{head.title}</div>
-            <div className="truncate text-[11px]" style={{ color: "var(--text3)" }} title={head.sub}>{head.sub}</div>
+            <div className="truncate text-[11px]" style={{ color: "var(--text3)" }} data-tip={head.sub}>{head.sub}</div>
           </div>
         )}
         {groups.map((g, gi) => (
           <div key={gi} className="py-1" style={gi > 0 ? { borderTop: MENU_RULE } : undefined}>
             {g.map((i) => (
-              <button key={i.id + (i.action ?? "")} role="menuitem" aria-haspopup={i.sub ? "menu" : undefined} aria-expanded={i.sub ? sub?.items === i.sub : undefined} disabled={i.disabled} title={i.later ? `${i.later} is not built yet` : undefined}
+              <button key={i.id + (i.action ?? "")} role="menuitem" aria-haspopup={i.sub ? "menu" : undefined} aria-expanded={i.sub ? sub?.items === i.sub : undefined} disabled={i.disabled} data-tip={i.later ? `${i.later} is not built yet` : undefined}
                 onMouseEnter={(e) => { if (i.sub) setSub({ items: i.sub, rect: e.currentTarget.getBoundingClientRect() }); else setSub(null); }}
                 onClick={(e) => { if (i.sub) setSub({ items: i.sub, rect: e.currentTarget.getBoundingClientRect() }); else onPick(i); }}
                 className={`${MENU_ROW} flex items-center gap-2.5 px-3 text-left disabled:opacity-40`} style={{ minHeight: MENU_ROW_H, color: i.danger ? "var(--error-ink)" : "var(--text)" }}>
@@ -100,7 +100,7 @@ export function ContextMenu({ at, head, groups, onPick, onClose }: {
         <div ref={subEl} role="menu" data-finder-menu aria-label="Actions" className="fixed rounded-lg text-[12px] shadow-2xl py-1.5"
           style={{ width: 260, ...subPlace(sub.rect, 260, sub.items.length * (MENU_ROW_H + 1) + 12), background: "var(--surface-card)", border: EDGE, color: "var(--text)", maxHeight: `calc(100vh - ${MENU_EDGE * 2}px)`, overflowY: "auto" }}>
           {sub.items.map((i) => (
-            <button key={i.action ?? i.id} role="menuitem" disabled={i.disabled} title={i.disabled ? i.label : undefined} onClick={() => onPick(i)}
+            <button key={i.action ?? i.id} role="menuitem" disabled={i.disabled} data-tip={i.disabled ? i.label : undefined} onClick={() => onPick(i)}
               className={`${MENU_ROW} flex items-center gap-2.5 px-3 text-left disabled:opacity-40`} style={{ minHeight: MENU_ROW_H }}>
               <span className="shrink-0 flex" style={{ color: "var(--primary-ink)" }}><StrataIcon set="act" name="play" size={ICON.sm} /></span>
               <span className="flex-1 min-w-0 truncate">{i.label}</span>
@@ -144,8 +144,8 @@ export function DialogHead({ icon, title, sub, onClose }: { icon: React.ReactNod
   return (
     <div className="flex items-center gap-3 pb-3 mb-3" style={{ borderBottom: LINE }}>
       <span className="grid place-items-center rounded-lg shrink-0" style={{ width: 40, height: 40, background: "color-mix(in srgb, var(--primary) 22%, transparent)", color: "var(--primary-ink)" }}>{icon}</span>
-      <div className="min-w-0 flex-1"><b className="block text-[13px] truncate" title={title}>{title}</b>{sub && <span className="block truncate text-[11px]" style={{ color: "var(--text3)" }}>{sub}</span>}</div>
-      <button type="button" aria-label="Close" title="Close" className="agx-btn rounded-md grid place-items-center shrink-0" style={{ width: HIT - 6, height: HIT - 6, color: "var(--text3)" }} onClick={onClose}><StrataIcon set="act" name="x" size={ICON.sm} /></button>
+      <div className="min-w-0 flex-1"><b className="block text-[13px] truncate" data-tip={title}>{title}</b>{sub && <span className="block truncate text-[11px]" style={{ color: "var(--text3)" }}>{sub}</span>}</div>
+      <button type="button" aria-label="Close" data-tip="Close" className="agx-btn rounded-md grid place-items-center shrink-0" style={{ width: HIT - 6, height: HIT - 6, color: "var(--text3)" }} onClick={onClose}><StrataIcon set="act" name="x" size={ICON.sm} /></button>
     </div>
   );
 }

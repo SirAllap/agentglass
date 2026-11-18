@@ -10,6 +10,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { POLL_MS } from "../src/lib/prSettle.ts";
 import { TTL_MS as CARD_PR_TTL_MS } from "../src/lib/cardPrStore.ts";
 
@@ -35,7 +36,10 @@ describe("pull-request panel GitHub budget", () => {
   });
 
   it("loads only Mine and Needs my review without a click", () => {
-    const lists = [...CODE.matchAll(/api\.prList\(root, "(\w+)"/g)].map((m) => m[1]);
+    // The board's two default lists live in lib/prBoardLoad.ts, the one call path the board and the Jira chips share.
+    expect(CODE).toContain("loadBoardLists(root, stateSel, force)");
+    const load = readFileSync(join(import.meta.dir, "../src/lib/prBoardLoad.ts"), "utf8");
+    const lists = [...load.matchAll(/fetcher\(root, "(\w+)"/g)].map((m) => m[1]);
     expect(lists.length).toBeGreaterThan(0);
     for (const f of lists) expect(["mine", "review"]).toContain(f);
   });

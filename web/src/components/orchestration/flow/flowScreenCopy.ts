@@ -15,7 +15,7 @@ export const TOOL_IDS = ["read", "run", "write", "commit", "notes"] as const;
 
 /** The engines a person may pick for a role of their own, with the models each one is offered. */
 export const ENGINE_CHOICES: { id: string; models: string[] }[] = [
-  { id: "claude", models: ["claude-sonnet-5", "claude-opus-5-5", "claude-haiku-5-5"] },
+  { id: "claude", models: ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"] },
   { id: "codex", models: ["gpt-5.6-codex"] },
   { id: "opencode", models: ["opencode-go/deepseek-v4.1-flash", "opencode-go/deepseek-v4-pro", "opencode-go/glm-5.3-flash", "opencode/big-pickle"] },
 ];

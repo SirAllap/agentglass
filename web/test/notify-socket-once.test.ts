@@ -76,6 +76,10 @@ test("one desktop notification is one card and one row", async () => {
   // Quiet off: the card is what is being counted, and Quiet holds every
   // mirrored card back.
   sysNotify.setNotifyQuiet(false);
+  // …and Desktop DND on: with it off the desktop draws its own popup and
+  // agentglass only keeps the row (notePolicy's whereItShows).
+  const dnd = await import("../src/lib/desktopDnd.ts");
+  dnd.receiveDesktopDnd({ supported: true, on: true });
   const off = sysNotify.subscribeSystemNotes((n) => seen.push(n.summary));
   await new Promise((r) => setTimeout(r, 60));
 
@@ -85,11 +89,14 @@ test("one desktop notification is one card and one row", async () => {
   const before = sysNotify.notifyHistory().length;
   const frame = { data: JSON.stringify({ id: "sys-1", app: "slack", summary: "#orbit-deploys", body: "build is green", urgency: 1, at: 1 }) };
   for (const s of socks) s.onmessage?.(frame);
+  // No focus here, so the card waits for Desktop DND to be read again first.
+  await new Promise((r) => setTimeout(r, 30));
 
   expect(seen).toEqual(["#orbit-deploys"]);
   expect(sysNotify.notifyHistory().length).toBe(before + 1);
 
   off();
+  dnd.receiveDesktopDnd({ supported: false, on: false });
   sysNotify.setNotifyQuiet(true);
   sysNotify.setSysNotifyMode("off");
 });

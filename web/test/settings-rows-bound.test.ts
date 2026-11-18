@@ -10,6 +10,7 @@
  * on neither list does, so a new page forces the decision.
  */
 import { describe, expect, test } from "bun:test";
+import { modalSource } from "./settingsSource.ts";
 import { readFileSync } from "node:fs";
 import { SETTINGS_ROWS, SETTINGS_PAGES } from "../src/lib/settingsRows.gen.ts";
 import { globalStubs } from "./stubGlobal.ts";
@@ -25,7 +26,7 @@ const migratedRows = SETTINGS_ROWS.filter((r) => R.isMigrated(r.pane, r.section)
 
 describe("rows in a migrated pane", () => {
   test("there are some, in each migrated pane", () => {
-    for (const p of ["appearance", "diff", "rail", "terminal", "notifications", "browser", "tasks", "clickup"]) expect(migratedRows.some((r) => r.pane === p), p).toBe(true);
+    for (const p of ["appearance", "diff", "terminal", "notifications", "browser", "tasks", "clickup"]) expect(migratedRows.some((r) => r.pane === p), p).toBe(true);
   });
 
   test("each carries a settingId, is marked agentExempt (not a setting) or agentNever (a setting an agent must not reach)", () => {
@@ -42,7 +43,7 @@ describe("rows in a migrated pane", () => {
     // The credential-bearing rows are among them: if the cookie import or the
     // mirror of other apps' notifications ever gets a def, this says so.
     const never = new Set(SETTINGS_ROWS.filter((x) => x.agentNever).map((x) => x.label));
-    for (const l of ["Home page", "Right-click to paste", "Terminal runs on", "Mirror this machine's notifications", "How much of the message", "Bring browsing history", "Bring bookmarks"]) expect(never.has(l), l).toBe(true);
+    for (const l of ["Home page", "Right-click to paste", "Terminal runs on", "Collect other apps' notifications", "How much of the message", "Bring history", "Bring bookmarks"]) expect(never.has(l), l).toBe(true);
   });
 
   test("every settingId names a def", () => {
@@ -78,7 +79,7 @@ const FAMILIES: [string, string][] = [
 ];
 
 describe("defs and rows agree", () => {
-  const modal = src("components/SettingsModal.tsx") + src("components/ThemePicker.tsx") + src("components/ClickUpPane.tsx") + src("components/jira/JiraSettingsView.tsx") + src("components/ReviewPromptsPane.tsx");
+  const modal = modalSource() + src("components/ThemePicker.tsx") + src("components/ClickUpPane.tsx") + src("components/jira/JiraSettingsView.tsx") + src("components/ReviewPromptsPane.tsx");
 
   test("every def is reached by a row: a settingId in the generated list, or in source for the rows the generator cannot read", () => {
     const fromGen = new Set(SETTINGS_ROWS.map((r) => r.settingId).filter(Boolean) as string[]);

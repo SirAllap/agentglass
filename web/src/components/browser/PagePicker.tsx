@@ -20,6 +20,8 @@ import { EditIcon, IconLabel } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { Button, EDGE, Segmented } from "../workspace/Chrome.tsx";
 import { TerminalIcon } from "../workspace/icons.tsx";
+import { BROWSER } from "../../lib/layers.ts";
+import { intervalWhileVisible } from "../../lib/visibleInterval.ts";
 
 type Guest = {
   executeJavaScript(code: string): Promise<unknown>;
@@ -153,8 +155,8 @@ export function PagePicker({ view, url, title, mode, onNote, onDone }: {
         setTimeout(() => box.current?.focus(), 0);
       }
     };
-    const timer = setInterval(() => { void tick(); }, 140);
-    return () => { live = false; clearInterval(timer); };
+    const stop = intervalWhileVisible(() => { void tick(); }, 140);
+    return () => { live = false; stop(); };
   }, [view, picked, feedback, url, onNote, onDone, shoot]);
 
   const hand = async () => {
@@ -180,7 +182,7 @@ export function PagePicker({ view, url, title, mode, onNote, onDone }: {
   const top = below + 260 > window.innerHeight ? Math.max(8, picked.rect.y - 250) : below;
 
   return (
-    <div className="absolute inset-0" style={{ zIndex: 30 }} onClick={onDone}>
+    <div className="absolute inset-0" style={{ zIndex: BROWSER.overlay }} onClick={onDone}>
       <div onClick={(e) => e.stopPropagation()}
         className="absolute rounded-xl shadow-2xl flex flex-col gap-2 p-3"
         style={{
@@ -196,7 +198,7 @@ export function PagePicker({ view, url, title, mode, onNote, onDone }: {
             {picked.rect.width}×{picked.rect.height}
           </span>
           <span className="ml-auto text-[10px] font-mono truncate min-w-0" style={{ color: "var(--text3)" }}
-            title={picked.selector}>{picked.selector}</span>
+            data-tip={picked.selector}>{picked.selector}</span>
         </div>
 
         <textarea ref={box} value={ask} onChange={(e) => setAsk(e.target.value)}

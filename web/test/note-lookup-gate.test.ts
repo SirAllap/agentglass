@@ -52,7 +52,7 @@ describe("attachCard", () => {
 describe("the Tasks panel's warm-up", () => {
   test("waits for a connected ClickUp", async () => {
     const panel = await Bun.file(new URL("../src/components/TasksPanel.tsx", import.meta.url)).text();
-    expect(panel).toContain("if (clickupHere) void api.clickupWarm();");
+    expect(panel).toContain("if (clickupHere) void api.clickupWarm(here);");
     expect(panel).not.toContain("useEffect(() => { void api.clickupWarm(); }, []);");
   });
 });

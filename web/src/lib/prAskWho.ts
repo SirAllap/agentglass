@@ -15,10 +15,12 @@
 // teams), and a team's members are a count, never expanded.
 import type { ReviewerState } from "./prReviewers.ts";
 import { withoutAuthor } from "./reviewerPick.ts";
+import type { PersonSource } from "./personRow.ts";
 
 export type AskMode = "reviewers" | "assignees";
 
-export interface Person { login: string; name?: string }
+/** `email` is what a tracker hands over; GitHub gives a login, and a name only when it has one. */
+export interface Person { login: string; name?: string; email?: string }
 /** `members` is a count when the repository's teams were read; a CODEOWNERS team has only a name. */
 export interface Team { slug: string; members?: number }
 export interface Asked { login: string; state: ReviewerState }
@@ -67,6 +69,11 @@ export interface AskRow {
   canRemove?: boolean;
   /** Where the typed text matched, in the first line, for the highlight. */
   mark?: [number, number];
+  /** The GitHub handle, and the system the row came from: what the line under a name with no email shows. */
+  login?: string;
+  source?: PersonSource;
+  /** The source's own address, when it has one (Jira, ClickUp; GitHub only a public one). */
+  email?: string;
 }
 
 export interface AskSection { id: SectionId; title: string; rows: AskRow[] }
@@ -111,7 +118,8 @@ export function askView(i: AskInput): AskView {
     const row: AskRow = {
       id: p.login, kind: "person", label: named ? p.name! : p.login,
       sub: sub ?? (state ? ASKED_SAID[state] : named ? `@${p.login}` : ""),
-      picked: picked.has(p.login),
+      picked: picked.has(p.login), login: p.login, source: "GitHub",
+      ...(p.email ? { email: p.email } : null),
     };
     if (!askable.has(lc(p.login))) {
       row.disabled = i.viewerDidAuthor

@@ -61,10 +61,25 @@ describe("the groups are the view's own statuses", () => {
     expect(g.find((x) => x.status === "Shipped")!.done).toBe(true);
   });
 
-  test("a card in a status the view did not list still shows, after the listed ones", () => {
+  test("a card in a status the view did not list still shows, after the workflow's columns", () => {
     const g = groupByStatus([...cards, card("7", "On hold")], SEVEN);
-    expect(g.at(-1)!.status).toBe("On hold");
-    expect(g.at(-1)!.rows).toHaveLength(1);
+    const names = g.map((x) => x.status);
+    expect(names.at(-1)).toBe("On hold");
+    expect(names.indexOf("Released")).toBe(names.length - 2);
+    expect(g.find((x) => x.status === "On hold")!.rows).toHaveLength(1);
+  });
+
+  test("two spaces: a status only the second space has, unlisted, is a column after the workflow's, while a card wears it", () => {
+    const home = [st("Backlog", 0), st("Shaping", 1), st("Ready for engineering", 2), st("In development", 3), st("Code review", 4), st("In QA", 5), st("Ready for deployment", 6), st("Done", 7, "done"), st("Won't do", 8, "done")];
+    const g = groupByStatus([card("1", "Backlog"), card("2", "Ready for QA"), card("3", "Done", { statusKind: "done" })], home);
+    expect(g.map((x) => x.status)).toEqual(["Backlog", "Shaping", "Ready for engineering", "In development", "Code review", "In QA", "Ready for deployment", "Done", "Won't do", "Ready for QA"]);
+  });
+
+  test("a merged list that carries the second space's open status after Done still draws it before Done", () => {
+    // The site concatenates each project's statuses, so the list itself ends Done, then the other space's "Ready for QA".
+    const merged = [st("Backlog", 0), st("Shaping", 1), st("In development", 2), st("Ready for deployment", 3, "done"), st("Done", 4, "done"), st("Ready for QA", 5)];
+    const g = groupByStatus([card("1", "Backlog"), card("2", "Ready for QA")], merged);
+    expect(g.map((x) => x.status)).toEqual(["Backlog", "Shaping", "In development", "Ready for QA", "Ready for deployment", "Done"]);
   });
 
   test("points add up per group, and a card with none adds nothing", () => {
@@ -204,9 +219,9 @@ describe("a read, as the board draws it", () => {
     expect(r.error).toBeUndefined();
   });
 
-  test("a read kept before the server sent statuses still groups: the statuses its cards wear, open first", () => {
-    const r = boardOf(read({ tasks: [card("1", "Shipped", { statusKind: "done" }), card("2", "Doing"), card("3", "Doing")] }));
-    expect(r.statuses.map((s) => [s.status, s.type])).toEqual([["Doing", "open"], ["Shipped", "done"]]);
+  test("a read with no statuses gets none made from its cards: the order is the workflow's or the stored one", () => {
+    const r = boardOf(read({ tasks: [card("1", "Shipped", { statusKind: "done" }), card("2", "Doing")] }));
+    expect(r.statuses).toEqual([]);
     expect(statusesOfCards([])).toEqual([]);
   });
 
@@ -328,7 +343,7 @@ describe("a control Jira cannot honour is not drawn", () => {
     expect(body).toContain("{source.caps.workspaceSearch && !onLooked && q.trim().length >= 2 && !looksLikeId && (");
     expect(body).toContain("if (!source.caps.workspaceSearch) { if (looksLikeId) void reveal(); return; }");
     expect(body).toContain('`Filter this board · Enter searches ${source.nouns.tracker}`');
-    expect(body).toContain("title={source.nouns.searchTip}");
+    expect(body).toContain("data-tip={source.nouns.searchTip}");
   });
 
   test("a new address for a saved board is offered only where a source can do it", () => {
@@ -374,7 +389,7 @@ describe("a control Jira cannot honour is not drawn", () => {
 });
 
 describe("a Jira card's pull requests", () => {
-  const pr = { number: 2196, title: "Fix timeout", state: "OPEN", url: "https://github.com/acme/orbit/pull/2196", link: "own" as const };
+  const pr = { number: 2196, title: "ORBIT-991 Fix timeout", state: "OPEN", url: "https://github.com/acme/orbit/pull/2196", link: "own" as const };
 
   test("forty cards of a project are one request; a card with none is an answer, not a reason to ask again", async () => {
     asked = [];

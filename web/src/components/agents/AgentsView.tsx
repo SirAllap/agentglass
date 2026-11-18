@@ -28,6 +28,7 @@ import { sortField, waitingItems, projectLabel } from "../../lib/agentsScreen.ts
 import { PolarisWaiting, PullRequestsSection } from "../polaris/PolarisSection.tsx";
 import { usePolarisItems } from "../polaris/usePolaris.ts";
 import { chipLabel, waitingOnYou } from "../../lib/polarisView.ts";
+import { useNow } from "../../lib/visibleInterval.ts";
 
 /**
  * THE AGENTS SCREEN. One screen for what the Lantern and the orchestrator's
@@ -53,20 +54,10 @@ const REFRESH = "Refresh";
 const HOW_KEY = "agentglass.agents.how";
 const readHow = (): boolean => { try { return localStorage.getItem(HOW_KEY) !== "closed"; } catch { return true; } };
 
-function useNow(active: boolean, ms = 30_000): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!active) return;
-    setNow(Date.now());
-    const t = setInterval(() => setNow(Date.now()), ms);
-    return () => clearInterval(t);
-  }, [active, ms]);
-  return now;
-}
 
 export function AgentsView({ active }: { active: boolean }) {
   const d = useAgents(active);
-  const now = useNow(active);
+  const now = useNow(active, 30_000);
   const auto = useSyncExternalStore(housekeeping.subscribe, housekeeping.list, housekeeping.list);
   const chairs = useSyncExternalStore((l) => subscribeLantern(l, false), lanternChairs, lanternChairs);
   const [how, setHow] = useState(readHow);
@@ -245,7 +236,7 @@ export function AgentsView({ active }: { active: boolean }) {
           <div className="cols">
             <WaitingSection items={items} root={root} seat={seat} now={now} stale={stale} onChanged={d.reload} extraCount={polWaiting}
               extra={<PolarisWaiting root={root} settings={pol.settings} items={pol.items} panes={polPanes} onChanged={pol.reload} />} />
-            {!all && <PullRequestsSection root={root} settings={pol.settings} items={pol.items} error={pol.error} onChanged={pol.reload} />}
+            {!all && <PullRequestsSection root={root} settings={pol.settings} items={pol.items} error={pol.error} onChanged={pol.reload} compact />}
             <WorkingSection working={sorted.working} idle={sorted.idle} gone={sorted.gone} hidden={hidden} hiddenDetail={hiddenDetail} onChanged={d.reload} />
             <div className="rules-slot">{rules(firstRun)}</div>
           </div>

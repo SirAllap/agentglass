@@ -3,6 +3,7 @@ import { pct } from "../../../shared/pace.ts";
 import type { UsageDay } from "../../../shared/types.ts";
 import { EQ_SUFFIX, fmtTokens } from "../lib/format.ts";
 import { dayCells, lastWeek, stripState, STRIP_HEIGHT, warmDayStrip } from "../lib/dayStrip.ts";
+import { sharedPhase } from "../lib/sharedPhase.ts";
 
 /** Where the bar should be by now. Drawn inside the bar's own box so it is
  *  measured on the same scale as the fill and cannot drift from it. */
@@ -57,7 +58,7 @@ export function DayStrip({ provider, all }: { provider: string; all?: boolean })
             <span className={`w-full rounded-sm${loading ? " agx-daybar-pulse" : ""}`} style={{
               height: loading ? 8 : state === "data" && c.tokens ? Math.max(2, Math.round((c.tokens / top) * 22)) : 1,
               background: state === "data" && i === 6 ? "var(--primary)" : "color-mix(in srgb, var(--text) 30%, transparent)",
-              animationDelay: loading ? `${i * 80}ms` : undefined,
+              animationDelay: loading ? sharedPhase(1400) : undefined,
             }} />
             <span className="text-[8.5px] leading-none" style={{ color: "var(--text4)" }}>{c.wd}</span>
           </div>

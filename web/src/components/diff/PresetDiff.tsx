@@ -128,7 +128,7 @@ function Inner({ changes, title, path, onBack, backLabel, onClose, root }: Omit<
 
       <div className="flex flex-wrap items-center gap-3 gap-y-1.5 px-4 py-1.5 shrink-0 border-b" style={{ minHeight: 48, borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
         {onBack && (
-          <button onClick={onBack} title={backLabel || "Back"}
+          <button onClick={onBack} data-tip={backLabel || "Back"}
             className="shrink-0 px-2.5 py-1 rounded-lg text-[11px] flex items-center gap-1.5"
             style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: EDGE }}>
             <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" aria-hidden>
@@ -186,7 +186,7 @@ function Inner({ changes, title, path, onBack, backLabel, onClose, root }: Omit<
                     {dir && <span className="text-[10px] truncate shrink" style={{ color: "var(--text4)" }}>{dir}</span>}
                   </span>
                   {c.risks?.length ? (
-                    <span className="shrink-0 flex" title={riskTitle(c.risks)} aria-label={`Review first: ${c.risks.map((r) => r.reason).join("; ")}`}
+                    <span className="shrink-0 flex" data-tip={riskTitle(c.risks)} aria-label={`Review first: ${c.risks.map((r) => r.reason).join("; ")}`}
                       style={{ color: riskColor(c.risks.map((r) => r.kind)) }}>
                       <WarningIcon size={ICON.xs} />
                     </span>
@@ -199,7 +199,7 @@ function Inner({ changes, title, path, onBack, backLabel, onClose, root }: Omit<
               );
             })}
             {inc.more && (
-              <button onClick={inc.showAll} className="w-full py-2 text-[11px] rounded-md hover:bg-white/5" style={{ color: "var(--text3)" }}>
+              <button onClick={inc.showAll} className="w-full py-2 text-[11px] rounded-md agx-hover" style={{ color: "var(--text3)" }}>
                 Show the rest
               </button>
             )}

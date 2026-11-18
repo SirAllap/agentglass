@@ -104,9 +104,25 @@ describe("the components that carry the numbers", () => {
     }
   });
 
+  it("keeps a context menu above the side pane beside a terminal", () => {
+    // The card's "..." in that pane did nothing: ContextMenu took Portal's
+    // default (9999) and its catcher sat at 9998, both under the pane at
+    // 10004, so the menu opened behind the pane and the click never closed it.
+    expect(LAYER.menu).toBeGreaterThan(LAYER.paneSide);
+    expect(read("../src/components/ContextMenu.tsx")).toMatch(/<Portal[^>]*\bz=\{LAYER\.menu\}/);
+  });
+
   it("keeps the numbers in one file", () => {
     // A literal here is a number that cannot be compared with the others, and
     // the comparison is the only thing that decides what covers what.
     expect(read("../src/components/SkillsModal.tsx")).not.toContain("z={10100}");
+  });
+});
+
+describe("bench popovers", () => {
+  it("lifts every portal opened from inside the bench above the bench", () => {
+    expect(LAYER.benchOverlay).toBeGreaterThan(LAYER.bench);
+    const src = readFileSync(new URL("../src/components/bench/FloatingBench.tsx", import.meta.url), "utf8");
+    expect(src).toContain("PortalFloor.Provider value={away || !st.open ? 0 : LAYER.benchOverlay}");
   });
 });

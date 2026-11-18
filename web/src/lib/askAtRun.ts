@@ -94,21 +94,21 @@ export function togglePick(p: Picked, m: ListMember): Picked {
   return isPicked(p, m) ? p.filter((x) => !(x.kind === "me" ? !!m.me : x.id === m.id)) : [...p, m.me ? { kind: "person", id: m.id, name: m.name } : { kind: "person", id: m.id, name: m.name }];
 }
 
-/** "Sam R." for "Sam Rivera": enough to tell people apart in a line, short enough to fit two or three. */
+/** "Sam O." for "Sam Orbit": enough to tell people apart in a line, short enough to fit two or three. */
 export function shortName(name: string): string {
   const w = name.trim().split(/\s+/);
   return w.length < 2 ? w[0] ?? "" : `${w[0]} ${w[w.length - 1]![0]!.toUpperCase()}.`;
 }
 const shorts = (p: Picked): string[] => p.map((x) => (x.kind === "me" ? "you" : shortName(x.name)));
 
-/** The trigger's words: "nobody", "you", "Sam R.", "Sam R., Ada L. +1". */
+/** The trigger's words: "nobody", "you", "Sam O.", "Sam O., Ada L. +1". */
 export function pickName(p: Picked): string {
   const n = shorts(p);
   if (!n.length) return "nobody";
   return n.length <= 2 ? n.join(", ") : `${n.slice(0, 2).join(", ")} +${n.length - 2}`;
 }
 
-/** The sentence's words: "nobody", "Sam R.", "Sam R. and Ada L.", "Sam R., Ada L. and Leo M.". */
+/** The sentence's words: "nobody", "Sam O.", "Sam O. and Ada L.", "Sam O., Ada L. and Leo M.". */
 export function pickSentence(p: Picked): string {
   const n = shorts(p);
   return !n.length ? "nobody" : n.length === 1 ? n[0]! : `${n.slice(0, -1).join(", ")} and ${n[n.length - 1]}`;

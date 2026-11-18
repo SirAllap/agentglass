@@ -138,7 +138,7 @@ describe("the app window as the lane manager", () => {
   });
 
   test("the Browser sidebar carries the quiet row, and the row says who, not which", () => {
-    expect(code(PANEL)).toContain("<LanesRow />");
+    expect(code(PANEL)).toContain("<LanesRow active={viewOn} />");
     expect(lanesLabel([])).toBeNull();
     const row = { id: "l1", container: "private" as const, created: 0, lastAsk: 0 };
     expect(lanesLabel([{ ...row, as: "orbit" }, { ...row, id: "l2", as: "orbit" }, { ...row, id: "l3", as: "acme" }])).toBe("3 lanes · orbit, acme");

@@ -3,10 +3,12 @@
  * stages, one rail of limits, and every door under them.
  *
  * The drawing sits at the top with the doors under it, in six tabs. Everything is
- * a draft until Save changes; Discard puts the stored layer back. The old
+ * saved the moment it is changed (a toast offers Undo; a door that would newly act
+ * without asking waits for an inline question first). The old
  * standalone Polaris card is replaced by this view.
  */
 import { Fragment, useEffect, useRef, useState } from "react";
+import { pushSaveToast } from "../settings/save/saveToasts.ts";
 import { Switch } from "../SettingRow.tsx";
 import { Button, Segmented } from "../workspace/Chrome.tsx";
 import { ICON } from "../../lib/iconSize.ts";
@@ -19,18 +21,19 @@ import { askBuilderOnBench } from "../../lib/lanternAsk.ts";
 import { JOB } from "../../lib/benchJobs.ts";
 import { api } from "../../lib/api.ts";
 import {
-  ALSO_NEVER, DOOR_IDS, DOOR_MODES, GUARDRAILS, PRESETS,
+  ALSO_NEVER, DOOR_IDS, DOOR_MODES, GUARDRAILS, PRESETS, doorsOn, isUnwired,
   type DoorId, type DoorValue, type PresetId, type SettingsAnswer,
 } from "../../../../shared/polaris.ts";
 import { DOOR_COPY, GROUPS } from "../../lib/polarisCopy.ts";
 import {
-  LIMITS, assistState, assistPrompt, doorActive, limitStep, markOf, onNewSettings, railWords, rowSource, scopeOf, showsParams, twoWay,
+  LIMITS, assistState, assistPrompt, doorActive, enabledProblemOf, limitStep, markOf, onNewSettings, railWords, rowSource, scopeOf, showsParams, twoWay,
   type AssistState,
 } from "../../lib/polarisView.ts";
 import {
   consentSentence, draftedDoors, draftState, patchDoor, pickPreset, rebaseDraft, safestPosition, saveCommit, savePlan, toggleEnabled, useGlobalDoors,
   type DraftState,
 } from "../../lib/polarisDraft.ts";
+import { runSave, settle } from "../../lib/polarisAutosave.ts";
 import { DoorParams } from "./DoorParams.tsx";
 import { usePolarisSettings } from "./usePolaris.ts";
 import { TAB_KEYS, tabAt } from "../../lib/polarisKeys.ts";
@@ -47,7 +50,7 @@ const TABS = [
 type TabId = (typeof TABS)[number]["id"];
 
 const PRESET_COPY: Record<PresetId, { said: string; foot: string }> = {
-  watchOnly: { said: "It looks and reports. Every pull request waits for you.", foot: "Watching · Signals" },
+  watchOnly: { said: "It looks, sorts and puts the signals on the item, reads only. Every pull request waits for you.", foot: "Watching · Signals, reads only" },
   guided: { said: "It reads a review, fixes what is small, and asks before it lands anything.", foot: "Watching · Signals · Landing" },
   fullAutopilot: { said: "It takes a pull request to a merge when the checks are green.", foot: "All six blocks" },
 };
@@ -63,7 +66,6 @@ const SHORT: Record<DoorId, string> = {
 
 const active = doorActive;
 const groupOf = (tab: TabId) => GROUPS.find((g) => g.id === tab);
-const STALE = "The stored setting changed while you were editing. Your draft is kept; Discard shows the stored one.";
 
 /** Assisted setup: one press, one agent session, and every wider or live position comes back as an approval request the person answers. */
 function AssistedSetup({ root }: { root: string }) {
@@ -114,6 +116,7 @@ function DoorLine({ door, value, changed, source, disabled, onMode, onInfo }: {
         <div className="agx-pol-row-name">
           {copy.name}
           {source && <span className="agx-pol-source" data-layer={source === "Not set" ? "default" : "global"}>{source}</span>}
+          {isUnwired(door, value.mode) && <span className="agx-pol-mark-word" title="The setting is stored; nothing acts on it yet.">Not wired yet</span>}
           {mark && <span className="agx-pol-mark-word" data-live={mark === "Live" ? "" : undefined}>{mark}</span>}
           {changed && <span className="agx-pol-changed">changed</span>}
         </div>
@@ -167,7 +170,6 @@ export function PolarisView({ root }: { root: string }) {
   const [tab, setTab] = useState<TabId>("Watching");
   const [info, setInfo] = useState<DoorId | null>(null);
   const [note, setNote] = useState("");
-  const [stale, setStale] = useState(false);
   const [menu, setMenu] = useState<MenuState>(null);
   /** The doors Save is waiting for the person's word on: a live position that was not one before. */
   const [confirm, setConfirm] = useState<DoorId[] | null>(null);
@@ -175,11 +177,10 @@ export function PolarisView({ root }: { root: string }) {
   const presetRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   // The question takes the focus and gives it back to Save when it closes, so a keyboard user is not left behind it.
   const consentRef = useRef<HTMLDivElement>(null);
-  const saveRef = useRef<HTMLButtonElement>(null);
   const asked = useRef(false);
   useEffect(() => {
     if (confirm) { asked.current = true; consentRef.current?.focus(); }
-    else if (asked.current) { asked.current = false; saveRef.current?.focus(); }
+    else if (asked.current) { asked.current = false; tabRefs.current[tab]?.focus(); }
   }, [confirm]);
   // One plan decides what Save writes, what the rows show, and whether a live door needs consent.
   const plan = state ? savePlan(state, scope) : null;
@@ -187,7 +188,6 @@ export function PolarisView({ root }: { root: string }) {
   const rebase = (next: SettingsAnswer) => {
     setState(draftState(next));
     setConfirm(null);
-    setStale(false);
   };
 
   useEffect(() => {
@@ -196,7 +196,6 @@ export function PolarisView({ root }: { root: string }) {
       // from the answer that just went away is withdrawn and asked again.
       setState((s) => (s && answer ? rebaseDraft(s, answer, scope) : s));
       setConfirm(null);
-      setStale(true);
       return;
     }
     if (!answer) { setState(null); return; }
@@ -213,7 +212,7 @@ export function PolarisView({ root }: { root: string }) {
   // The drawing's own keys: Alt+1..6 jump between blocks, and Esc closes the example or the question.
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && confirm) { setConfirm(null); return; }
+      if (e.key === "Escape" && confirm) { cancelAsk.current(); return; }
       if (e.key === "Escape" && info) { setInfo(null); return; }
       const t = e.target as HTMLElement | null;
       if (t?.closest?.("input, textarea, select, [contenteditable='true']")) return;
@@ -223,6 +222,15 @@ export function PolarisView({ root }: { root: string }) {
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, [info, confirm]);
+
+  /* Instant save: a change writes as soon as it is made. A door that would newly act without asking
+     waits for the inline question first (loosening asks). `autoRef` is set below, once the page has data. */
+  const autoRef = useRef<() => void>(() => {});
+  // The newest draft, for a save that ends after the person has already clicked again; and Cancel, shared with Esc.
+  const latestRef = useRef<DraftState | null>(null);
+  latestRef.current = state;
+  const cancelAsk = useRef<() => void>(() => {});
+  useEffect(() => { if (plan?.dirty) autoRef.current(); }, [state]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!answer || !state || !plan) {
     return (
@@ -257,22 +265,21 @@ export function PolarisView({ root }: { root: string }) {
   /** One Save: the consent it asked for and the layer it writes come from this one plan. */
   const commit = async (allowed: readonly DoorId[]) => {
     setNote("");
-    const { plan: p, layer } = saveCommit(state, answer, scope);
-    // The base moved under the confirmation between the question and this click: ask again.
-    if (p.consent.some((d) => !allowed.includes(d))) { setConfirm(p.consent); return; }
-    const wasEnabled = state.base.enabled;
-    let cur = answer;
-    if (p.chosen || p.resets.size > 0 || Object.keys(p.edits).length > 0) {
-      const r = await save({ settings: layer });
-      if (r.error) { setNote(r.error); return; }
-      if (r.answer) cur = r.answer;
-    }
-    if (state.draft.enabled !== wasEnabled) {
-      const r = await save({ enabled: state.draft.enabled });
-      if (r.error) { setNote(r.error); return; }
-      if (r.answer) cur = r.answer;
-    }
-    rebase(cur);
+    const sent = state;
+    const before = answer;
+    const run = await runSave(sent, answer, scope, allowed, save);
+    if (run.kind === "ask") { setConfirm(run.consent); return; }
+    // A change made while the save was in flight stays; a failure puts the rows back on what is stored.
+    const next = settle(run, sent, latestRef.current ?? sent, scope);
+    if (next) { setState(next); setConfirm(null); }
+    if (run.kind === "failed") { setNote(run.error); return; }
+    pushSaveToast("Saved", () => { setConfirm(null); setState((s) => s && { ...s, draft: draftState(before).draft, resets: new Set() }); });
+  };
+
+  cancelAsk.current = () => { setConfirm(null); setState(draftState(answer)); };
+  autoRef.current = () => {
+    if (busy || confirm) return;
+    askSave();
   };
 
   /** Save is the consent for every door the rows already show live; one that was not live before asks here first. */
@@ -281,14 +288,6 @@ export function PolarisView({ root }: { root: string }) {
     if (!p.dirty) return;
     if (p.consent.length > 0) { setConfirm(p.consent); return; }
     void commit([]);
-  };
-
-  const discard = () => {
-    setState(draftState(answer));
-    setConfirm(null);
-    setNote("");
-    setStale(false);
-    setInfo(null);
   };
 
   const activeTab = TABS.find((t) => t.id === tab)!;
@@ -300,7 +299,7 @@ export function PolarisView({ root }: { root: string }) {
   const own = ownCountOf(tab);
   const stageCount = (id: TabId) => {
     const list = groupOf(id)?.doors ?? [];
-    return `${list.filter((d) => active(d, doors[d])).length} of ${list.length} on`;
+    return `${doorsOn(doors, list)} of ${list.length} on`;
   };
   // The one preset the arrow keys start from: the chosen one, or the first while the setting reads Custom.
   const presetFocus = PRESET_IDS.includes(draft.preset as PresetId) ? (draft.preset as PresetId) : PRESET_IDS[0]!;
@@ -318,6 +317,9 @@ export function PolarisView({ root }: { root: string }) {
           </div>
           <div className="agx-pol-head-actions">
             <AssistedSetup root={root} />
+            {enabledProblemOf(answer) && (
+              <span className="agx-pol-off-chip" role="status" title="The stored switch is not true or false. It reads as off and is not rewritten.">invalid value in config</span>
+            )}
             <button type="button" role="switch" aria-checked={draft.enabled} aria-label="Polaris" disabled={busy}
               className="agx-switch-hit agx-pol-power" onClick={() => setState((s) => s && toggleEnabled(s))}>
               <Switch on={draft.enabled} /><span>{draft.enabled ? "On" : "Off"}</span>
@@ -329,7 +331,7 @@ export function PolarisView({ root }: { root: string }) {
           <span className="agx-pol-label">Preset</span>
           <span className="agx-pol-chip">
             {draft.preset === "custom" || draft.preset === "none" ? "Custom" : PRESETS[draft.preset as PresetId].label}
-            {plan.dirty ? " · not saved" : base.preset !== "none" && draft.preset === base.preset ? " · in force" : ""}
+            {base.preset !== "none" && draft.preset === base.preset ? " · in force" : ""}
           </span>
           <span className="agx-pol-counts">{DOOR_IDS.length} doors · {PRESET_IDS.length} presets</span>
         </div>
@@ -408,7 +410,7 @@ export function PolarisView({ root }: { root: string }) {
         {/* The doors that act without asking, named where Save is, not under 17 rows: the person reads it before they press. */}
         {plan.dirty && plan.live.length > 0 && (
           <div className="agx-pol-live" role="status">
-            {liveNames} would act without asking once this draft is saved and Polaris is on. Save changes is your consent.
+            {liveNames} would act without asking once you allow it and Polaris is on.
           </div>
         )}
 
@@ -430,21 +432,15 @@ export function PolarisView({ root }: { root: string }) {
                 className="agx-pol-tab" data-current={tab === t.id ? "" : undefined} onClick={() => setTab(t.id)}>{t.id}</button>
             ))}
           </div>
-          <div className="agx-pol-savebar">
-            <span className="agx-pol-saving" role={note ? "alert" : "status"}>
-              {note ? note : stale ? STALE : plan.dirty ? `${plan.unsaved} change${plan.unsaved === 1 ? "" : "s"} not saved` : "All changes saved"}
-            </span>
-            <Button size="compact" disabled={!plan.dirty || busy} onClick={discard}>Discard</Button>
-            <Button size="compact" tone="primary" buttonRef={saveRef} pending={busy} disabled={!plan.dirty || busy} onClick={askSave}>Save changes</Button>
-          </div>
+          <span className="agx-pol-saving" role={note ? "alert" : "status"}>{note}</span>
         </div>
         {confirm && (
           <div className="agx-pol-consent" role="alertdialog" aria-label="Confirm the doors that act without asking" ref={consentRef} tabIndex={-1}>
             <p className="agx-pol-consent-head">{confirm.map((d) => DOOR_COPY[d].name).join(", ")} would act without asking once saved and Polaris is on.</p>
             <ul>{confirm.map((d) => <li key={d}>{consentSentence(d, plan.effective)}</li>)}</ul>
             <div className="agx-pol-consent-acts">
-              <Button size="compact" onClick={() => setConfirm(null)}>Cancel</Button>
-              <Button size="compact" tone="primary" pending={busy} disabled={busy} onClick={() => void commit(confirm)}>Save and allow it</Button>
+              <Button size="compact" onClick={cancelAsk.current}>Cancel</Button>
+              <Button size="compact" tone="primary" pending={busy} disabled={busy} onClick={() => void commit(confirm)}>Allow it</Button>
             </div>
           </div>
         )}
@@ -516,7 +512,7 @@ export function PolarisView({ root }: { root: string }) {
           <span>{activeTab.foot}</span>
           <span className="agx-pol-grow" />
           <span><b>{tab === "Limits" ? `${LIMITS.length} limits` : tab === "Guardrails" ? `${GUARDRAILS.length} rules` : `${layerDoors.length} doors`}</b>
-            {tab !== "Limits" && tab !== "Guardrails" ? ` · ${layerDoors.filter((d) => active(d, doors[d])).length} on in ${draft.preset === "custom" || draft.preset === "none" ? "this setting" : PRESETS[draft.preset as PresetId].label}` : ""}
+            {tab !== "Limits" && tab !== "Guardrails" ? ` · ${doorsOn(doors, layerDoors)} on in ${draft.preset === "custom" || draft.preset === "none" ? "this setting" : PRESETS[draft.preset as PresetId].label}` : ""}
           </span>
         </div>
       </div>

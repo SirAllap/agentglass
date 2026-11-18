@@ -15,6 +15,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Portal } from "./Portal.tsx";
+import { LAYER } from "../lib/layers.ts";
 import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { menuEventGuards } from "../lib/menuEvents.ts";
 import { isMenuKey, menuIndex } from "../lib/menuNav.ts";
@@ -81,7 +82,7 @@ export function ContextMenu({ x, y, onClose, children, width, label, pop, plain 
   }, [onClose]);
 
   return (
-    <Portal>
+    <Portal z={LAYER.menu}>
       {/* `display: contents`: a wrapper that exists only to hold the guards, and
           lays out as nothing. Without it every event in here bubbled through the
           React tree to whatever opened the menu — see lib/menuEvents.ts. */}

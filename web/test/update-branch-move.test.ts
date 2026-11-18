@@ -142,7 +142,7 @@ describe("the Update branch notice in the merge box", () => {
   beforeAll(() => { notice = code(fn(panel, "function UpdateBranchNotice(")); });
 
   it("is its own full-width row under the buttons, for every kind", () => {
-    expect(code(panel)).toMatch(/noticeNode=\{noticeNode\}/);
+    expect(code(panel)).toMatch(/<MergeCtx\.Provider value=\{\{[^}]*\bnoticeNode\b/);
     expect(code(panel)).toMatch(/const noticeNode = canUpdate && updateMove\.notice \? <UpdateBranchNotice notice=\{updateMove\.notice\} root=\{root\} \/> : undefined;/);
     expect(code(box)).toMatch(/\{noticeNode && <div className="basis-full /);
   });
@@ -160,8 +160,8 @@ describe("the Update branch notice in the merge box", () => {
   });
 
   it("draws the worktree and the branch as chips: the worktree never gives way, the branch truncates with its name on hover", () => {
-    expect(notice).toMatch(/data-notice-worktree className="shrink-0 whitespace-nowrap[^"]*" title=\{n\.worktree\}/);
-    expect(notice).toMatch(/data-notice-branch className="truncate min-w-0[^"]*" title=\{n\.branch\}/);
+    expect(notice).toMatch(/data-notice-worktree className="shrink-0 whitespace-nowrap[^"]*" data-tip=\{n\.worktree\}/);
+    expect(notice).toMatch(/data-notice-branch className="truncate min-w-0[^"]*" data-tip=\{n\.branch\}/);
   });
 
   it("has one button, and it goes inside the app, to where the lib says", () => {

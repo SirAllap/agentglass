@@ -2,12 +2,13 @@
 // the virtual list, the legend with the highlighted row's full path, and the
 // footer with "N ticked of M" and Open N. The footer and the legend are fixed
 // below the list, so ticking never moves a button.
-import { useMemo, useRef, type ReactNode } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { GitRepoRef } from "../../../../shared/types.ts";
 import { VirtualList } from "../finder/machine/VirtualList.tsx";
 import { SearchIcon, WarningIcon } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { INPUT, Button } from "../workspace/Chrome.tsx";
+import { projectCols } from "../../lib/projectsCols.ts";
 import { indexOfRoot, queryTerms, toggleGroup, type Group, type Item } from "../../lib/projectsView.ts";
 import { Foot, HAIR, Kbd, Status, StateCard, Why } from "./ui.tsx";
 import { ColumnHeads, GroupHead, ProjectRow, ROW_H } from "./Rows.tsx";
@@ -35,6 +36,15 @@ export function ProjectList(p: ListProps) {
   const keep = indexOfRoot(p.items, p.hot);
   const lastKeep = useRef(-1);
   if (keep >= 0) lastKeep.current = keep;
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [w, setW] = useState(10_000);
+  useLayoutEffect(() => {
+    const el = boxRef.current; if (!el) return;
+    setW(el.clientWidth || 10_000);
+    const ro = new ResizeObserver(() => setW(el.clientWidth || 10_000));
+    ro.observe(el); return () => ro.disconnect();
+  }, []);
+  const cols = useMemo(() => projectCols(w), [w]);
   const render = (i: number) => {
     const it = p.items[i]!;
     if (it.t === "head") {
@@ -51,7 +61,7 @@ export function ProjectList(p: ListProps) {
     const r = it.r;
     return (
       <div key={`r:${it.g.key}:${r.root}`} style={{ height: ROW_H }}>
-        <ProjectRow r={r} tabs={p.tabs[r.root] ?? 0} query={p.query} now={p.now} current={p.workspaces.includes(r.root)} hotRow={p.hot === r.root} ticked={p.ticked.includes(r.root)}
+        <ProjectRow cols={cols} r={r} tabs={p.tabs[r.root] ?? 0} query={p.query} now={p.now} current={p.workspaces.includes(r.root)} hotRow={p.hot === r.root} ticked={p.ticked.includes(r.root)}
           hidden={p.hidden.includes(r.root) && !p.workspaces.includes(r.root)} busy={p.busy} onTick={() => p.toggleTick(r.root)} onOpen={() => p.onOpen(r.root)} onHot={() => p.hot !== r.root && p.setHot(r.root)}
           onForget={() => p.onForget(r)} onMenu={(x, y) => p.onMenu(r, x, y)} />
       </div>
@@ -59,7 +69,7 @@ export function ProjectList(p: ListProps) {
   };
 
   return (
-    <div className="flex flex-col flex-1 min-w-0 min-h-0">
+    <div ref={boxRef} className="flex flex-col flex-1 min-w-0 min-h-0">
       <label className="relative flex items-center pm-mx mt-2.5 mb-2.5 shrink-0">
         <span className="absolute left-3 flex" style={{ color: "var(--text3)" }}><SearchIcon size={ICON.md} /></span>
         <input ref={p.searchRef} value={p.query} onChange={(e) => p.setQuery(e.target.value)} placeholder={`Search ${p.total} project${p.total === 1 ? "" : "s"} by name, path or branch`}
@@ -67,7 +77,7 @@ export function ProjectList(p: ListProps) {
           className={`w-full ${INPUT}`} style={{ paddingLeft: 38, paddingRight: 34, height: 40, fontSize: 13, borderRadius: 10 }} />
         <span className="absolute right-3 flex"><Kbd>/</Kbd></span>
       </label>
-      <ColumnHeads />
+      <ColumnHeads cols={cols} />
 
       <div className="flex flex-col flex-1 min-h-0" style={{ borderTop: HAIR }}>
         {p.loading ? (
@@ -95,7 +105,7 @@ export function ProjectList(p: ListProps) {
         <div className="pm-px pb-1.5 text-[11px] font-mono flex items-center gap-2 min-w-0" style={{ minHeight: 22, color: "var(--text3)" }} data-fullpath>
           {hotItem && hotItem.t === "row" ? (
             <>
-              <span className="min-w-0" style={{ overflowWrap: "anywhere", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }} title={hotItem.r.root}>{hotItem.r.root}</span>
+              <span className="min-w-0" style={{ overflowWrap: "anywhere", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }} data-tip={hotItem.r.root}>{hotItem.r.root}</span>
               <button className="shrink-0 font-sans font-semibold text-[11px] bg-transparent border-0 p-0 cursor-pointer" style={{ color: "var(--primary)" }} onClick={() => p.onCopy(hotItem.r.root)}>Copy path</button>
               {hotItem.r.branch && hotItem.r.branch.length > 18 && <span className="shrink-0 font-sans" style={{ color: "var(--text4)" }}>· {hotItem.r.branch}</span>}
             </>

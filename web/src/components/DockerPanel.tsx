@@ -21,7 +21,7 @@ import { requestBrowserNav } from "../lib/browserNav.ts";
 import { displayName, READ_ONLY_REASON, type MenuItem, type RowVerb } from "../lib/dockerState.ts";
 import type { Answer } from "../lib/dockerTriage.ts";
 import {
-  bulkAsk, bulkTargets, freshness, groupsView, LAYOUT_KEY, navCounts, portCell, readLayout, scopeLine, situation, stepOf,
+  bulkAsk, bulkTargets, freshness, groupsView, LAYOUT_KEY, navCounts, portCell, readLayout, scopeLine, scopeNote, situation, stepOf,
   type GroupBy, type Layout,
 } from "../lib/dockerView.ts";
 import { useDockerData } from "../lib/useDockerData.ts";
@@ -33,19 +33,21 @@ import { JOB } from "../lib/benchJobs.ts";
 import { BenchJobLine, useBenchJob } from "./BenchJobLine.tsx";
 import { DOCKER_CSS } from "./docker/dockerCss.ts";
 import { DockerHeader } from "./docker/Header.tsx";
+import { humanSize } from "../../../shared/dockerSize.ts";
+import { diskMath } from "../lib/dockerDisk.ts";
 import { Navigator, type View } from "./docker/Navigator.tsx";
 import { ContainersList } from "./docker/ContainersList.tsx";
 import { ConsoleDock } from "./docker/ConsoleDock.tsx";
 import { SplitList } from "./docker/SplitList.tsx";
 import { DaemonBanner, DaemonCard, EmptyCard, ListSkeleton, NotInstalled } from "./docker/States.tsx";
 import { useDockerActions } from "./docker/useDockerActions.ts";
+import { noteRestarts, restartsInWindow, type RestartSample } from "../lib/dockerRestarts.ts";
 import { useDetailData } from "./docker/useDetailData.ts";
 
 /** Which stacks you left collapsed. Per machine, not per project. */
 const STACKS_OPEN_KEY = "agx.docker.stacksOpen";
 /** Stack or worktree: a way of thinking rather than a thing you toggle while you work. */
 const GROUP_KEY = "agx.docker.groupBy";
-const DENSITY_KEY = "agentglass.docker.dense";
 const CONSOLE_KEY = "agentglass.docker.console";
 /** The docker command each list view reads, for its error card. */
 const LIST_CMD = { images: "image ls", volumes: "volume ls", networks: "network ls", disk: "system df" } as const;
@@ -70,7 +72,6 @@ export function DockerView({ active, onOpenBrowser }: {
   const disk = useDiskData(active && (view === "images" || view === "volumes" || view === "disk"), changed.images + changed.volumes);
   const [layout, setLayoutState] = useState<Layout>(() => readLayout(read));
   const [groupBy, setGroupByState] = useState<GroupBy>(() => (read(GROUP_KEY) === "worktree" ? "worktree" : "stack"));
-  const [dense, setDense] = useState(() => read(DENSITY_KEY) === "1");
   const [q, setQ] = useState("");
   const [answer, setAnswer] = useState<Answer | null>(null);
   const [openMap, setOpenMap] = useState<Record<string, boolean>>(() => {
@@ -85,12 +86,18 @@ export function DockerView({ active, onOpenBrowser }: {
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [consoleH, setConsoleH] = useState<number>(() => Math.min(0.85, Math.max(0.08, Number(read(CONSOLE_KEY)) || 0.1)));
   useEffect(() => write(CONSOLE_KEY, String(consoleH)), [consoleH]);
-  useEffect(() => write(DENSITY_KEY, dense ? "1" : "0"), [dense]);
   useEffect(() => { if (active) requestAnimationFrame(() => frameRef.current?.focus()); }, [active]);
 
   const sit = situation({ cap, ov, good, liveDown, failed });
   const all = good?.containers ?? [];
   const readOnly = good ? !good.writeEnabled : false;
+  // Docker only reports a running total of restarts; keep each container's readings so "in 10 min" is true.
+  const restartLog = useRef(new Map<string, RestartSample[]>());
+  useMemo(() => {
+    const ids = new Set(all.map((c) => c.id));
+    for (const id of [...restartLog.current.keys()]) if (!ids.has(id)) restartLog.current.delete(id);
+    for (const c of all) if (c.restarts !== undefined) restartLog.current.set(c.id, noteRestarts(restartLog.current.get(c.id) ?? [], Date.now(), c.restarts));
+  }, [all]);
   const groups = useMemo(() => groupsView(all, { groupBy, q, answer, open: openMap }), [all, groupBy, q, answer, openMap]);
   const split = layout === "split";
   // What j/k walks: what is on screen, so a folded stack is skipped.
@@ -251,7 +258,7 @@ export function DockerView({ active, onOpenBrowser }: {
         : <>
           {down && <div style={{ padding: "12px 18px 0" }}><DaemonBanner error={ov?.error} onTry={onTry} /></div>}
           {view === "disk" ? <Disk state={disk} images={good.images} writeEnabled={!readOnly} flash={flash} />
-            : view === "images" ? <Images images={good.images} containers={all} orphans={disk.d?.orphans ?? []} q={q} readOnly={readOnly || down}
+            : view === "images" ? <Images images={good.images} containers={all} orphans={disk.d?.orphans ?? []} disk={disk.d} left={disk.left ?? []} q={q} readOnly={readOnly || down}
                 flash={flash} onClear={() => setQ("")} onGoContainer={goContainer} onShowDisk={() => setView("disk")} />
             : view === "volumes" ? <Volumes volumes={good.volumes} containers={all} sizes={sizes} sizeError={disk.error} q={q} readOnly={readOnly || down}
                 flash={flash} onClear={() => setQ("")} onGoContainer={goContainer} />
@@ -262,7 +269,7 @@ export function DockerView({ active, onOpenBrowser }: {
 
   function listPane() {
     return (
-      <ContainersList all={all} groups={groups} stats={stats} readOnly={readOnly} busy={busy} dense={dense} selected={selected?.id ?? null}
+      <ContainersList all={all} groups={groups} stats={stats} readOnly={readOnly} busy={busy} selected={selected?.id ?? null}
         answer={answer} onAnswer={setAnswer} groupBy={groupBy} q={q} onClearQ={() => setQ("")}
         confirm={confirm} onRowConfirm={onRowConfirm} onOpen={open} onVerb={(c, v: RowVerb) => void request(c, v)}
         onMenuPick={onMenuPick} onGroup={(verb, ids) => void onGroup(verb, ids)}
@@ -277,6 +284,7 @@ export function DockerView({ active, onOpenBrowser }: {
         <Detail c={c} stat={stats[c.id]} env={detail.env} config={detail.config} top={detail.top} error={detail.error}
           readOnly={readOnly || down} tail={tail} onTail={setTail} onOpenPort={openPort}
           open={sections} onToggle={(id) => setSections((s) => ({ ...s, [id]: !s[id] }))} others={all}
+          recentRestarts={selected && selected.restarts !== undefined ? restartsInWindow(restartLog.current.get(selected.id) ?? [], selected.restarts) : null}
           bar={{
             step, showStep: !split, readOnly: readOnly || down, busy: busy === c.id, onStep: (id) => setSelId(id),
             onVerb: (v) => void request(c, v), onMenuPick: (v) => onMenuPick(c, v),
@@ -304,7 +312,7 @@ export function DockerView({ active, onOpenBrowser }: {
       <DockerHeader situation={sit} version={good?.version ?? null}
         fresh={freshness({ situation: sit, at: good?.at, lastGoodAt: good?.at, now: Date.now() })}
         scope={scopeLine(good?.scope, all.length)} q={q} onQ={setQ} groupBy={groupBy} onGroupBy={setGroupBy}
-        layout={layout} onLayout={setLayout} dense={dense} onDense={() => setDense((v) => !v)}
+        layout={layout} onLayout={setLayout}
         readOnly={readOnly} onRefresh={() => void refresh()} refreshing={view === "disk" ? disk.measuring : refreshing} section={view}
         onMeasure={() => void disk.measure(true)}
         analyze={{ onClick: () => void analyze(), disabled: gate.disabled, pending: analyzing, tip: gate.disabled ? gate.reason : analyzeTitle(agentName) }}
@@ -313,7 +321,8 @@ export function DockerView({ active, onOpenBrowser }: {
       {workspace && dockerJob && <div style={{ padding: "6px 12px" }}><BenchJobLine root={workspace} job={JOB.dockerAnalyze} claim="docker cleanup" what="Docker cleanup" /></div>}
       {sit === "notinstalled" ? <NotInstalled reason={cap?.reason} onCheck={loadCapability} /> : (
         <div className="flex-1 min-h-0 flex">
-          <Navigator section={view} counts={navCounts(good)} onPick={(v) => { setView(v); setDetailOpen(false); }} />
+          <Navigator section={view} counts={navCounts(good)} diskSize={disk.d ? humanSize(diskMath(disk.d, good?.images ?? []).total) : null}
+            scopeNote={scopeNote(good?.scope)} onPick={(v) => { setView(v); setDetailOpen(false); }} />
           {lead}
         </div>
       )}

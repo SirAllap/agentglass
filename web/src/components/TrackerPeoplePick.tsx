@@ -34,12 +34,14 @@ const face = (m: { name: string; avatar?: string; initials?: string; color?: str
  * is never presented as everybody: the box always says to type more.
  * ClickUp's several-people picker is `CardPeoplePick`, and is not this.
  */
-export function TrackerPeoplePick({ tracker, task, query, onSaid, onTask, bare }: {
+export function TrackerPeoplePick({ tracker, task, query, onSaid, onTask, bare, repo }: {
   tracker: Tracker; task: ProviderTask; query: string; onSaid: (s: string) => void;
   /** Drawn inside a fact tile, which is already the box: no border of its own, the whole tile is the button. */
   bare?: boolean;
   /** The card as it is after a write, for a list that holds its own copy. */
   onTask?: (t: ProviderTask) => void;
+  /** The repo the card is seen from: the account it chose lists and sets the people. */
+  repo?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -56,22 +58,22 @@ export function TrackerPeoplePick({ tracker, task, query, onSaid, onTask, bare }
     let live = true;
     // Typing waits for a pause; opening with nothing typed asks at once.
     const t = setTimeout(() => {
-      void ask(task, q).then((r) => { if (live) setRes(r); }).catch(() => { if (live) setRes({ ok: false, error: "Could not reach the server" }); });
+      void ask(task, q, "", repo).then((r) => { if (live) setRes(r); }).catch(() => { if (live) setRes({ ok: false, error: "Could not reach the server" }); });
     }, q.trim() ? PEOPLE_WAIT_MS : 0);
     return () => { live = false; clearTimeout(t); };
-  }, [open, q, ask, task.customId, task.id]);
+  }, [open, q, ask, task.customId, task.id, repo]);
 
   if (!ask || !write || tracker.caps.multiAssignee) return null;
   const list: PersonOption[] = res?.ok ? (res.data ?? []) : [];
   // PeoplePick draws ListMembers; the row's position is its handle back to the person.
-  const members: ListMember[] = list.map((p, i) => ({ id: i, name: p.name, initials: initialsOf(p.name), ...(p.avatar ? { avatar: p.avatar } : null) }));
+  const members: ListMember[] = list.map((p, i) => ({ id: i, name: p.name, initials: initialsOf(p.name), ...(p.avatar ? { avatar: p.avatar } : null), ...(p.email ? { email: p.email } : null) }));
   const on = task.people?.[0];
 
   const send = async (to: string | null, label: string) => {
     if (saving !== null) return;
     setSaving(to ?? "");
     onSaid(to ? "assigning…" : "taking off…");
-    const r = await write(task, { set: to });
+    const r = await write(task, { set: to }, repo);
     setSaving(null);
     onSaid(r.ok ? label : `!${r.conflict ? "somebody changed this card while you had it open" : r.error || "the tracker refused that"}`);
     if (r.ok && r.task) { putCard(query, r.task); onTask?.(r.task); setOpen(false); }
@@ -106,7 +108,9 @@ export function TrackerPeoplePick({ tracker, task, query, onSaid, onTask, bare }
           onPick={pick}
           onClose={() => setOpen(false)}
           face={face}
-          empty={res && !res.ok ? res.error : q.trim() ? `Nobody found for “${q.trim()}”.` : "Type a name to find somebody."}
+          source="Jira"
+          error={res && !res.ok ? res.error : null}
+          empty={q.trim() ? `Nobody found for “${q.trim()}”.` : "Type a name to find somebody."}
           footer={
             <div className="flex flex-col">
               <ListRow disabled={!on || saving !== null} onClick={() => { void send(null, "unassigned"); }}>Nobody</ListRow>

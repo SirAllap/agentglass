@@ -64,6 +64,11 @@ export type TermIssue = {
   /** A one-off permission mode for this run, over the person's setting. The
    *  server turns it into the engine's own flags (launchperm.ts). */
   mode?: LaunchMode;
+  /** The card this tab is for. Two cards can share a display name; this is
+   *  what says which work is in the window. */
+  cardId?: string;
+  /** What a non-card ask is about (a machine item), in place of a card id. */
+  subject?: string;
   n: number;
 };
 
@@ -114,9 +119,9 @@ export function resolveTermIssue(n: number, r: IssueResult): void {
  *  UNTAKEN_MS with the request still here nobody is listening (it is taken
  *  back, so it cannot start an agent hours later when a terminal opens), and
  *  after UNANSWERED_MS with it sent the server did not reply. */
-export function requestTermIssue(cwd: string, name: string, prompt: string, agent: boolean, yolo = false, title = "", model = "", effort = "", reuse = false, kind = "", mode?: LaunchMode): Promise<IssueResult> {
+export function requestTermIssue(cwd: string, name: string, prompt: string, agent: boolean, yolo = false, title = "", model = "", effort = "", reuse = false, kind = "", mode?: LaunchMode, cardId = "", subject = ""): Promise<IssueResult> {
   const n = ++lastN;
-  pending = { cwd, name, prompt, agent, yolo, title, model, effort, reuse, ...(kind ? { kind } : {}), ...(mode ? { mode } : {}), n };
+  pending = { cwd, name, prompt, agent, yolo, title, model, effort, reuse, ...(kind ? { kind } : {}), ...(mode ? { mode } : {}), ...(cardId ? { cardId } : {}), ...(subject ? { subject } : {}), n };
   const answered = new Promise<IssueResult>((res) => { waiting.set(n, res); });
   subs.forEach((f) => f());
   /* A view is mounted the first time it is shown, so a person who never opened

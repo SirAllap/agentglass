@@ -21,6 +21,7 @@
  * builder is not this flow's builder.
  */
 import type { Flow } from "../../../shared/flow.ts";
+import { templateFlow } from "../../../shared/flowTemplates.ts";
 
 export interface RoleCounts {
   /** Rows of this role that are working right now. */
@@ -80,16 +81,39 @@ export function roleOf(row: LiveRow): string | null {
 
 /**
  * Which flow role a board role is: its own id, or the policy role a built-in
- * role answers to (`planner` runs as `scout`, `inspector` as `reviewer`). Two
- * flow roles on one policy role are one screen with no way to tell them apart,
- * so the first in the roster owns it.
+ * role answers to (`planner` runs as `scout`, `inspector` as `reviewer`).
+ *
+ * A key goes to the role ON THE PATH first, because the canvas draws the path:
+ * a project whose builder step is its own `builder-orbit` also keeps the
+ * shipped `builder` in the team, and a worker started as `builder` — a flight
+ * plan's Launch, a seat's `--role` — counted on the undrawn one left the block
+ * on the path reading Idle while the hero said one was in flight. Two roles on
+ * one key and both drawn (or neither): the first in the roster owns it.
  */
+/** The ids the shipped template gives its roles: the ones a seat's `--role` or a plain start names. */
+const SHIPPED = new Set(templateFlow().roster.map((r) => r.id));
+
 function roleIds(flow: Flow): Map<string, string> {
   const by = new Map<string, string>();
+  const claim = (key: string, id: string) => { if (!by.has(key)) by.set(key, id); };
+  const onPath = flow.roster.filter((r) => flow.path.includes(r.id));
+  for (const r of onPath) claim(r.id, r.id);
+  for (const r of onPath) if (r.policyRole) claim(r.policyRole, r.id);
+  // A shipped team role that does a path step's job counts on that step. Measured: a
+  // path of `inspector-orbit` (reviewer) with the shipped `inspector` (also
+  // reviewer) still in the team, and workers started as `inspector` left the
+  // path block Idle while "Workers in flight" said they ran. What this cannot
+  // do: a path step with no policyRole of its own has no job to match on, so a
+  // worker started under another id still counts on the team role it named.
+  // Only the shipped ids: a project's own team role is a block of its own, and
+  // a worker started by that id counts there.
   for (const r of flow.roster) {
-    if (!by.has(r.id)) by.set(r.id, r.id);
-    if (r.policyRole && !by.has(r.policyRole)) by.set(r.policyRole, r.id);
+    if (!SHIPPED.has(r.id)) continue;
+    const step = r.policyRole ? by.get(r.policyRole) : undefined;
+    if (step && step !== r.id && flow.path.includes(step)) claim(r.id, step);
   }
+  for (const r of flow.roster) claim(r.id, r.id);
+  for (const r of flow.roster) if (r.policyRole) claim(r.policyRole, r.id);
   return by;
 }
 
@@ -142,6 +166,16 @@ export function inFlight(counts: Record<string, RoleCounts>, limits: { maxWorker
   let n = 0;
   for (const c of Object.values(counts)) n += c.run;
   return { n, of: limits.maxWorkers };
+}
+
+/**
+ * Whose ceiling the card's "of N" is. A project that holds its own Workers at
+ * once different from All projects names itself, so "of 5" beside an All
+ * projects value of 10 is not read as a wrong number. Else null.
+ */
+export function flightOwner(root: string, scope: "project" | "global", own: number, general: number | undefined): string | null {
+  if (!root || scope !== "project" || general === undefined || own === general) return null;
+  return root.split("/").filter(Boolean).pop() ?? root;
 }
 
 export interface LastDecision {

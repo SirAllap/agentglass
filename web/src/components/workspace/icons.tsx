@@ -299,3 +299,21 @@ export function FlightPlanIcon({ size = ICON.md }: P) {
     </svg>
   );
 }
+
+/**
+ * The alien head: the same silhouette AgentPresence's "Take over" glyph
+ * draws, held still and in one colour (that colour is the caller's — a
+ * status tone, here) rather than its own hover eye-tracking and blink. A
+ * second, always-still copy rather than reusing that one, because its eyes
+ * follow the pointer and change colour from a CSS var scoped to the browser
+ * dock; neither belongs on a tab that is 12px tall.
+ */
+export function AlienGlyph({ size = ICON.md }: P) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" aria-hidden>
+      <path fill="currentColor" d="M12 2.4c-5 0-8.4 4.1-8.4 8.7 0 4.8 3.9 9.6 7.2 10.4.4.1.9.1 1.4 0 3.3-.8 7.2-5.6 7.2-10.4 0-4.6-3.4-8.7-7.4-8.7Z" />
+      <path fill="var(--bg)" d="M5.9 9.9c2.1-.5 4.7.7 5.4 3.3-2.3.5-4.9-.5-5.4-3.3Z" />
+      <path fill="var(--bg)" d="M18.1 9.9c-2.1-.5-4.7.7-5.4 3.3 2.3.5 4.9-.5 5.4-3.3Z" />
+    </svg>
+  );
+}

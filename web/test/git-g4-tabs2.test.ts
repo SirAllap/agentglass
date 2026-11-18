@@ -116,7 +116,7 @@ describe("G4 frames, tabs 2", () => {
     expect(html).toContain('data-dock="stash-resolve"');
     expect(draw(React.createElement(NoStashesFrame))).toContain("No stashes");
   });
-  test("tidy: summary bar, Check again, and Open Stashes where there is no command", () => {
+  test("tidy: summary bar, Check again, and Open stashes where there is no command", () => {
     const report: TidyReport = {
       root: "/r", base: "main",
       findings: [
@@ -128,7 +128,7 @@ describe("G4 frames, tabs 2", () => {
     expect(html).toContain("2 things have piled up");
     expect(html).toContain("Check again");
     expect(html).toContain("Clean up");
-    expect(html).toContain("Open Stashes");
+    expect(html).toContain("Open stashes");
     const failed = draw(React.createElement(TidyView, { report: { ...report, findings: [], error: "fatal: not a git repository" }, root: "/r", busy: false, onRefresh: () => {}, onOpenStashes: () => {} }));
     expect(failed).toContain("Try again");
     expect(failed).not.toContain("fatal:");

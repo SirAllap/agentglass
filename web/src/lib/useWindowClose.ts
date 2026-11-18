@@ -64,7 +64,7 @@ export function useWindowClose(windows: readonly TmuxWindow[], root: string, cmd
     keep: () => setAsk(null),
     reopen: () => {
       if (!toast) return;
-      for (const s of toast.steps) cmd({ cmd: "reopen", name: s.name, root: s.cwd ?? root, window: s.anchor, after: s.after });
+      for (const s of toast.steps) cmd({ cmd: "reopen", name: s.name, root: s.cwd ?? root, window: s.anchor, after: s.after, given: s.given, card: s.card });
       setToast(null);
     },
     dismissToast: () => setToast(null),

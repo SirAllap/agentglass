@@ -32,7 +32,7 @@ export function LanternDemo({ watch, everyMin, wakeMin }: LanternPreviewProps) {
           <span className="text-[10.5px]" style={{ color: "var(--text4)" }}>1 working</span>
           <span data-watch-line className="text-[10.5px]" style={{ color: "var(--text4)" }}>{watchLine(watch, everyMin)}</span>
         </div>
-        {rows.map((r) => <AgentCard key={r.name} r={r} cacheTtlMs={wakeMin * MIN} />)}
+        {rows.map((r) => <AgentCard key={r.name} ask={false} r={r} cacheTtlMs={wakeMin * MIN} />)}
       </div>
   );
 }

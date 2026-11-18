@@ -9,11 +9,11 @@ import type { ProviderTask } from "../../shared/providers.ts";
 import type { JiraLane } from "../src/components/jira/list/model.ts";
 import { __resetDockIntent, askDock, getDockIntent, INTENT_MS, takeDockIntent } from "../src/components/jira/list/menus/dockIntent.ts";
 import {
-  cardMenu, changeRows, jqlUrl, keyAction, keyLabel, keySpec, laneMenu, LETTER, meMenu, menuHead, sortMenu, subtaskMenu, viewMenu, walkIds,
+  cardMenu, changeRows, jqlUrl, keyAction, keyLabel, keySpec, laneMenu, LETTER, meMenu, menuHead, sortMenu, statusMenu, subtaskMenu, viewMenu, walkIds,
   type JiraMenu, type JiraMenuItem,
 } from "../src/components/jira/list/menus/menuModel.ts";
 import {
-  __resetViewPrefs, arrangeLane, getPrefs, hideCard, NO_PREFS, renameView, setRailHidden, showCards, togglePin, updatePrefs, visibleCards, withPrefs,
+  __resetViewPrefs, arrangeLane, getPrefs, hideCard, NO_PREFS, renameView, setRailHidden, setWidth, showCards, togglePin, updatePrefs, visibleCards, widthOf, withPrefs,
 } from "../src/components/jira/list/menus/viewPrefs.ts";
 import { globalStubs } from "./stubGlobal.ts";
 
@@ -32,7 +32,7 @@ describe("the card menu", () => {
   const m = cardMenu(card("52", { assignees: ["Ben Okafor"] }), { pr: null, pinned: false });
 
   test("offers the rows of the mockup, in its sections", () => {
-    expect(items(m).map((i) => i.id)).toEqual(["open", "openJira", "move", "assign", "comment", "copyKey", "copyLink", "copyBranch", "pr", "pin", "reread", "hide"]);
+    expect(items(m).map((i) => i.id)).toEqual(["open", "openJira", "move", "assign", "comment", "copyKey", "copyLink", "copyBranch", "pr", "next", "pin", "reread", "hide"]);
     expect(m.rows.filter((r) => r.kind === "heading").map((r) => (r as { text: string }).text)).toEqual(["Card · ORB-52", "Change", "Copy", "Linked"]);
     expect(m.more.length).toBe(3);
   });
@@ -114,6 +114,29 @@ describe("the lane menu", () => {
   });
 });
 
+describe("the Status menu (`s` on a focused board row)", () => {
+  const t = card("9", { status: "In progress" });
+
+  test("up to 8 reachable statuses, numbered 1-8", () => {
+    const to = Array.from({ length: 10 }, (_, i) => ({ status: `Step ${i}`, asks: false, key: `t${i}` }));
+    const m = statusMenu(t, { to });
+    expect(items(m).map((i) => i.key)).toEqual(["1", "2", "3", "4", "5", "6", "7", "8"]);
+    expect(items(m).map((i) => i.id)).toEqual(["t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7"]);
+  });
+
+  test("a move that asks for fields is listed but off, pointing at Move to…", () => {
+    const m = statusMenu(t, { to: [{ status: "Done", asks: true, key: "d" }] });
+    expect(byId(m, "d").why).toBe("Needs details — use Move to…");
+  });
+
+  test("no step, reading, an error, or changes off: one row says why, none of them a live key", () => {
+    expect(byId(statusMenu(t, { to: [] }), "why").why).toBe("No step from In progress");
+    expect(byId(statusMenu(t, "reading"), "why").why).toBe("Reading the steps…");
+    expect(byId(statusMenu(t, { error: "x" }), "why").why).toBe("x");
+    expect(byId(statusMenu(t, { to: [{ status: "Done", asks: false, key: "d" }] }, false), "why").why).toBe("Changes to Jira are off");
+  });
+});
+
 describe("the sidebar menus", () => {
   test("a filter: Edit the search is always off, Take off this bar only for one that is on the bar by itself", () => {
     const own = viewMenu({ name: "Open bugs", listName: undefined }, { cards: 9, address: "https://acme.example.net/issues/?filter=1", own: true });
@@ -185,7 +208,7 @@ describe("the keys", () => {
   });
 
   test("the arrows walk the rows that are on, then More, then its rows when open", () => {
-    expect(walkIds(m, false)).toEqual(["open", "openJira", "move", "assign", "comment", "copyKey", "copyLink", "copyBranch", "more"]);
+    expect(walkIds(m, false)).toEqual(["open", "openJira", "move", "assign", "comment", "copyKey", "copyLink", "copyBranch", "next", "more"]);
     expect(walkIds(m, true).slice(-4)).toEqual(["more", "pin", "reread", "hide"]);
   });
 });
@@ -214,11 +237,19 @@ describe("what a view remembers", () => {
     expect(hideCard(togglePin(NO_PREFS, "2"), "2").pinned).toEqual([]);
   });
 
+  test("the dock width a view remembers: null until dragged, and a no-op write hands back the same object", () => {
+    expect(widthOf(NO_PREFS)).toBeNull();
+    const p = setWidth(NO_PREFS, 480);
+    expect(widthOf(p)).toBe(480);
+    expect(setWidth(p, 480)).toBe(p);
+    expect(widthOf(setWidth(p, null))).toBeNull();
+  });
+
   test("prefs that touch nothing hand back the same lane and the same model", () => {
     const l = lane([a, b]);
     expect(arrangeLane(l, NO_PREFS)).toBe(l);
     expect(arrangeLane(l, hideCard(NO_PREFS, "99"))).toBe(l);
-    const model = { cards: [a, b], lanes: [l] };
+    const model = { cards: [a, b], lanes: [l], counts: { shown: 2 } };
     expect(withPrefs(model, NO_PREFS)).toBe(model);
     expect(withPrefs(model, hideCard(NO_PREFS, "1")).cards.map((t) => t.id)).toEqual(["2"]);
   });
@@ -239,6 +270,13 @@ describe("what a view remembers", () => {
       mem.clear();
       updatePrefs("view-1", (p) => p);
       expect(mem.size).toBe(0);
+    });
+
+    test("the dragged width is this view's own, and a second view starts with none", () => {
+      updatePrefs("view-1", (p) => setWidth(p, 500));
+      expect(widthOf(getPrefs("view-1"))).toBe(500);
+      expect(widthOf(getPrefs("view-2"))).toBeNull();
+      expect(JSON.parse(mem.get("agentglass.jira.listPrefs")!)["view-1"].width).toBe(500);
     });
 
     test("a sidebar row taken off stays off between visits and comes back", () => {
@@ -325,9 +363,9 @@ describe("the wiring, read as source", () => {
     for (const f of ["menus/JiraMenu.tsx", "menus/JiraMenuHost.tsx", "menus/JiraRailMenu.tsx"]) expect(code(src(f))).not.toMatch(/\btitle=/);
   });
 
-  test("Move / Assign / Comment open the card and ask the pane for the control", () => {
+  test("Move / Assign / Comment / Next step open the card and ask the pane for the control", () => {
     const pick = body(src("menus/JiraMenuHost.tsx"), "const onPick = ");
-    expect(pick).toMatch(/case "move": case "assign": case "comment": onOpen\(t\); askDock\(t\.id, id\)/);
+    expect(pick).toMatch(/case "move": case "assign": case "comment": case "next": onOpen\(t\); askDock\(t\.id, id\)/);
   });
 
   test("the card pane takes the request and lands on the control the dock draws", () => {
@@ -357,6 +395,25 @@ describe("the wiring, read as source", () => {
     expect(host).toContain("if (!about || !writable) return;");
   });
 
+  test("the Status subject reads the same steps, and picking one writes straight to the tracker", () => {
+    const host = code(src("menus/JiraMenuHost.tsx"));
+    expect(host).toContain('subject.kind === "card" || subject.kind === "sub" || subject.kind === "status"');
+    expect(host).toContain("menu = statusMenu(subject.t, moves, writable);");
+    const pick = body(host, "const onPick = ");
+    expect(pick).toContain('if (subject.kind === "status") {');
+    expect(pick).toContain("TRACKERS.jira.setStatus(subject.t, opt)");
+  });
+
+  test("the board opens the Status menu on `s`, never on j/k", () => {
+    const board = code(src("JiraBoard.tsx"));
+    expect(board).toContain('e.key === "s" && !e.ctrlKey && !e.metaKey && !e.altKey && onStatusMenu');
+    expect(board).toContain('onKeyDown={onKeyDown}');
+  });
+
+  test("the list wires the board's Status menu to the one host", () => {
+    expect(code(src("JiraListView.tsx"))).toContain("onStatusMenu={menus.handlers.onStatusMenu}");
+  });
+
   test("the list wires the handlers into the lanes and the dock and draws the one host", () => {
     const t = code(src("JiraListView.tsx"));
     expect(t).toContain("useJiraMenus(");
@@ -379,5 +436,71 @@ describe("the wiring, read as source", () => {
     expect(pane).toBeGreaterThan(0);
     expect(menu).toBeGreaterThan(pane);
     expect(t.slice(pane, menu)).toContain("\n      </div>}\n");
+  });
+});
+
+describe("the board card's menu (cardActions.ts)", () => {
+  const facts = (o: Partial<import("../src/components/jira/list/menus/cardActions.ts").CardActionFacts> = {}) => ({
+    pr: null, pinned: false, writable: true, moves: { to: [{ status: "Done", asks: false, key: "31" }, { status: "Blocked", asks: true, key: "41" }] } as const,
+    people: [{ key: "u1", name: "Mira R.", me: true }, { key: "u2", name: "Ana L.", on: true }], agent: false, ...o,
+  });
+  const ids = (a: { groups: { items: { id: string }[] }[] }) => a.groups.flatMap((g) => g.items.map((i) => i.id));
+
+  test("groups are Open, Work, Edit, Links and the head is the key and a cut title", async () => {
+    const { cardActions } = await import("../src/components/jira/list/menus/cardActions.ts");
+    const a = cardActions(card("7", { title: "x".repeat(80) }), facts());
+    expect(a.groups.map((g) => g.label)).toEqual(["Open", "Work", "Edit", "Links"]);
+    expect(a.head.startsWith("ORB-7 · ")).toBe(true);
+    expect(a.head.endsWith("…")).toBe(true);
+    expect(ids(a)).toContain("assignTo");
+  });
+  test("Assign lists you first, a check on the one on the card, Unassigned last", async () => {
+    const { assignChildren } = await import("../src/components/jira/list/menus/cardActions.ts");
+    const kids = assignChildren(facts(), true);
+    expect(kids.map((k) => k.label)).toEqual(["You (Mira R.)", "Ana L.", "Unassigned"]);
+    expect(kids[1]!.chk).toBe(true);
+    expect(kids[2]!.id).toBe("assign:");
+    expect(assignChildren(facts({ writable: false }), true)[0]!.why).toBeTruthy();
+  });
+  test("Sprint row is absent without a board sprint, and Current is checked when the card is in it", async () => {
+    const { cardActions } = await import("../src/components/jira/list/menus/cardActions.ts");
+    expect(ids(cardActions(card("1"), facts()))).not.toContain("sprintTo");
+    const a = cardActions(card("1"), facts({ sprint: { name: "S14" }, inSprint: true }));
+    const sp = a.groups.flatMap((g) => g.items).find((i) => i.id === "sprintTo")!;
+    expect(sp.children![0]).toMatchObject({ id: "sprint:current", label: "Current S14", chk: true });
+  });
+  test("typing narrows rows and reaches into submenus; the arrows skip rows that are off", async () => {
+    const { cardActions, filterActions, nextOn } = await import("../src/components/jira/list/menus/cardActions.ts");
+    const a = cardActions(card("1"), facts());
+    expect(filterActions(a.groups, "").length).toBe(ids(a).length);
+    expect(filterActions(a.groups, "ana").map((r) => r.label)).toEqual(["Assign › Ana L."]);
+    expect(filterActions(a.groups, "flight").map((r) => r.id)).toEqual(["flight"]);
+    expect(filterActions(a.groups, "zzz")).toEqual([]);
+    expect(nextOn([{}, { why: "off" }, {}], 0, 1)).toBe(2);
+    expect(nextOn([{}, { why: "off" }, {}], 0, -1)).toBe(2);
+  });
+  test("the host draws the card with JiraCardMenu and writes through setPeople / setStatus", async () => {
+    const host = await Bun.file(new URL("../src/components/jira/list/menus/JiraMenuHost.tsx", import.meta.url)).text();
+    expect(host).toContain("<JiraCardMenu");
+    expect(host).toContain("TRACKERS.jira.setPeople");
+    expect(host).toContain("TRACKERS.jira.setStatus");
+  });
+});
+
+describe("the Assign popover a face opens (assignPop)", () => {
+  test("you first, teammates after, Unassigned last, digits 1..n; off with changes off", async () => {
+    const { assignPop } = await import("../src/components/jira/list/menus/cardActions.ts");
+    const rows = assignPop({ writable: true, people: [{ key: "u1", name: "Mira R.", me: true }, { key: "u2", name: "Ana L." }] }, false);
+    expect(rows.map((r) => `${r.key}:${r.label}`)).toEqual(["1:You (Mira R.)", "2:Ana L.", "3:Unassigned"]);
+    expect(rows[2]!.chk).toBe(true);
+    expect(assignPop({ writable: false, people: [] }, false)[0]!.key).toBeUndefined();
+  });
+  test("a face click raises it from the board, and the host writes with setPeople", async () => {
+    const base = new URL("../src/components/jira/list/", import.meta.url);
+    const board = await Bun.file(new URL("JiraBoard.tsx", base)).text();
+    const host = await Bun.file(new URL("menus/JiraMenuHost.tsx", base)).text();
+    expect(board).toContain("onFaces(el, t)");
+    expect(host).toContain("<JiraAssignPop");
+    expect(host).toContain('kind: "assign"');
   });
 });

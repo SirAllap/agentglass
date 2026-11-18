@@ -15,6 +15,19 @@ import type { ChainTip } from "../lib/chainTip.ts";
 
 const SELECTOR = "[data-tip]";
 
+/**
+ * `data-tip-unless-shown=".label"`: the tip only repeats that label, so it is
+ * drawn only while the label is hidden (a nav folded to icons) or cut short.
+ * A tip saying what is already written beside the pointer only covers the row
+ * above it.
+ */
+export function labelShown(el: Element): boolean {
+  const sel = el.getAttribute("data-tip-unless-shown");
+  if (!sel) return false;
+  const lbl = el.querySelector(sel) as HTMLElement | null;
+  return !!lbl && lbl.getClientRects().length > 0 && lbl.scrollWidth <= lbl.clientWidth;
+}
+
 export function TipBody({ spec }: { spec: TipSpec }) {
   return (
     <>
@@ -118,7 +131,7 @@ export function TipHost() {
     const BIG = 180;
     const arm = (el: Element, ms: number, at?: { x: number; y: number }) => {
       window.clearTimeout(s.timer);
-      if (el === s.muted) return;
+      if (el === s.muted || labelShown(el)) return;
       s.timer = window.setTimeout(() => {
         const attr = el.getAttribute("data-tip");
         if (s.el !== el || s.open || !attr) return;

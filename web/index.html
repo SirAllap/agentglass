@@ -133,20 +133,33 @@
          is the one bold thing; all of this stays behind it. The big mark's
          orbit runs every frame here (the sheet above steps it for the title
          bar, where it is small): at this size a stepped contact would stutter. */
-      #ag-cover :is(.ag-lm-arm, .ag-lm-dot) { animation-timing-function: linear; }
+      /* Every endless loop on the cover is stepped on one shared 1 s grid
+         (period / steps = 1 s, 1 draw a second in all, not 60) and starts together, so the steps
+         land on the same frame. All of them stop while nobody is looking at
+         the window (data-idle) or the "did not load" card is up. */
+      #ag-cover .ag-lm-arm { animation: agc-lm-arm 16s steps(16) infinite; }
+      #ag-cover .ag-lm-dot { animation: agc-lm-dot 16s steps(16) infinite; }
+      #ag-cover .agc-far-arm { animation: agc-far-arm2 48s steps(48) infinite; }
+      #ag-cover .agc-far-dot { animation: agc-far-dot2 48s steps(48) infinite; }
+      @keyframes agc-lm-arm { to { transform: rotate(360deg); } }
+      @keyframes agc-lm-dot { from { transform: rotate(0deg) scaleY(3.625) rotate(52deg); } to { transform: rotate(-360deg) scaleY(3.625) rotate(52deg); } }
+      @keyframes agc-far-arm2 { to { transform: rotate(360deg); } }
+      @keyframes agc-far-dot2 { from { transform: rotate(0deg) scaleY(2.5714) rotate(18deg); } to { transform: rotate(-360deg) scaleY(2.5714) rotate(18deg); } }
+      :root[data-idle="1"] #ag-cover :is(.agc-glow, .agc-sky, .ag-lm-o, .ag-lm-arm, .ag-lm-dot, .ag-lm-f, .ag-lm-b, .agc-far-o, .agc-far-arm, .agc-far-dot, .agc-far-f, .agc-far-b),
+      #ag-cover.agc-failed :is(.agc-glow, .agc-sky, .ag-lm-o, .ag-lm-arm, .ag-lm-dot, .ag-lm-f, .ag-lm-b, .agc-far-o, .agc-far-arm, .agc-far-dot, .agc-far-f, .agc-far-b) { animation-play-state: paused; }
       .agc-glow {
         inset: -34%; border-radius: 50%;
         background: radial-gradient(closest-side,
           color-mix(in srgb, var(--primary, #58a6ff) var(--agc-glow, 22%), transparent),
           color-mix(in srgb, var(--primary, #58a6ff) calc(var(--agc-glow, 22%) / 3), transparent) 55%, transparent);
-        animation: agc-glow-in 1.2s cubic-bezier(.16, 1, .3, 1) both, agc-breathe 9s ease-in-out 1.2s infinite;
+        animation: agc-glow-in 1.2s cubic-bezier(.16, 1, .3, 1) both, agc-breathe 9s steps(9) 2s infinite;
       }
       @keyframes agc-glow-in { from { opacity: 0; transform: scale(.9); } to { opacity: .8; transform: scale(.97); } }
       @keyframes agc-breathe { 0%, 100% { opacity: .8; transform: scale(.97); } 50% { opacity: 1; transform: scale(1.03); } }
       .agc-skies { inset: -45%; animation: agc-fade 1.4s ease-out .15s both; }
-      .agc-sky { position: absolute; inset: 0; width: 100%; height: 100%; fill: var(--text, #e6edf3); opacity: .45; animation: agc-twinkle 4.6s ease-in-out infinite; }
-      .agc-sky2 { animation-duration: 6.1s; animation-delay: -2s; }
-      .agc-sky3 { animation-duration: 3.7s; animation-delay: -1.1s; }
+      .agc-sky { position: absolute; inset: 0; width: 100%; height: 100%; fill: var(--text, #e6edf3); opacity: .45; animation: agc-twinkle 4s steps(4) infinite; }
+      .agc-sky2 { animation-duration: 5s; animation-timing-function: steps(5); }
+      .agc-sky3 { animation-duration: 3s; animation-timing-function: steps(3); }
       @keyframes agc-twinkle { 0%, 100% { opacity: .18; } 50% { opacity: .7; } }
       @keyframes agc-fade { from { opacity: 0; } }
       .agc-far { color: var(--text3, #8b949e); animation: agc-fade .9s ease-out .25s both; }

@@ -63,15 +63,11 @@ describe("placeFlow: balanced, then stable columns", () => {
   });
 });
 
-test("the page container is wired to the placement", async () => {
+test("the page container is NOT wired to a measured placement any more", async () => {
   const modal = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url).pathname).text();
   const css = await Bun.file(new URL("../src/index.css", import.meta.url).pathname).text();
-  expect(modal).toContain("useStableFlow(colRef,");
-  expect(css).toMatch(/\.agx-settings-col\[data-stable\] \{[^}]*display: grid/);
-  // One gap, one number: the span's gap, the grid's column gap and the margin the
-  // column takes back all read the same token.
+  // The 1px-row grid measured every card and re-placed them for 800 ms: a page grew for ~1.5 s after it opened.
+  expect(modal).not.toContain("useStableFlow");
+  expect(css).not.toMatch(/\.agx-settings-col\[data-stable\]/);
   expect(GAP).toBe(18);
-  expect(css).toMatch(/--agx-gap: 18px/);
-  expect(css).toMatch(/\.agx-settings-col\[data-stable\] \{[^}]*column-gap: var\(--agx-gap\)/);
-  expect(css).toMatch(/margin-bottom: calc\(-1 \* var\(--agx-gap\)\)/);
 });

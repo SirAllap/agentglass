@@ -73,10 +73,10 @@ export const DOOR_COPY: Record<DoorId, DoorCopy> = {
     modes: { block: "Treat as blocking", name: "Name them" },
   },
   signals: {
-    name: "Wake the orchestrator when judgment is needed",
-    what: "Four events go to the orchestrator as a signal: cap reached, check failed, conflict, changes requested. Everything else is handled by rule and stays quiet.",
-    example: "Conflict on #318 with main in 2 files: one line goes in, one line comes back.",
-    keep: "The rest never wakes it.",
+    name: "Read the quiet signals",
+    what: "An item can carry quiet lines under its sentence: a tracker card that has not moved, an overlap with another open pull request, and what a bot review said about the head commit. When a base branch is green again, the orchestrator is told once.",
+    example: "#318 overlaps #327 in two files and its card ORBIT-1042 has not moved for 9 days: two quiet lines, still Cleared to land.",
+    keep: "The stale-card line needs Follow tracker cards on: with that door off the tracker is never asked.",
     modes: { off: "Off", on: "On" },
   },
   diagnose: {

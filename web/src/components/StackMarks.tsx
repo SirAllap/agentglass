@@ -6,13 +6,14 @@
 // lib/prStackWords.ts; this file decides nothing about which pull requests are
 // related, only how that looks. The numbers (16px boxes, a 20px token, a 150px
 // control) are the approved mockup's and are written down in docs/design-system.md.
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { ICON, MIN_BOX } from "../lib/iconSize.ts";
 import { BlockedIcon, CaretIcon, CircleIcon, CrossIcon, DoneIcon, DraftIcon, MergeIcon, PullRequestIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import type { BaseRef, Box, SpineItem, Stack } from "../lib/prStack.ts";
 import { tokenSentence, wordOf, type Facts, type Rung, type Tone } from "../lib/prStackWords.ts";
 import { CTRL_H } from "./workspace/Chrome.tsx";
+import { clampToWindow } from "../lib/menuPlacement.ts";
 
 /* ------------------------------------------------------------------ spine */
 
@@ -155,6 +156,15 @@ export function StackControl({ stack, prev, next, onOpen, rungs, factsOf, compac
 }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLSpanElement>(null);
+  const lad = useRef<HTMLDivElement>(null);
+  /* The ladder hangs from the chip's left edge; near the window's right edge (the detail pane docked right) its 480px ran off screen. Shift it back in. */
+  const [shift, setShift] = useState(0);
+  useLayoutEffect(() => {
+    if (!open || !lad.current) { setShift(0); return; }
+    const r = lad.current.getBoundingClientRect();
+    const at = clampToWindow({ left: r.left - shift, top: r.top }, { width: r.width, height: r.height }, { width: window.innerWidth, height: window.innerHeight });
+    setShift(at.left - (r.left - shift));
+  }, [open]);
   useCloseWithOwner(() => setOpen(false), { open, from: box });
   useEffect(() => {
     if (!open) return;
@@ -181,7 +191,7 @@ export function StackControl({ stack, prev, next, onOpen, rungs, factsOf, compac
         <Step dir="next" to={next} onOpen={onOpen} />
       </span>
       {open && (
-        <div className="absolute z-50 mt-1.5 rounded-lg overflow-hidden agx-menu agx-stk-lad" style={{ left: 0, top: "100%" }} role="dialog" aria-label="Stack">
+        <div ref={lad} className="absolute z-50 mt-1.5 rounded-lg overflow-hidden agx-menu agx-stk-lad" style={{ left: shift, top: "100%" }} role="dialog" aria-label="Stack">
           <Ladder stack={stack} rungs={rungs} factsOf={factsOf} onOpen={(n) => { setOpen(false); onOpen(n); }} />
         </div>
       )}

@@ -69,10 +69,10 @@ describe("D3 nothing is cut without a way to read it", () => {
     expect(tail).toContain("api");
   });
   test("name, branch and path all carry a title", () => {
-    expect(ROWS).toContain("title={r.name}");
+    expect(ROWS).toContain("data-tip={r.name}");
     expect(ROWS).toContain("title={r.branch}");
-    expect(ROWS).toContain("title={r.root}");
-    expect(ROWS).toContain("title={g.full ? `${g.full}` : undefined}");
+    expect(ROWS).toContain("data-tip={r.root}");
+    expect(ROWS).toContain("data-tip={g.full ? `${g.full}` : undefined}");
   });
   test("a rail label shortens in the middle", () => {
     expect(railLabel("/home/dev/code/clients/acme/orbit-platform/services/api", 20)).toContain("…");
@@ -413,6 +413,14 @@ describe("open workspaces the repo list lacks", () => {
   });
   test("nothing extra when every open path is listed", () => {
     expect(withOpenFolders(listed, ["/acme/orbit"])).toEqual(listed);
+  });
+});
+
+describe("first run: the rail counts what the list shows", () => {
+  const repo = (root: string): GitRepoRef => ({ root, name: "orbit", branch: "main", dirty: 0, ahead: 0, behind: 0, touchedAt: 1 });
+  test("hero in place of the list: every count is 0", () => {
+    expect(railCounts([repo("/acme/orbit")], [], [], [], true)).toMatchObject({ all: 0, open: 0, hidden: 0 });
+    expect(railCounts([repo("/acme/orbit")], [], [], [], false).all).toBe(1);
   });
 });
 

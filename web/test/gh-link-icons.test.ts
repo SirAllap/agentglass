@@ -49,7 +49,7 @@ describe("the link and copy controls on a comment", () => {
 
   it("confirms the copy on the button that was pressed", () => {
     // A silent copy is indistinguishable from a copy that failed.
-    expect(block).toContain('title={copied ? "Link copied"');
+    expect(block).toContain('data-tip={copied ? "Link copied"');
   });
 
   it("stops the click from reaching the row underneath", () => {

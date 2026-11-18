@@ -15,6 +15,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Offer, WhatIsCloned, byLicence, byScope, capabilityChips, licencesOn, matching, offerFor, scopesOn, sorted, tintOf, types } from "../src/components/plugins/Market.tsx";
 import type { Catalogue, InstallSource } from "../../shared/types.ts";
+import { tileChip } from "../src/lib/pluginCard.ts";
 import { domOf } from "./htmlAttrs.ts";
 
 const market = await Bun.file(new URL("../src/components/plugins/Market.tsx", import.meta.url)).text();
@@ -58,7 +59,9 @@ describe("what the market offers", () => {
 
   test("an installed plugin stays on the shelf, marked, and cannot be installed over itself", () => {
     expect(code(market)).toContain("mode={offer ?? \"installed\"}");
-    expect(code(market)).toContain("{mode === \"installed\" && <StatusBadge tone=\"ok\">Installed</StatusBadge>}");
+    // The tile's chip comes from tileChip (lib/pluginCard.ts): installed is the ok "Installed" badge.
+    expect(code(market)).toMatch(/<StatusBadge tone=\{tileChip\(mode\)!\.tone\} icon=\{[^\n]*\}>\{tileChip\(mode\)!\.label\}<\/StatusBadge>/);
+    expect(tileChip("installed")).toEqual({ tone: "ok", label: "Installed" });
     expect(code(market)).toContain("onInstall={mode === \"installed\" ? null : install}");
     expect(code(market)).not.toMatch(/left out of this list/);
   });
@@ -151,7 +154,7 @@ describe("the list is the project's, and only the project's", () => {
   test("every row leads to the repository it would install, checked not trusted", () => {
     // The URL comes out of a document fetched over the network, so it goes
     // through the same scheme check every other outbound link in the app uses.
-    expect(code(market)).toContain("externalUrl(entry.source.url)");
+    expect(code(market)).toContain("httpsLink(entry.source.url)");
     expect(code(market)).toContain('rel="noopener noreferrer"');
     expect(code(market)).toContain("Repository");
   });
@@ -232,7 +235,7 @@ describe("what a pinned entry says it installs", () => {
   test("a commit is shown short, the way git prints one, with the whole of it a hover away", () => {
     const html = render({ source: { kind: "git", url: "https://github.com/acme/orbit", ref: SHA }, sha256: "a".repeat(64) });
     expect(html).toContain(">0123456<");
-    expect(html).toContain(`title="${SHA}"`);
+    expect(html).toContain(`data-tip="${SHA}"`);
     expect(html).not.toContain(`@${SHA}`);
   });
 

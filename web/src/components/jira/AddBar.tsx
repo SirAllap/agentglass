@@ -99,7 +99,7 @@ export function AddBar({ onAddedView, onAddedFolder, onClose }: {
 
   const addSpace = (key: string) => void run(() => tree.edit({ add: key }), () => {
     tree.select({ kind: "space", space: key });
-    tree.toggle(`s:${key}`, true);
+    tree.toggle(`s:${key}`, true, key);
     onAddedFolder();
   });
   const pick = (c: JiraViewChoice) => void run(() => api.jiraAddView({ kind: c.kind, id: c.id }), (r) => onAddedView(r.view?.id));

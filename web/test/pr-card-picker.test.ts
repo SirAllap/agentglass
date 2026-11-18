@@ -95,7 +95,7 @@ describe("where the card stands, beside the pull request", () => {
        ClickUp refuses a write made against a stamp older than the card's —
        the guard that once let a batch of three apply only its first. */
     const pick = bodyOf("CardStatusPick");
-    expect(pick).toContain("api.clickupCard(task.id, { status }, task.updated)");
+    expect(pick).toContain("api.clickupCard(task.id, { status }, task.updated, repo)");
     const people = bodyOf("CardPeoplePick");
     expect(people).toContain("off ? { rem: [m.id] } : { add: [m.id] }, task.updated");
     /* And it is the app's ONE people picker, not a dropdown of names of its
@@ -258,5 +258,31 @@ describe("the filter takes its own focus", () => {
     expect(PICKER).toContain("const filterInput = useRef<HTMLInputElement>(null);");
     expect(PICKER).toMatch(/requestAnimationFrame\(\(\) => filterInput\.current\?\.focus\(\)\)/);
     expect(PICKER).toContain('<input ref={filterInput}');
+  });
+});
+
+/*
+ * THE PAIR THE PICKER LEARNS.
+ *
+ * Two reviewers and one account are not a pair: a hand-over that asks alice and
+ * bob for a review and gives the card to bob taught the machine that alice IS
+ * bob, and the next card whose only reviewer was alice offered bob first. The
+ * behaviour lives in lib/jiraPairs.ts (pairPick, pairRows) and is measured in
+ * jira-pairs.test.ts; these two read the source because there is no DOM under
+ * `bun test`, and they are about WHERE the picker uses it.
+ */
+describe("the pair the picker learns", () => {
+  it("learns one pair only when exactly one login was picked", () => {
+    expect(FLOW).toContain("pairPick(live.current.picked, who)");
+    expect(FLOW).not.toContain("recordPairs(logins.map");
+  });
+
+  it("offers the paired account built from the pair, so an empty box still shows it", () => {
+    expect(FLOW).toContain("pairRows(picked, pairs)");
+    // In the pool as well, or picking it from that list would drop the row at once.
+    const pool = FLOW.slice(FLOW.indexOf("const pool = useMemo("), FLOW.indexOf("const chosen: CardPerson[]"));
+    expect(pool).toContain("...paired");
+    const cand = FLOW.slice(FLOW.indexOf("const cand = useMemo("), FLOW.indexOf("const pickCand"));
+    expect(cand).toContain("...paired.filter((p) => !have.has(p.key)");
   });
 });

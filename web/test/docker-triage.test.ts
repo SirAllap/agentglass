@@ -195,7 +195,7 @@ describe("the map of squares", () => {
       c({ id: "r", state: "restarting" }), c({ id: "p", state: "paused" }), c({ id: "m", state: "created", status: "Created" }),
       off("s"), c({ id: "u" }), c({ id: "h", health: "healthy" }), crash("x"), c({ id: "z", state: "dead" }),
     ]).map((q) => [q.id, q.tone]));
-    expect(tones).toEqual({ r: "restart", p: "pause", m: "made", s: "stop", u: "up", h: "up", x: "need", z: "need" });
+    expect(tones).toEqual({ r: "restart", p: "pause", m: "made", s: "stop", u: "up", h: "up", x: "crash", z: "need" });
   });
 
   test("squares outside the filter are dim, and the current one is marked", () => {

@@ -4,8 +4,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { PrSummary } from "../../../shared/types.ts";
 import { VIEW_LIMITS, isGroup, type FilterGroup, type FilterNode, type FilterOp, type FilterRule, type LaneFilter } from "../../../shared/prFilter.ts";
-import type { FieldSpec, ReadField } from "./tasks/filters.ts";
-import type { LaneResult } from "../lib/prFilterEval.ts";
+import type { FieldSpec } from "./tasks/filters.ts";
+import type { LaneResult, ReadField } from "../lib/prFilterEval.ts";
 import { lanesToText } from "../lib/prFilterSyntax.ts";
 import { addGroup, addRule, canAddGroup, newNodeId, removeNode, setJoin, updateRule } from "../lib/prFilterTree.ts";
 import { blankRule, editorFields, opsFor, opWord, takesValue, totalRules, type LaneName } from "../lib/prFilterView.ts";

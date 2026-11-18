@@ -14,6 +14,7 @@
  */
 
 import type { MapBlock as StepBlock } from "../../../shared/providers.ts";
+import type { Assign } from "./stepAssign.ts";
 
 export type StepKind = "move" | "menu" | "merge" | "people" | "note";
 
@@ -80,7 +81,11 @@ export interface Nouns {
   move: string;
   /** The verb, capitalised: "Move" / "Transition". */
   verb: string;
-  /** Where the review step shows, when it is not an item in a menu: Jira has no review menu, so its review is a button. */
+  /**
+   * Where the review step shows: Jira draws its review (and its hand-off) as a
+   * button on the card, ClickUp's review is an item in the review menu. A step
+   * kind is titled and described the same on both; this only moves the place.
+   */
   reviewButton?: boolean;
 }
 
@@ -111,7 +116,7 @@ export interface Step {
   also: string[];
   unassign: Unassign;
   /** Who the step also makes sure is on the item. Only the steps that move a status have the row. */
-  assign: { who: "none" | "me" | "author" | "person"; person?: { id: number; name: string } };
+  assign: Assign;
   /** The status shown is the built-in default, not one the person chose. */
   implicit?: boolean;
   /**
@@ -137,11 +142,9 @@ export interface Moment {
 export function moments(n: Nouns): Record<StepKind, Moment> {
   return {
     move: { title: "Button on a pull request", needs: true, optional: false, blurb: `A button in the pull request’s ${n.item} block. What it does is the blocks below, top to bottom.` },
-    menu: n.reviewButton
-      ? { title: "Review button on a pull request", needs: true, optional: false, blurb: `A second button in the pull request’s ${n.item} block. What it does is the blocks below, top to bottom.` }
-      : { title: "Item in the review menu", needs: true, optional: false, blurb: "An item in the review menu. What it does is the blocks below, top to bottom." },
+    menu: { title: "Review step on a pull request", needs: true, optional: false, blurb: `An item in the review menu, or a Review button in the pull request’s ${n.item} block. What it does is the blocks below, top to bottom.` },
     merge: { title: "Option in the merge dialog", needs: true, optional: true, blurb: "A choice at merge time. The blocks run when the merge is confirmed; with no move it reads “Leave it there”." },
-    people: { title: "Assigned list in the review menu", needs: false, optional: false, blurb: `The ${n.item}’s members, to put on or take off.` },
+    people: { title: "People on the review step", needs: false, optional: false, blurb: `The ${n.item}’s members, to put on or take off: the assigned list in the review menu, or who the review step puts on the card.` },
     note: { title: "Note button on a pull request", needs: false, optional: false, blurb: `Writes a comment on the ${n.item}.` },
   };
 }
@@ -168,7 +171,7 @@ export function whereWhen(s: Step, n: Pick<Nouns, "item" | "reviewButton">): { w
     }
     case "menu": return { where: n.reviewButton ? `The Review button in a pull request’s ${n.item} block` : "The item in a pull request’s Review menu", when: linked };
     case "merge": return { where: "The option in the merge dialog", when: linked };
-    case "people": return { where: "The Assigned list in a pull request’s Review menu", when: linked };
+    case "people": return { where: n.reviewButton ? "The people picker when asking for a review" : "The Assigned list in a pull request’s Review menu", when: linked };
     case "note": return { where: `The Note button in a pull request’s ${n.item} block`, when: linked };
   }
 }

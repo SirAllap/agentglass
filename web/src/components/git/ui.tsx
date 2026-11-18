@@ -121,7 +121,7 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
 }) {
   if (variant === "item") {
     return (
-      <div className="group git-item min-w-0" title={title2} onClick={onClick} onContextMenu={onContextMenu}
+      <div className="group git-item min-w-0" data-tip={title2} onClick={onClick} onContextMenu={onContextMenu}
         style={{
           display: "grid", gridTemplateColumns: "auto minmax(0, 1fr) auto", alignItems: "center", gap: 10,
           minHeight: 44, padding: "6px 10px", borderRadius: 10, cursor: "default", opacity: dim && !selected ? 0.62 : 1,
@@ -156,7 +156,7 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
     /* The log row, as drawn in the approved Log: a graph gutter, the refs and the subject, and
        avatar, time and sha at the right. The cursor is a tint with a ring; a pick is its own tint. */
     return (
-      <div className="git-line group min-w-0 text-[12px]" onClick={onClick} onContextMenu={onContextMenu} title={title2}
+      <div className="git-line group min-w-0 text-[12px]" onClick={onClick} onContextMenu={onContextMenu} data-tip={title2}
         style={{
           position: "relative", display: "grid", gridTemplateColumns: "86px minmax(0, 1fr) auto", alignItems: "center", gap: 8,
           height: CTRL_H.large, padding: "0 10px 0 4px", borderRadius: 8, color: "var(--text2)", cursor: "default",
@@ -165,7 +165,7 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
           transition: "background .12s ease",
         }}>
         {!!pickMark && (
-          <span aria-hidden className="absolute grid place-items-center font-semibold text-[9.5px]" title="Applied in this order, oldest first"
+          <span aria-hidden className="absolute grid place-items-center font-semibold text-[9.5px]" data-tip="Applied in this order, oldest first"
             style={{ left: -2, top: 8, width: 16, height: 16, borderRadius: 5, background: "var(--info)", color: "var(--on-primary)", fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>{pickMark}</span>
         )}
         <span className="relative self-stretch" aria-hidden>{typeof gutter === "function" ? gutter(!!selected) : gutter}</span>
@@ -237,7 +237,7 @@ export function Row({ rail, title, chips, facts, action, selected, current, onCl
     // list of identical cards needs to feel like it is under your hand rather
     // than printed on the page.
     <div className={line ? "git-line group min-w-0" : "git-card group"} style={style}
-      onClick={onClick} onContextMenu={onContextMenu} title={title2}>
+      onClick={onClick} onContextMenu={onContextMenu} data-tip={title2}>
       {/* The rail. Sits inside the border radius rather than beside it, so a
           list of them reads as one column of colour down the left. */}
       {!line && (
@@ -305,7 +305,7 @@ export function Tile({ tone, children }: { tone: string; children: ReactNode }) 
 /** ↑ahead ↓behind in mono, green and blue; "in sync" when both are nothing. */
 export function Drift({ ahead, behind, title }: { ahead: number; behind: number; title?: string }) {
   return (
-    <span className="inline-flex items-center gap-1.5 text-[11px] tabular-nums" title={title}
+    <span className="inline-flex items-center gap-1.5 text-[11px] tabular-nums" data-tip={title}
       style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", color: "var(--text3)" }}>
       {ahead > 0 && <span style={{ color: inkOver("--success") }}>↑{ahead}</span>}
       {behind > 0 && <span style={{ color: inkOver("--info") }}>↓{behind}</span>}
@@ -362,7 +362,7 @@ export function TickBox({ on, onClick, title }: { on: boolean; onClick: (e: Reac
   const colour = on ? "var(--primary)" : "var(--text4)";
   return (
     <button
-      type="button" role="checkbox" aria-checked={on} title={title}
+      type="button" role="checkbox" aria-checked={on} data-tip={title}
       onClick={(e) => { e.stopPropagation(); onClick(e); }}
       className="inline-flex items-center justify-center rounded shrink-0 transition-colors"
       style={{ width: HIT - 6, height: HIT - 6, color: colour }}
@@ -424,7 +424,7 @@ export function Pill({ on, tone = "neutral", onClick, children, title }: {
   on?: boolean; tone?: Tone; onClick?: () => void; children: ReactNode; title?: string;
 }) {
   return (
-    <button onClick={onClick} title={title}
+    <button onClick={onClick} data-tip={title}
       className={`${CHIP} font-medium`}
       style={{
         color: on ? "var(--text)" : TONE[tone],

@@ -136,6 +136,12 @@ describe("grouping by something other than status", () => {
     const p = [card("1", { assignees: ["Ravi K."] }), card("2"), card("3", { assignees: ["Dana L."] })];
     expect(groupKeyed(p, "person").map((g) => g.title)).toEqual(["Dana L.", "Ravi K.", "Unassigned"]);
   });
+  test("by agent: needs you, working, finished, then no agent, whatever order the cards came in", () => {
+    const state: Record<string, string> = { "1": "finished", "3": "needs", "4": "working" };
+    const rows = [card("1"), card("2"), card("3"), card("4")];
+    expect(groupKeyed(rows, "agent", (t) => state[t.id] ?? null).map((g) => g.title)).toEqual(["Agent needs you", "Agent working", "Agent finished", "No agent"]);
+    expect(groupKeyed(rows, "agent").map((g) => g.title)).toEqual(["No agent"]);
+  });
   test("each card is in one group and the done ones are counted", () => {
     const g = groupKeyed([card("1", { priority: "high", statusKind: "done" }), card("2", { priority: "high" })], "priority");
     expect(g).toHaveLength(1);

@@ -8,6 +8,7 @@
  * switching changes off keeps the steps and marks them dormant.
  */
 import { describe, expect, test } from "bun:test";
+import { modalSource } from "./settingsSource.ts";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ClickUpPrefs } from "../../shared/providers.ts";
@@ -60,7 +61,7 @@ describe("steps", () => {
   });
   const html = draw(p);
   test("each is listed with where it appears, in map order", () => {
-    const at = ["Button on a pull request", "Item in the review menu", "Option in the merge dialog", "Assigned list in the review menu", "Note button on a pull request"].map((t) => html.indexOf(t));
+    const at = ["Button on a pull request", "Review step on a pull request", "Option in the merge dialog", "People on the review step", "Note button on a pull request"].map((t) => html.indexOf(t));
     expect(at.every((i) => i > -1)).toBe(true);
     expect([...at].sort((a, b) => a - b)).toEqual(at);
   });
@@ -102,6 +103,26 @@ describe("steps", () => {
       const src = await Bun.file(new URL(`../src/components/${f}.tsx`, import.meta.url).pathname).text();
       expect(src, f).not.toMatch(/setInterval|setTimeout\([^)]*,\s*\d{4,}/);
     }
+  });
+  test("the lines are redrawn on a resize, a scroll and a change of pixel ratio, and every listener is taken off", async () => {
+    const src = await Bun.file(new URL("../src/components/WorkflowMap.tsx", import.meta.url).pathname).text();
+    const from = src.indexOf("const draw = useCallback(");
+    expect(from).toBeGreaterThan(-1);
+    const effect = src.slice(src.indexOf("useEffect(", from), src.indexOf("}, [draw]);", from) + "}, [draw]);".length);
+    expect(effect).toContain("new ResizeObserver(again)");
+    expect(effect).toContain("ro?.observe(g)");
+    expect(effect).toContain("ro?.observe(colBox.current)");
+    expect(effect).toContain('scroller.addEventListener("scroll", again, true)');
+    expect(effect).toContain("(resolution: ${window.devicePixelRatio}dppx)");
+    expect(effect).toContain('mq?.addEventListener("change", onRatio)');
+    expect(effect).toContain("arm();");
+    const off = effect.slice(effect.indexOf("return () =>"));
+    for (const gone of ["ro?.disconnect()", 'scroller.removeEventListener("scroll", again, true)', 'window.removeEventListener("resize", again)', 'mq?.removeEventListener("change", onRatio)']) {
+      expect(off).toContain(gone);
+    }
+    /* The endpoints come from the pure function, and the map is measured against its own pixels. */
+    expect(src).toContain("wireEnds({ grid: gr, card: card.getBoundingClientRect(), pick: pick.getBoundingClientRect(), dot: dot.getBoundingClientRect(), scale })");
+    expect(src).toContain("const scale = mapScale(gr, g.offsetWidth);");
   });
 });
 
@@ -153,27 +174,25 @@ describe("a step with nothing to point at, and one switched off", () => {
 
 describe("the page is only there with ClickUp", () => {
   test("Settings renders it for a connected ClickUp and sends an unconnected one back to Tools & services", async () => {
-    const src = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url).pathname).text();
-    expect(src).toContain('{show("clickup") && cu && <ClickUpPane />}');
+    const src = modalSource();
+    expect(src).toContain('{show("clickup") && cu && (');
     expect(src).toContain('const tabs = useMemo(() => TABS.filter((t) => t.id !== "clickup" || cu), [cu]);');
     expect(src).toContain("setPane((p) => paneWhenClickupKnown(p, c.connected) as Pane);");
   });
   test("the old blocks are gone from Tools & services", async () => {
-    const src = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url).pathname).text();
+    const src = modalSource();
     expect(src).not.toContain("ClickUpWorkflow");
     expect(src).not.toContain("Names on your boards");
     expect(src).toContain('onClick={() => openSettings("clickup")}');
   });
   test("the card skills pattern is a generic block on Agents, with the tracker's default on its page", async () => {
-    const src = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url).pathname).text();
-    expect(src).toContain("skills={<CardSkillsCard connected={cu} />}");
     const pane = await Bun.file(new URL("../src/components/ClickUpPane.tsx", import.meta.url).pathname).text();
     expect(pane).toContain('label="Card skills default"');
     expect(pane).toContain("cardSkills(r.skills ?? [], src).length");
     expect(pane.slice(pane.indexOf("export function ClickUpPane"))).not.toContain("cardSkillPattern");
   });
   test("disconnecting drops the copies the sidebar holds, or it draws a card for a minute after", async () => {
-    const src = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url).pathname).text();
+    const src = modalSource();
     const at = src.indexOf("api.providerDisconnect(spec.id, { forgetBoards })");
     expect(at, "the confirmed disconnect moved").toBeGreaterThan(-1);
     const gone = src.slice(at, src.indexOf("onChanged()", at));
@@ -185,7 +204,7 @@ describe("the page is only there with ClickUp", () => {
     expect(src).toContain('(cuHere || r.pane !== "clickup")');
   });
   test("changing workspace drops the spaces and the id style read under the old one", async () => {
-    const src = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url).pathname).text();
+    const src = modalSource();
     const at = src.indexOf("await api.providerWorkspace(spec.id, w.id, w.name);");
     expect(at).toBeGreaterThan(-1);
     expect(src.slice(at, at + 200)).toContain("__forgetClickupSpaces()");

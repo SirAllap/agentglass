@@ -7,6 +7,7 @@ import { CardRef, StatusMove } from "../StepCard.tsx";
 import { Button, EDGE, INPUT, INPUT_STYLE, LINE, Textarea } from "../workspace/Chrome.tsx";
 import { FIELD_KEY, titleOf } from "./JiraStepDialog.tsx";
 import { useFocusTrap } from "../../lib/focusTrap.ts";
+import { whatMoved } from "../../lib/conflictSentence.ts";
 import { useOwnedQuestion } from "../../lib/layerOwner.ts";
 import { WarningIcon } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
@@ -86,7 +87,7 @@ export function MoveForm({ spec, onDone }: { spec: MoveFormSpec; onDone: (r: Mov
 
   const view = useMemo(() => formView(spec.fields, values, { phase }), [spec.fields, values, phase]);
   const shown = spec.fields.filter((f) => f.kind !== "unsupported");
-  const foot = footerOf({ phase, hint: view.hint, blocked: !!view.blocked, error: answer && !answer.ok ? (answer.conflict ? "Somebody changed this card while you had it open. Close this and try again." : answer.error) : undefined, key: spec.card.key, now: answer?.task?.status });
+  const foot = footerOf({ phase, hint: view.hint, blocked: !!view.blocked, error: answer && !answer.ok ? (answer.conflict ? `${whatMoved(answer.error) ?? "Somebody changed this card while you had it open"}. Close this and try again.` : answer.error) : undefined, key: spec.card.key, now: answer?.task?.status });
   const off = phase === "running" || phase === "done";
   const label = phase === "done" ? "Close" : phase === "running" ? "Moving…" : `Move to ${spec.to.status}`;
 

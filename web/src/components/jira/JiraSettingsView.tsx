@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, type ReactNode } from "react";
 import type { JiraStatus, JiraSteps } from "../../../../shared/providers.ts";
 import type { JiraUnit } from "../../../../shared/jiraStatusUnits.ts";
-import { JIRA, jiraAdd, jiraBlocks, jiraRemove, jiraSteps, type StepsPatch } from "../../lib/jiraWorkflow.ts";
+import { JIRA, jiraAdd, jiraBlocks, jiraDotColour, jiraRemove, jiraSteps, type StepsPatch } from "../../lib/jiraWorkflow.ts";
 import { triggerOf } from "../../lib/stepBlocksView.ts";
 import { allStatuses, isActive, moments, resolveImplicit, withCounted, type MapSpace, type StepKind } from "../../lib/workflowMap.ts";
 import { eyeIds, partitionUnits } from "../../lib/workflowLayout.ts";
@@ -13,7 +13,11 @@ import { Dot, StatusPopover, type PanelView } from "../StatusPanel.tsx";
 import { ListEye, WorkflowMap } from "../WorkflowMap.tsx";
 import { WFM_CSS } from "../workflowMapStyle.ts";
 import { CardView, CountedPicker, PrView, Tagged, ago, hint } from "../TrackerMapParts.tsx";
+import { CopyClickUpSteps } from "./CopyClickUpSteps.tsx";
 import { setting } from "../../lib/settingsRegistry.ts";
+import { DEFAULT_SYNC_FAVOURITES, useSyncFavourites } from "../../lib/jiraFavourites.ts";
+import { DEFAULT_CONFIRM_BOARD_MOVES, useConfirmBoardMoves } from "../../lib/jiraBoardMovePref.ts";
+import { openSettings } from "../../lib/openSettings.ts";
 import { HIT, ICON } from "../../lib/iconSize.ts";
 import { ColumnsIcon, PlugIcon, SearchIcon, ServerIcon, ShieldIcon, SlidersIcon } from "../settingsNavIcons.tsx";
 
@@ -46,6 +50,8 @@ export interface JiraViewProps {
   note: string | null;
   /** The per-project tracker choice, drawn between the map and the saved views. */
   tracker?: ReactNode;
+  /** The learned GitHub reviewer → Jira account pairs, a card of its own in the page index. */
+  pairs?: ReactNode;
   onWrites: (on: boolean) => void;
   /** One kind of write, under the master switch. */
   onWriteKind: (kind: WriteKind, on: boolean) => void;
@@ -57,6 +63,8 @@ export interface JiraViewProps {
   onClearOverride: (project: string) => void;
   onOpenTab: () => void;
   onDisconnect: () => void;
+  /** The site's custom fields, by name, for a "Set a field" block. Null: they could not be read. */
+  fields?: () => Promise<{ name: string; type: string }[] | null>;
   busy?: boolean;
 }
 
@@ -72,12 +80,18 @@ export function JiraSettingsView(p: JiraViewProps) {
   const [advOpen, setAdvOpen] = useState(p.overrides.length > 0);
   const [hover, setHover] = useState<StepKind | null>(null);
   const [linked, setLinked] = useState(true);
+  const [copying, setCopying] = useState(false);
   const [countAt, setCountAt] = useState<HTMLElement | null>(null);
   const advRef = useRef<HTMLDivElement>(null);
 
   const units: MapSpace[] = useMemo(() => {
     const raw = state.kind === "ok" ? state.units : state.kind === "error" || state.kind === "loading" ? state.stale ?? [] : [];
-    return raw.map((u: JiraUnit) => ({ id: u.id, name: u.name, statuses: u.statuses, ...(u.counted === false ? { counted: false } : null), ...(u.cards ? { cards: u.cards } : null) }));
+    return raw.map((u: JiraUnit) => ({
+      id: u.id, name: u.name,
+      /* Jira sends a status's category and not a colour: the dot wears the category's house colour. */
+      statuses: u.statuses.map((s) => ({ ...s, color: jiraDotColour(s.type) })),
+      ...(u.counted === false ? { counted: false } : null), ...(u.cards ? { cards: u.cards } : null),
+    }));
   }, [state]);
   const part = useMemo(() => partitionUnits(units), [units]);
   const panel: PanelView = state.kind === "ok" ? { kind: "ok" }
@@ -86,6 +100,8 @@ export function JiraSettingsView(p: JiraViewProps) {
     : { kind: "error", text: state.throttled ? `${n.name} asked us to wait (rate limit).` : state.error };
 
   const steps = useMemo(() => (p.steps ? resolveImplicit(JIRA, jiraSteps(p.steps), allStatuses(part.counted)) : []), [p.steps, part]);
+  const [syncOn] = useSyncFavourites();
+  const [confirmMoves] = useConfirmBoardMoves();
   if (!p.steps) return <div className="py-6 text-[11px]" style={{ color: "var(--text3)" }}>Reading your settings…</div>;
 
   const changesOn = p.writes;
@@ -115,25 +131,12 @@ export function JiraSettingsView(p: JiraViewProps) {
         {p.status.account && <SettingRow agentExempt label="Signed in as" hint={signIn(p.status)} control={<Value>{p.status.account}</Value>} />}
         <SettingRow agentExempt label="Token" hint="Kept on this machine in a file only you can read, never shown again."
           control={<span className="flex items-center gap-2"><StatusBadge tone="ok">Stored</StatusBadge><Button onClick={p.onReplace}>Replace</Button></span>} />
-        {/* The one switch that decides whether anything here can write; the kinds under it narrow it. */}
-        <SettingRow agentExempt label={<span id="jira-changes-l">{`Changes in ${n.name}`}</span>}
-          hint={changesOn ? `Only the steps below can change a ${n.item}, one at a time, when you press their button.` : steps.length ? "agentglass only reads. Turn this on to let the steps below act." : "agentglass only reads. Add a step below, then turn this on to let it act."}
+        <SettingRow agentExempt label={`Changes in ${n.name}`} hint={changesOn ? "On. Set on Permissions › Changes outside." : "Read-only. Turn it on at Permissions › Changes outside."}
           status={<span data-guard={changesOn ? "on" : "off"}><StatusBadge tone={changesOn ? "ok" : "off"}>{changesOn ? "On" : "Read-only"}</StatusBadge></span>}
-          control={<button type="button" role="switch" aria-checked={changesOn} aria-labelledby="jira-changes-l" disabled={p.writesBusy}
-            onClick={() => p.onWrites(!changesOn)} className="agx-switch-hit inline-flex items-center rounded-full" style={{ minHeight: HIT }}><Switch on={changesOn} busy={p.writesBusy} /></button>} />
+          onClick={() => openSettings("permOut")} />
         {p.note && <SettingRow agentExempt label="That did not work" hint={<span role="alert" style={{ color: "var(--error-ink)" }}>{p.note}</span>} />}
         <SettingRow agentExempt label="Disconnect Jira" hint="Removes the token from this machine. Nothing changes in Jira."
           actions={<Button tone="danger" pending={p.busy} onClick={p.onDisconnect}>Disconnect</Button>} />
-      </SettingsCard>
-
-      {/* Nothing is written until the master switch is on; under it, each kind of write is its own. */}
-      <SettingsCard title={"Write permissions"} icon={<ShieldIcon size={ICON.sm} />} desc="Nothing is written until you allow it, one kind at a time."
-        status={changesOn ? undefined : <StatusBadge tone="off">Read-only</StatusBadge>}>
-        {WRITE_KINDS.map((w) => (
-          <Toggle key={w.kind} on={p.status.writeKinds[w.kind]} disabled={p.writesBusy} onClick={() => p.onWriteKind(w.kind, !p.status.writeKinds[w.kind])}
-            settingId={`jira.writes.${w.kind}`} label={w.label}
-            hint={changesOn ? w.hint : `${w.hint} Off while changes are off.`} />
-        ))}
       </SettingsCard>
 
       <SettingsCard icon={<SearchIcon size={ICON.sm} />} title="What we found" fold={{ open: foundOpen ?? steps.length === 0, onToggle: setFoundOpen }}
@@ -142,6 +145,9 @@ export function JiraSettingsView(p: JiraViewProps) {
         <SettingRow settingId="jira.statusUnits.counted" label="Projects that count"
           hint={<>{part.counted.length ? part.counted.map((u) => u.name).join(", ") : state.kind === "loading" ? "reading…" : "none"}<span className="block mt-1">{chosen ? "You chose these. The rest are ignored, not deleted." : `Where your ${n.items} live, until you choose.`}</span>{state.kind === "ok" && state.note && <span className="block mt-1">{state.note}</span>}</>}
           actions={<Button aria-haspopup="listbox" aria-expanded={!!countAt} disabled={!units.length} onClick={(e) => setCountAt(countAt ? null : e.currentTarget)}>Change</Button>} />
+        <Toggle on={syncOn} modified={syncOn !== DEFAULT_SYNC_FAVOURITES} onClick={() => { setting("jira.syncFavourites").set(!syncOn); }}
+          settingId="jira.syncFavourites" label="Sync with Jira filters"
+          hint="List the filters you starred in Jira under Starred filters in the sidebar, with their counts. Off shows only the searches saved here. Nothing changes in Jira." />
         <SettingRow settingId="jira.tree.shapes" label="How each space's tree is laid out"
           hint="Each space in the sidebar is read by components (each with its epics) or by epics (each once, with all its cards). Switch it from the space's own header in the sidebar."
           actions={<Button onClick={() => { setting("jira.tree.shapes").set(""); }}>Show every space by components</Button>} />
@@ -152,7 +158,7 @@ export function JiraSettingsView(p: JiraViewProps) {
                 {part.counted.map((u) => (
                   <li key={u.id} className="flex gap-2 items-start">
                     <span className="flex gap-2 items-center flex-wrap flex-1 min-w-0"><b>{u.name}</b>{hint(`${u.id} · ${u.statuses.length} statuses`)}
-                      <span className="flex gap-1 flex-wrap">{u.statuses.map((s) => <Tagged key={s.status}><Dot type={s.type} color={s.color} />{s.status}</Tagged>)}</span></span>
+                      <span className="flex gap-1 flex-wrap">{u.statuses.map((s) => <Tagged key={s.status}><Dot type={s.type} color={jiraDotColour(s.type)} />{s.status}</Tagged>)}</span></span>
                     <ListEye unit={u} nouns={n} onToggle={toggleCounted} blocked={eyeIds(units, u) === null} />
                   </li>
                 ))}
@@ -172,6 +178,8 @@ export function JiraSettingsView(p: JiraViewProps) {
       )}
 
       <WorkflowMap adapter={JIRA} part={part} panel={panel} steps={steps} changesOn={changesOn} source={source}
+        copy={<Button onClick={() => setCopying(true)} disabled={state.kind === "loading" && !units.length}>Copy steps from ClickUp</Button>}
+        {...(p.fields ? { fields: p.fields } : null)}
         onHover={setHover}
         onAdd={(kind) => p.onSteps(jiraAdd(kind))}
         onBlocks={(kind, blocks) => { if (triggerOf(kind)) void p.onSteps(jiraBlocks(kind, blocks)); }}
@@ -179,6 +187,7 @@ export function JiraSettingsView(p: JiraViewProps) {
         onToggleCounted={toggleCounted}
         onCountAgain={(u) => { const ids = withCounted(units, u.id, true); if (ids) count(ids); }}
         onRetry={p.onReread} />
+      {copying && <CopyClickUpSteps statuses={allStatuses(part.counted)} steps={steps} onSave={p.onSteps} onClose={() => setCopying(false)} />}
 
       <SettingsCard icon={<ColumnsIcon size={ICON.sm} />} title="Where this shows up" desc="Hover a step above to see which part of this it adds."
         actions={<Segmented label={`Does the pull request name a ${n.item}?`} value={linked ? "1" : "0"} onChange={(v) => setLinked(v === "1")}
@@ -195,6 +204,13 @@ export function JiraSettingsView(p: JiraViewProps) {
         </div>
       </SettingsCard>
       {p.tracker}
+      {p.pairs}
+
+      <SettingsCard title="Board" icon={<ColumnsIcon size={ICON.sm} />} desc="How a drag on the board asks before it writes to Jira.">
+        <Toggle on={confirmMoves} modified={confirmMoves !== DEFAULT_CONFIRM_BOARD_MOVES} onClick={() => { setting("jira.board.confirmMoves").set(!confirmMoves); }}
+          settingId="jira.board.confirmMoves" label="Confirm board moves"
+          hint={confirmMoves ? "Moving one card to another column asks first, in a dialog that shows where it goes. Moving several always asks." : "Moving one card moves it at once. Moving several still asks."} />
+      </SettingsCard>
 
       <SettingsCard title="Saved views and folders" icon={<ServerIcon size={ICON.sm} />}
         desc="The boards and filters you saved sit in the Jira tab's sidebar. Add and remove them there.">

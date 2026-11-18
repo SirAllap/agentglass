@@ -6,6 +6,8 @@ import { api } from "../lib/api.ts";
 import { LEAVE_ALONE } from "../lib/cardMove.ts";
 import { lookUpJiraCard, movesOffered, stepOption, stepReaches, type JiraMergeCard } from "../lib/mergeJira.ts";
 import { Button, EDGE } from "./workspace/Chrome.tsx";
+import { TrackerBadge } from "./TrackerBadge.tsx";
+import type { BadgeTracker } from "../lib/trackerBadge.ts";
 import { ArrowRightIcon, TagIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import type { ReactNode } from "react";
@@ -20,13 +22,14 @@ const FIELD = { background: "var(--bg)", border: EDGE, color: "var(--text)" } as
  * title (ellipsis, the whole title in the tooltip), then whatever the step needs
  * under it. Generic on purpose; nothing here names a tracker or a company.
  */
-export function CardFrame({ label, title, children }: { label: string; title?: string; children: ReactNode }) {
+export function CardFrame({ label, title, tracker, children }: { label: string; title?: string; tracker: BadgeTracker | null; children: ReactNode }) {
   return (
     <div className="agx-mg-card" data-merge-card="">
       <div className="agx-mg-trk">
         <div className="agx-mg-trk-top">
           <span className="agx-mg-sm" aria-hidden><TagIcon size={ICON.sm} /></span>
           <b className="agx-mg-trk-id">{label}</b>
+          <TrackerBadge tracker={tracker} />
           {title && <span className="agx-mg-trk-title" data-tip={title}>{title}</span>}
         </div>
         {children}
@@ -51,7 +54,7 @@ export function MovePills({ from, fromColor, to, toColor, toDim }: { from: strin
  * written unless a move is picked.
  */
 export function MergeJiraCard({ card: ref, pick, onPick }: {
-  card: { label: string; query: string };
+  card: { label: string; query: string; repo?: string };
   pick: string;
   onPick: (card: JiraMergeCard | null, key: string) => void;
 }) {
@@ -79,10 +82,10 @@ export function MergeJiraCard({ card: ref, pick, onPick }: {
     await load(() => true);
   };
 
-  if (look.kind === "loading") return <CardFrame label={ref.label}><Spinner label={`Looking up ${ref.label} on Jira…`} className="" /></CardFrame>;
+  if (look.kind === "loading") return <CardFrame label={ref.label} tracker="jira"><Spinner label={`Looking up ${ref.label} on Jira…`} className="" /></CardFrame>;
   if (look.kind === "failed") {
     return (
-      <CardFrame label={ref.label}>
+      <CardFrame label={ref.label} tracker="jira">
         <div className="agx-mg-quiet">{look.why}. The merge is unaffected.</div>
       </CardFrame>
     );
@@ -93,7 +96,7 @@ export function MergeJiraCard({ card: ref, pick, onPick }: {
   const moving = pick !== LEAVE_ALONE;
   const target = moving ? movesOffered(c).find((o) => o.key === pick) : undefined;
   return (
-    <CardFrame label={c.label} title={c.title}>
+    <CardFrame label={c.label} title={c.title} tracker="jira">
       <div className="agx-mg-trk-move">
         <MovePills from={c.status} fromColor={c.statusColor} to={target?.label} toColor={target?.color} toDim={target?.toKind === "done"} />
         <span className="ml-auto flex items-center gap-2 flex-wrap justify-end">
@@ -103,7 +106,7 @@ export function MergeJiraCard({ card: ref, pick, onPick }: {
                 className="text-[11px]" style={FIELD}
                 options={[{ value: LEAVE_ALONE, label: "Leave it there" }]} />
               <Button size="compact" onClick={allowWrites}
-                title="Let this app change cards on your Jira site. The same switch Settings owns.">
+                data-tip="Let this app change cards on your Jira site. The same switch Settings owns.">
                 Allow Jira changes
               </Button>
             </>

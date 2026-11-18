@@ -11,7 +11,8 @@
 // because "is 5173 still up?" is a question you have while looking at anything.
 // Nothing in it runs on a clock: see usePorts, Resources and Locks for what each
 // tab listens to.
-import { useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
+import { useRefreshOnFocus } from "../lib/useRefreshOnFocus.ts";
 import { Portal } from "./Portal.tsx";
 import { Button, Tabs } from "./workspace/Chrome.tsx";
 import { CloseButton } from "./CloseButton.tsx";
@@ -44,7 +45,15 @@ export function MachinePanel({ tab, onTab, onClose, onOpenBrowser }: {
      nothing that repeats. It reads whatever the scan or the machine tile last saw. */
   const lowDisk = useLowDisk();
   // Once per open, on whichever tab it opens on: the badge has to be there before anyone visits Resources. Not a poll; Resources keeps it fresh after.
-  useEffect(() => { api.machineResources(1).then((d) => publishMachineDisk(d.machine)).catch(() => {}); }, []);
+  const sampling = useRef(false); // one read at a time: focus and visibility both fire when the window returns
+  const sampleDisk = useCallback(() => {
+    if (sampling.current) return;
+    sampling.current = true;
+    api.machineResources(1).then((d) => publishMachineDisk(d.machine)).catch(() => {}).finally(() => { sampling.current = false; });
+  }, []);
+  useEffect(sampleDisk, [sampleDisk]);
+  // Coming back to the window is the event that says free space may have changed while it was away; no timer.
+  useRefreshOnFocus(true, sampleDisk);
   const ports = usePorts();
   const yours = ports.data?.ports.filter((p) => p.mine).length;
   return (

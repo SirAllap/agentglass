@@ -103,7 +103,7 @@ export function Tiles({ working, blocked, idle, waiting, clean, nowMs }: {
             ? <div className="leg">nothing is blocked on you</div>
             : mini.map((m, i) => (
               <div className="mini" key={i}>
-                <span title={m.name}>{m.name}</span>
+                <span data-tip={m.name}>{m.name}</span>
                 <div className="meter"><i style={{ width: `${m.pct}%`, background: m.tone === "err" ? "var(--error)" : "var(--warning)" }} /></div>
                 <span>{m.age}</span>
               </div>
@@ -152,7 +152,7 @@ function Question({ text }: { text: string }) {
 function AgeBar({ since, tone, now }: { since: number; tone: "err" | "warn"; now: number }) {
   const c = tone === "err" ? "var(--error)" : "var(--warning)";
   return (
-    <div className="agebar" title={new Date(since).toLocaleString()}>
+    <div className="agebar" data-tip={new Date(since).toLocaleString()}>
       <span style={{ color: c }}>{ageWord(now - since)}</span>
       <div className="meter"><i style={{ width: `${agePct(now - since)}%`, background: c }} /></div>
     </div>
@@ -172,7 +172,7 @@ function WaitCard({ item, root, seat, now, onChanged }: { item: WaitItem; root: 
   };
   const head = (icon: PhName, name: string, extra?: ReactNode) => (
     <div className="t">
-      <span className="badge"><Ph name={icon} size={18} /></span><b>{name}</b>{extra}
+      <span className="badge"><Ph name={icon} size={ICON.lg} /></span><b>{name}</b>{extra}
       <span className="sp" /><AgeBar since={item.since} tone={tone} now={now} />
     </div>
   );
@@ -193,11 +193,11 @@ function WaitCard({ item, root, seat, now, onChanged }: { item: WaitItem; root: 
         <div className="acts">
           {g && (
             <button type="button" className="btn primary" disabled={!!busy}
-              onClick={() => void run("once", () => api.gateDecide(g.id, "allow"))}><Ph name="check" size={14} />Allow once</button>
+              onClick={() => void run("once", () => api.gateDecide(g.id, "allow"))}><Ph name="check" size={ICON.sm} />Allow once</button>
           )}
           {g && ruleRoot && (
             <button type="button" className="btn" disabled={!!busy}
-              title="Allow this call, and make it a rule for this project"
+              data-tip="Allow this call, and make it a rule for this project"
               onClick={() => void run("always", async () => {
                 /* The rule first, then the allow: a rule that fails to save must
                    not leave the person believing the habit was taught. */
@@ -207,7 +207,7 @@ function WaitCard({ item, root, seat, now, onChanged }: { item: WaitItem; root: 
               })}>Always allow here</button>
           )}
           {item.paneId && (
-            <button type="button" className="btn quiet" onClick={() => jumpToPane(item.paneId!)}><Ph name="terminal-window" size={14} />Open terminal</button>
+            <button type="button" className="btn quiet" onClick={() => jumpToPane(item.paneId!)}><Ph name="terminal-window" size={ICON.sm} />Open terminal</button>
           )}
         </div>
         {problem}
@@ -225,11 +225,11 @@ function WaitCard({ item, root, seat, now, onChanged }: { item: WaitItem; root: 
         {(n.cost || n.proof) && <div className="mut" style={{ fontSize: 12 }}>{[n.cost && `costs ${n.cost}`, n.proof && `settled when ${n.proof}`].filter(Boolean).join(" · ")}</div>}
         <div className="acts">
           <button type="button" className="btn primary" disabled={!!busy} onClick={() => void settle(n.recommend)}>
-            <Ph name={n.recommend ? "star" : "check"} size={14} />{n.recommend ? cap(n.recommend) : "Done"}
+            <Ph name={n.recommend ? "star" : "check"} size={ICON.sm} />{n.recommend ? cap(n.recommend) : "Done"}
           </button>
           <button type="button" className="btn" disabled={!!busy} onClick={() => void settle("no longer matters")}>Not needed</button>
           <button type="button" className="btn quiet" disabled={!!busy || !seat?.agent} onClick={() => setReplying((v) => !v)}>Reply</button>
-          {n.recommend && <span className="rec"><Ph name="star" size={12} />recommended: {n.recommend}</span>}
+          {n.recommend && <span className="rec"><Ph name="star" size={ICON.xs} />recommended: {n.recommend}</span>}
         </div>
         {replying && seat?.agent && (
           <form className="reply" onSubmit={(e) => {
@@ -269,7 +269,7 @@ function WaitCard({ item, root, seat, now, onChanged }: { item: WaitItem; root: 
             : <>Allow <b>{r.label}</b><span style={{ marginLeft: -8 }}>?</span> <span className="mut" style={{ fontSize: 13 }}>{r.diff[0] ?? ""}</span></>}
         </div>
         <div className="acts">
-          <button type="button" className="btn primary" disabled={!!busy} onClick={() => void run("allow", () => api.settingsRequestDecide(r.id, true))}><Ph name="check" size={14} />Allow</button>
+          <button type="button" className="btn primary" disabled={!!busy} onClick={() => void run("allow", () => api.settingsRequestDecide(r.id, true))}><Ph name="check" size={ICON.sm} />Allow</button>
           <button type="button" className="btn" disabled={!!busy} onClick={() => void run("keep", () => api.settingsRequestDecide(r.id, false))}>{d ? `Keep ${settingWord(d.from)}` : "Decline"}</button>
           <span className="sp" />
           {d && <span className="nf now"><Ph name="bell-ringing" size={13} />Notified you</span>}
@@ -368,10 +368,10 @@ function AgentRow({ r, spend, idle }: { r: LanternRow; spend: number[]; idle?: b
   const cost = r.facts?.cost ?? 0;
   const go = () => { if (r.paneId) jumpToPane(r.paneId); };
   return (
-    <div className="ag" style={r.paneId ? { cursor: "pointer" } : undefined} title={r.paneId ? `Go to ${r.paneId}` : undefined}
+    <div className="ag" style={r.paneId ? { cursor: "pointer" } : undefined} data-tip={r.paneId ? `Go to ${r.paneId}` : undefined}
       role={r.paneId ? "button" : undefined} tabIndex={r.paneId ? 0 : undefined}
       onClick={go} onKeyDown={(e) => { if (r.paneId && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); go(); } }}>
-      <div className="nm"><span className={`dot${idle ? " idle" : ""}`} /><span title={r.name}>{r.name}</span></div>
+      <div className="nm"><span className={`dot${idle ? " idle" : ""}`} /><span data-tip={r.name}>{r.name}</span></div>
       <div className="act">
         {r.worker ? (
           /* A headless worker has no tool call to read: it is the CLI running
@@ -381,13 +381,13 @@ function AgentRow({ r, spend, idle }: { r: LanternRow; spend: number[]; idle?: b
             <span className="tg" data-tip={`started ${fmtAgo(r.worker.since)}`}>{ageShort(Date.now() - r.worker.since)}</span>
           </>
         ) : verb ? (
-          <><span className="v"><Ph name={verb.icon} size={14} />{verb.word}</span><span className="tg" title={target}>{target}</span></>
+          <><span className="v"><Ph name={verb.icon} size={ICON.sm} />{verb.word}</span><span className="tg" data-tip={target}>{target}</span></>
         ) : (
-          <span className="tg" title={target}>{target || "no word yet"}</span>
+          <span className="tg" data-tip={target}>{target || "no word yet"}</span>
         )}
       </div>
-      <div className="br">{r.branch ? <><Ph name="git-branch" size={14} /><span title={r.branch}>{r.branch}</span></> : null}</div>
-      <div className="pulse" title={pulse.length ? `${pulse.reduce((a, b) => a + b, 0)} tool calls in the last hour` : "no reading of the last hour"}>
+      <div className="br">{r.branch ? <><Ph name="git-branch" size={ICON.sm} /><span data-tip={r.branch}>{r.branch}</span></> : null}</div>
+      <div className="pulse" data-tip={pulse.length ? `${pulse.reduce((a, b) => a + b, 0)} tool calls in the last hour` : "no reading of the last hour"}>
         {(pulse.length ? pulse : Array.from({ length: 12 }, () => 0)).map((n, i) => (
           <i key={i} style={{ height: Math.max(2, Math.round((n / max) * 18)), background: n > 0 ? undefined : "var(--bg4)" }} />
         ))}
@@ -460,7 +460,7 @@ export function WorkingSection({ working, idle, gone, hidden, hiddenDetail, onCh
                 <div key={r.paneId ?? r.name}>
                   <b style={{ color: "var(--text2)" }}>{r.name}</b>
                   <span>no pane here, quiet for hours</span>
-                  {r.from === "said" && <button type="button" className="btn sm quiet" onClick={() => clear(r.name)} title="Take this name off the board">Clear</button>}
+                  {r.from === "said" && <button type="button" className="btn sm quiet" onClick={() => clear(r.name)} data-tip="Take this name off the board">Clear</button>}
                 </div>
               ))}
             </div>
@@ -488,7 +488,7 @@ function AddTaskRow({ root, onChanged }: { root: string; onChanged: () => void }
       void api.seatTaskAdd(root, t, proof.trim()).then((r) => { if (r.ok) { setTitle(""); setProof(""); } else setErr(r.error ?? "could not add it"); })
         .catch(() => setErr("could not add it")).finally(() => { setBusy(false); onChanged(); });
     }}>
-      <span className="s"><Ph name="plus" size={18} /></span>
+      <span className="s"><Ph name="plus" size={ICON.lg} /></span>
       <div className="ti">
         <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Add a task for the orchestrator" aria-label="Add a task for the orchestrator" disabled={busy} />
         {title.trim() && <input value={proof} onChange={(e) => setProof(e.target.value)} placeholder="done when…" aria-label="Done when" disabled={busy} className="pf" />}
@@ -505,10 +505,10 @@ function PreflightRow({ t }: { t: SeatTask }) {
   const f = t.preflight!;
   return (
     <div className="qr">
-      <span className="s"><Ph name="check" size={18} /></span>
-      <div className="ti" title={t.title}>{t.title}</div>
+      <span className="s"><Ph name="check" size={ICON.lg} /></span>
+      <div className="ti" data-tip={t.title}>{t.title}</div>
       <button type="button" className={`agv-chip ${f.status === "failed" ? "err" : f.status === "pending" ? "info" : "ok"}`} onClick={() => openFlightPlan({ tab: "history" })}
-        title="Open it in Flight plan">{f.status === "checked" ? "Checked by Preflight" : f.status === "pending" ? "Preflight reading" : "Preflight failed"}</button>
+        data-tip="Open it in Flight plan">{f.status === "checked" ? "Checked by Preflight" : f.status === "pending" ? "Preflight reading" : "Preflight failed"}</button>
       {f.openFindings > 0 && <button type="button" className="agv-chip warn" onClick={() => openFlightPlan({ tab: "history" })}>{f.openFindings} open {f.openFindings === 1 ? "finding" : "findings"}</button>}
     </div>
   );
@@ -530,7 +530,7 @@ export function UpNext({ seat, schedules, onCancel, showEmpty, onSchedule, root,
   return (
     <div>
       <SectionHead title="Up next" count={total} hint={total ? `${started} of ${total} started` : undefined}>
-        <button type="button" className="btn sm quiet" onClick={onSchedule} title="Schedule an agent: start one later, at a clock time, a date-time, or after a delay">Schedule…</button>
+        <button type="button" className="btn sm quiet" onClick={onSchedule} data-tip="Schedule an agent: start one later, at a clock time, a date-time, or after a delay">Schedule…</button>
       </SectionHead>
       <SubLine src="from the orchestrator" icon="robot" notify="quiet" />
       {total === 0
@@ -544,19 +544,19 @@ export function UpNext({ seat, schedules, onCancel, showEmpty, onSchedule, root,
             <div className="card">
               {shown.map((t) => (
                 <div className="qr" key={t.id}>
-                  <span className={`s${t.takenAt ? " p" : ""}`}><Ph name={t.takenAt ? "play" : "hourglass-medium"} size={18} /></span>
-                  <div className="ti" title={t.proof ? `${t.title}. Done when ${t.proof}` : t.title}>{t.title}</div>
+                  <span className={`s${t.takenAt ? " p" : ""}`}><Ph name={t.takenAt ? "play" : "hourglass-medium"} size={ICON.lg} /></span>
+                  <div className="ti" data-tip={t.proof ? `${t.title}. Done when ${t.proof}` : t.title}>{t.title}</div>
                   {t.takenAt
-                    ? <span className="av" title={`${t.takenBy || "unnamed"}, ${fmtAgo(t.takenAt)} ago`}>{(t.takenBy || "?")[0]!.toUpperCase()}</span>
-                    : <span className="av free" title="Nobody has it yet"><Ph name="arrow-right" size={12} /></span>}
+                    ? <span className="av" data-tip={`${t.takenBy || "unnamed"}, ${fmtAgo(t.takenAt)} ago`}>{(t.takenBy || "?")[0]!.toUpperCase()}</span>
+                    : <span className="av free" data-tip="Nobody has it yet"><Ph name="arrow-right" size={ICON.xs} /></span>}
                 </div>
               ))}
               {checked.map((t) => <PreflightRow key={t.id} t={t} />)}
               {later.map((s) => (
                 <div className="qr" key={s.id}>
-                  <span className="s"><Ph name="clock" size={18} /></span>
-                  <div className="ti" title={s.prompt || s.name}>{s.name} <span className="mut" style={{ fontSize: 12 }}>{new Date(s.due).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}</span></div>
-                  <button type="button" className="btn sm quiet" onClick={() => onCancel(s.id)} title="Cancel this scheduled start">Cancel</button>
+                  <span className="s"><Ph name="clock" size={ICON.lg} /></span>
+                  <div className="ti" data-tip={s.prompt || s.name}>{s.name} <span className="mut" style={{ fontSize: 12 }}>{new Date(s.due).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}</span></div>
+                  <button type="button" className="btn sm quiet" onClick={() => onCancel(s.id)} data-tip="Cancel this scheduled start">Cancel</button>
                 </div>
               ))}
               {addRow}
@@ -598,23 +598,23 @@ function CleanGroupRow({ g, onChanged, onKeep }: { g: CleanGroup; onChanged: () 
     <div className="lo">
       <div className="t1">
         <div className="big">{g.count}</div>
-        <div><div className="tt"><Ph name={GROUP_ICON[g.kind]} size={16} />{g.title}</div><div className="sub">{g.sub}</div></div>
+        <div><div className="tt"><Ph name={GROUP_ICON[g.kind]} size={ICON.md} />{g.title}</div><div className="sub">{g.sub}</div></div>
         <button type="button" className={`btn sm${g.kind === "schedule" ? "" : " stop"}`} disabled={busy || (g.kind !== "schedule" && g.pids.length === 0)} onClick={() => void act()}>
-          <Ph name={g.kind === "schedule" ? "trash" : "stop-circle"} size={14} />{busy ? "Working…" : g.button}
+          <Ph name={g.kind === "schedule" ? "trash" : "stop-circle"} size={ICON.sm} />{busy ? "Working…" : g.button}
         </button>
       </div>
       <div className="t2">
         {g.chips.length > 0
           ? <div className="ports">{g.chips.map((c, i) => (
-            <span key={i} className="port" title={c.title}>
+            <span key={i} className="port" data-tip={c.title}>
               {c.label}
-              <button type="button" className="keep" title="Keep: never list this server here again" aria-label={`Keep ${c.label}`} onClick={() => onKeep(c.key)}
+              <button type="button" className="keep" data-tip="Keep: never list this server here again" aria-label={`Keep ${c.label}`} onClick={() => onKeep(c.key)}
                 style={{ marginLeft: 4, padding: 0, border: 0, background: "none", color: "inherit", cursor: "pointer", font: "inherit", opacity: 0.7 }}>keep</button>
             </span>
           ))}{g.more > 0 && <span className="port more">+{g.more}</span>}</div>
           : <span />}
         {days !== null && (
-          <div className="agebar" title={`oldest: ${days} days`}>
+          <div className="agebar" data-tip={`oldest: ${days} days`}>
             <span style={{ color: "var(--warning)" }}>{days} d</span>
             <div className="meter"><i style={{ width: `${Math.min(100, Math.round((days / 60) * 100))}%`, background: "var(--warning)" }} /></div>
           </div>
@@ -659,7 +659,7 @@ export function HousekeepingSection({ rows }: { rows: HkRow[] }) {
       <div className="card hk">
         {shown.map((r) => (
           <div key={r.key} className={`hk-row ${r.tone}${r.fresh ? " fresh" : ""}`}>
-            <span className="hk-tile">{r.tone === "run" ? <Ph name="arrows-clockwise" size={14} /> : <Ph name={r.tone === "ok" ? "check" : "warning-circle"} size={14} />}</span>
+            <span className="hk-tile">{r.tone === "run" ? <Ph name="arrows-clockwise" size={ICON.sm} /> : <Ph name={r.tone === "ok" ? "check" : "warning-circle"} size={ICON.sm} />}</span>
             <div className="hk-tx"><b>{r.title}</b><span>{r.sub}</span></div>
             <div className="hk-rt">
               {r.badge && <span className="hk-badge">{r.badge}</span>}

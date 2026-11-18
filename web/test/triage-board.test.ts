@@ -21,7 +21,7 @@ import { describe, expect, it } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TriageBoard } from "../src/components/TriageBoard.tsx";
-import { LANES, LANE_CAP } from "../src/lib/prLanes.ts";
+import { LANES, LANE_CAP } from "../../shared/prLanes.ts";
 import { CHIP_H } from "../src/lib/priority.tsx";
 
 const board = await Bun.file(new URL("../src/components/TriageBoard.tsx", import.meta.url)).text();
@@ -486,7 +486,8 @@ describe("a long title cannot decide the card's height", () => {
      */
     const long = "fix: " + "a very long title that nobody would ever type by hand ".repeat(4);
     const html = render({ mine: [pr(1, { title: long })] });
-    expect(css).toMatch(/\.agx-cd-t \{[^}]*-webkit-line-clamp: 2;/);
+    // The mockup card gives the title three lines; still a clamp, so the height is bounded.
+    expect(css).toMatch(/\.agx-cd-t \{[^}]*-webkit-line-clamp: 3;/);
     expect(html).toContain(long.slice(0, 40)); // still there, whole in the tooltip
   });
 });

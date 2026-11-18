@@ -2,6 +2,7 @@
 // (stage/unstage/discard/commit), branches (checkout/create/delete), log
 // (browse commits, view a commit's diff), and stash — all with the same diff
 // renderer as the telemetry view.
+import { openExternal } from "../lib/externalUrl.ts";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { diffSplit, diffWrap } from "../lib/diffPrefs.ts";
 import { GIT_MODAL_TTL_MS, hasGitModal, subscribeGitModal, takeGitModal } from "../lib/gitModalIntent.ts";
@@ -19,9 +20,10 @@ import { requestTermIssue } from "../lib/termIssue.ts";
 import { useLiveWindow, openLiveWindow, followHandoff } from "../lib/liveWindow.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle } from "./workspace/ViewHeader.tsx";
+import { CommitModal } from "./CommitModal.tsx";
 import { Button, CHIP, RefreshButton, Segmented, Textarea, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
 import { ICON } from "../lib/iconSize.ts";
-import { ArrowIcon, BranchIcon, ChartIcon, CommitIcon, CrossIcon, DoneIcon, FileIcon, IconLabel, ListIcon, MinusIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, StashIcon, TargetIcon, TerminalIcon, TreeIcon, UndoIcon } from "../lib/glyphIcons.tsx";
+import { ArrowIcon, BranchIcon, ChartIcon, CommitIcon, CrossIcon, DoneIcon, FileIcon, IconLabel, ListIcon, MinusIcon, PlusIcon, RefreshIcon, SearchIcon, SparkleIcon, StashIcon, TargetIcon, TerminalIcon, TrashIcon, TreeIcon, UndoIcon } from "../lib/glyphIcons.tsx";
 import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitTagOrigin, ConflictBlock, BlockChoice, MergeInfo, FileChange, WalkthroughResult, WalkthroughFile, TidyReport, GitSubmodule, GitCommit } from "../../../shared/types.ts";
 import { partitionByWorktree, splitReadable, goneConfirmTitle, goneConfirmBody, forcedDeletePrompt } from "../lib/goneCleanup.ts";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
@@ -30,6 +32,7 @@ import { BasePicker } from "./BasePicker.tsx";
 import { RescueModal } from "./RescueModal.tsx";
 import { useGitDialogs } from "./GitDialogs.tsx";
 import { api, IS_DEMO } from "../lib/api.ts";
+import { dirtyTracked, discardLostLine, hardResetLost, hardResetShows, onlyHereLine, partiallyStaged, resetLost, resolvedFiles } from "../lib/gitDangerModal.ts";
 import { refusalFinal, useCoverHold } from "../lib/cover.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
@@ -373,7 +376,7 @@ function ShortcutBar({ view, logOpen, onToggleLog, editorName }: { view: View; l
     ? [...VIEW_KEYS.changes.slice(0, 2), ["e", "open it here"], ...VIEW_KEYS.changes.slice(2)]
     : VIEW_KEYS[view];
   return (
-    <div className="shrink-0 px-4 py-1 border-t text-[9.5px] t-dim2 flex items-center gap-3" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
+    <div className="shrink-0 px-4 py-1 border-t text-[9.5px] t-dim2 flex items-center gap-3" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)", paddingRight: "var(--fab-reserve)" }}>
       {keys.map(([k, label]) => (
         <span key={k}><b className="font-semibold" style={{ color: "var(--text2)" }}>{k}</b> {label}</span>
       ))}
@@ -446,7 +449,7 @@ function FileRow({ c, root, active, desc, onSelect, onBlame, onMenu, depth, tick
       // the action in a lane that cannot be grown into. The status LETTER stays
       // — in a file list it is the fastest read there is — but it sits on the
       // rail rather than floating in a column of its own.
-      className="flex items-center gap-2 pr-2 py-1.5 rounded-lg cursor-pointer transition-colors" title={c.file_path}
+      className="flex items-center gap-2 pr-2 py-1.5 rounded-lg cursor-pointer transition-colors" data-tip={c.file_path}
       style={{
         background: active ? "color-mix(in srgb, var(--primary) 14%, transparent)" : "color-mix(in srgb, var(--bg3) 26%, transparent)",
         border: `1px solid ${active ? "color-mix(in srgb, var(--primary) 40%, transparent)" : "color-mix(in srgb, var(--text) 6%, transparent)"}`,
@@ -464,7 +467,7 @@ function FileRow({ c, root, active, desc, onSelect, onBlame, onMenu, depth, tick
       )}
       <span className="w-4 text-center text-[10px] font-bold shrink-0 self-start mt-0.5 rounded"
         style={{ color: STATUS_TINT[c.status], background: `color-mix(in srgb, ${STATUS_TINT[c.status]} 14%, transparent)` }}
-        title={c.status}>{STATUS_LETTER[c.status]}</span>
+        data-tip={c.status}>{STATUS_LETTER[c.status]}</span>
       <span className="min-w-0 flex-1 truncate">
         <span className="block truncate text-[11.5px]" style={{ color: active ? "var(--text)" : "var(--text2)" }}>
           {/* In tree mode the directory is already spelled out by the rows
@@ -473,7 +476,7 @@ function FileRow({ c, root, active, desc, onSelect, onBlame, onMenu, depth, tick
         </span>
         {/* Its own line, not the path's: set tight and 9.5px it read as the
             filename wrapping onto a second line. */}
-        {desc && <span className="block truncate text-[10px] leading-normal t-dim2 mt-0.5" title={desc}>{desc}</span>}
+        {desc && <span className="block truncate text-[10px] leading-normal t-dim2 mt-0.5" data-tip={desc}>{desc}</span>}
       </span>
       <span className="shrink-0 self-start mt-0.5 text-[9.5px] tabular-nums flex items-center gap-1 opacity-80">
         {c.additions > 0 && <span style={{ color: "var(--success-ink)" }}>+{c.additions}</span>}
@@ -575,13 +578,16 @@ function BlockResolver({ blocks, error, picks, onPick, onApply, busy }: {
         <button onClick={onApply} disabled={busy || left > 0}
           className="ml-auto px-2 py-0.5 rounded text-[10px] font-medium"
           style={{ color: "var(--success-ink)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)", opacity: left ? 0.4 : 1 }}
-          title={left ? "Choose a side for every conflict first" : "Write these choices and stage the file"}>
+          data-tip={left ? "Choose a side for every conflict first" : "Write these choices and stage the file"}>
           Apply and stage
         </button>
       </div>
     </div>
   );
 }
+
+/** How often the working tree is re-read while the Git view is looked at. */
+const TREE_POLL_MS = 5_000;
 
 export function GitView({ active }: { active: boolean }) {
   /** A modal asked for through /control while this view is not on screen. The
@@ -629,6 +635,8 @@ export function GitView({ active }: { active: boolean }) {
   const [title, setTitle] = useState("");
   /** Set while the commit box is rewriting the tip instead of adding a commit. */
   const [amend, setAmend] = useState<{ hash: string } | null>(null);
+  /** The Commit modal: the inline box, with the strip and the file list. */
+  const [reviewing, setReviewing] = useState(false);
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -1256,7 +1264,15 @@ export function GitView({ active }: { active: boolean }) {
    *
    * The working tree is a `git status` — tens of milliseconds — and it's the
    * thing that genuinely moves while you watch, since an agent is editing files
-   * under you. Worth 2.5s.
+   * under you. It was polled every 2.5s, and each tick forked `git status` on
+   * the server's main thread: the measured cause of the server freezes
+   * (timers audit 2026-11-13). Every write the server makes already pushes a
+   * `git` frame (gitBus, subscribed above), but an agent's Edit/Write or a
+   * `git add` typed in a terminal is not a server write and pushes nothing, and
+   * the server holds no watcher on a repo's working tree. So the tree keeps a
+   * slow poll, gated by usePoll on a visible AND focused window (a hidden or
+   * blurred window forks nothing), and re-reads at once when the window comes
+   * back. 5s, not 2.5s: half the forks, and still well inside "while you watch".
    *
    * The other views are history. `log --graph -n500` measures 864ms on a real
    * repo, so re-running it every 2.5s spent a third of every cycle rebuilding a
@@ -1265,8 +1281,8 @@ export function GitView({ active }: { active: boolean }) {
    * reload through act(). So this only needs to catch changes made outside the
    * app, which 10s covers with room to spare.
    */
-  usePoll(active && !!root && !busy, () => loadTree(root));
-  // The polls' first tick is 2.5s / 10s after the view returns; an agent that
+  usePoll(active && !!root && !busy, () => loadTree(root), TREE_POLL_MS);
+  // The polls' first tick is 5s / 10s after the view returns; an agent that
   // edited or staged files while the Terminal was in front should show at once
   // (the conflict list rides on loadView, not on the tree).
   useEffect(() => { if (active && root) { loadTree(root); loadView(); } }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1305,7 +1321,7 @@ export function GitView({ active }: { active: boolean }) {
   const stage = async (c: GitFileChange) => { if (await act(() => api.gitStage(root, [rel(c)]))) setSelKey("s:" + c.file_path); };
   const unstage = async (c: GitFileChange) => { if (await act(() => api.gitUnstage(root, [rel(c)]))) setSelKey("u:" + c.file_path); };
   const discard = async (c: GitFileChange) => {
-    if (await ask({ title: `Discard changes to ${baseName(c.file_path)}?`, command: discardCommand(rel(c), c.status === "untracked"), irreversible: true, danger: true, confirmLabel: "Discard" })) act(() => api.gitDiscard(root, [rel(c)]), "Discarded");
+    if (await ask({ title: `Discard changes to ${baseName(c.file_path)}?`, command: discardCommand(rel(c), c.status === "untracked"), irreversible: true, danger: true, lost: [rel(c)], lostLine: discardLostLine(rel(c), c.additions + c.deletions), confirmLabel: "Discard" })) act(() => api.gitDiscard(root, [rel(c)]), "Discarded");
   };
   const startAmend = async () => {
     const info = await api.gitAmendInfo(root).catch(() => null);
@@ -1325,6 +1341,15 @@ export function GitView({ active }: { active: boolean }) {
   const doCommit = async () => {
     if (!title.trim()) { flash(false, "Commit title required"); return; }
     if (await act(() => api.gitCommitStaged(root, title, body), "Committed")) { setTitle(""); setBody(""); api.gitGraph(root, 500, logScope).then((r) => setGraph(r.lines)).catch(() => {}); }
+  };
+  const doReviewedCommit = async (a: { paths: string[]; subject: string; body: string; fold: boolean }) => {
+    const dropped = (tree?.staged ?? []).map(rel).filter((f) => !a.paths.includes(f));
+    const part = partiallyStaged(dropped, (tree?.unstaged ?? []).map(rel));
+    if (part.length) return void flash(false, `${part[0]} is only partly staged: untick would stage the whole file when the commit fails. Stage or unstage it fully first.`);
+    if (dropped.length && !(await act(() => api.gitUnstage(root, dropped)))) { await act(() => api.gitStage(root, dropped)); return; } // unstage may have run for some files: give them back
+    const ok = await act(() => (a.fold ? api.gitAmendStaged(root, a.subject, a.body) : api.gitCommitStaged(root, a.subject, a.body)), a.fold ? "Amended" : "Committed");
+    if (ok) { setReviewing(false); setTitle(""); setBody(""); reloadGraph(); }
+    else if (dropped.length) await act(() => api.gitStage(root, dropped)); // the commit failed: give the unticked files back
   };
   // branches
   const reloadBranches = () => api.gitBranches(root).then(setBranchData).catch(() => {});
@@ -1374,7 +1399,10 @@ export function GitView({ active }: { active: boolean }) {
   const deleteBranch = async (b: GitBranch) => {
     const no = protectedRefusal(protectedBranches, [b.name]);
     if (no) { flash(false, no); return; }
-    if (busy || !(await ask({ title: `Delete branch ${b.name}?`, body: "Deletes the local branch. If git says it is not merged, or a worktree holds it, you are asked again before anything is forced or removed.", danger: true, confirmLabel: "Delete" }))) return;
+    const only = await api.gitBranchOnlyHere(root, b.name).catch(() => null);
+    if (busy || !(await ask({ title: `Delete branch ${b.name}?`, body: `Deletes the local branch. ${only ? onlyHereLine(only.count) + " " : ""}If git says it is not merged, or a worktree holds it, you are asked again before anything is forced or removed.`,
+      lost: only?.count ? only.commits.map((c) => `${c.shortHash} ${c.subject}`) : undefined, lostLine: only?.count ? `${only.count} commit${only.count === 1 ? "" : "s"} only here` : undefined, danger: true, confirmLabel: "Delete",
+      confirmIcon: <TrashIcon size={ICON.sm} />, dots: only?.count ? { shared: only.shared ?? 0, onlyHere: only.count, name: b.name } : undefined }))) return;
     setBusy(true);
     setPending(`Delete ${b.name}`);
     try {
@@ -1448,7 +1476,7 @@ export function GitView({ active }: { active: boolean }) {
     try {
       const r = await api.prBranchUrl(root, b.name, trackChip(b.track).gone);
       if (!r.ok || !r.url) { flash(false, r.error ? fail(r.error) : "Could not work out where that branch lives"); return; }
-      window.open(r.url, "_blank", "noopener,noreferrer");
+      openExternal(r.url);
     } catch (e) { flash(false, fail(String(e))); }
     finally { setBusy(false); }
   };
@@ -1747,7 +1775,11 @@ export function GitView({ active }: { active: boolean }) {
     if (no) { flash(false, `${no}: unprotect it in the Branches tab to reset it`); return; }
     // Soft and mixed lose no work, so they get a plain ask; only hard is red.
     const hard = mode === "hard";
+    // The commits a hard reset drops, read from the log the panel can already ask for.
+    const dropped = hard ? resetLost((await api.gitLog(root, 200).catch(() => ({ commits: [] }))).commits, hash) : null;
+    const gone = hard ? hardResetLost(dropped ? dropped.items : null, dirtyTracked(tree, rel)) : null;
     if (!(await ask({
+      lost: hardResetShows(gone, dropped ? dropped.items : null) ? gone!.items : undefined, lostLine: hardResetShows(gone, dropped ? dropped.items : null) ? gone!.line : undefined,
       title: hard ? `Hard reset to ${hash}?` : `Reset ${tree?.branch.name ?? "this branch"} to ${hash}?`,
       body: hard ? "This DISCARDS working-tree changes."
         : `The commits after it are undone. Their changes stay ${mode === "soft" ? "staged" : "in your files, unstaged"}; no file changes.`,
@@ -1856,6 +1888,7 @@ export function GitView({ active }: { active: boolean }) {
       const resolved = s?.ok ? s.files.length - s.left.length : 1;
       if (resolved > 0 && !(await ask({
         title: "Abort and discard your resolutions?",
+        lost: s?.ok ? resolvedFiles(s.files, s.left) : undefined,
         body: "The tree goes back to exactly how it was before this started. Every file you already resolved is thrown away.",
         danger: true, confirmLabel: "Abort",
       }))) return;
@@ -2794,7 +2827,7 @@ export function GitView({ active }: { active: boolean }) {
      * tooltip: it is a thing you learn once, not a thing you read every time.
      */
     return (
-      <button onClick={() => setView(id)} title={`${VIEW_LABEL[id]}${n ? ` (${n})` : ""} — press ${num}`}
+      <button onClick={() => setView(id)} data-tip={`${VIEW_LABEL[id]}${n ? ` (${n})` : ""} — press ${num}`}
         aria-keyshortcuts={String(num)} aria-selected={on} role="tab"
         className="text-[11px] leading-none rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 font-medium px-3 min-h-[28px]"
         style={{
@@ -2840,7 +2873,7 @@ export function GitView({ active }: { active: boolean }) {
       onClick={() => setBisectOpen(true)}
       className="text-[11px] px-2.5 h-[26px] inline-flex items-center rounded-lg whitespace-nowrap shrink-0"
       style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}
-      title="A bisect is in progress — mark the checked-out commit good or bad"
+      data-tip="A bisect is in progress — mark the checked-out commit good or bad"
     ><IconLabel icon={<TargetIcon size={ICON.xs} />}>bisect</IconLabel></button>
   ) : null;
   /* Offered only while undoing is exact: an unpushed merge
@@ -2859,7 +2892,7 @@ export function GitView({ active }: { active: boolean }) {
       disabled={undoOff}
       className="text-[11px] px-2 h-[26px] inline-flex items-center rounded-lg whitespace-nowrap shrink-0"
   style={{ color: "var(--text2)", border: EDGE, opacity: busy ? 0.5 : 1 }}
-  title="Undo the last merge — the branch returns to exactly where it was. Offered only because it is unpushed and nothing sits on top of it.">
+  data-tip="Undo the last merge — the branch returns to exactly where it was. Offered only because it is unpushed and nothing sits on top of it.">
   {pending === "undo" ? "undoing…" : <IconLabel icon={<UndoIcon size={ICON.xs} />}>undo merge</IconLabel>}
     </button>
   ) : null;
@@ -2889,7 +2922,7 @@ export function GitView({ active }: { active: boolean }) {
       onClick={() => openPr(prChip.repo, prChip.pr.number)}
       className="text-[11px] px-2.5 h-[26px] rounded-lg whitespace-nowrap flex items-center gap-1.5"
       style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}
-      title={`${prChip.pr.title} — open it in Pull requests`}>
+      data-tip={`${prChip.pr.title} — open it in Pull requests`}>
       {/* The state as a dot rather than a word: the row is
           already dense and the colour is the whole message. */}
       {/*
@@ -2919,7 +2952,7 @@ export function GitView({ active }: { active: boolean }) {
       are twelve, and they land here". */
   const slotPrUnknown = prAskFailed && !branchPr && prsOntoBranch.length === 0 ? (
     <span className="text-[11px] px-2.5 h-[26px] inline-flex items-center rounded-lg whitespace-nowrap"
-      title={`${prAskFailed} — so this header cannot say whether the branch has a pull request`}
+      data-tip={`${prAskFailed} — so this header cannot say whether the branch has a pull request`}
       style={{ color: "var(--text4)", border: "1px dashed color-mix(in srgb, var(--text) 18%, transparent)" }}>
       PR unknown
     </span>
@@ -2929,7 +2962,7 @@ export function GitView({ active }: { active: boolean }) {
       onClick={() => openPrs(currentBranchName)}
       className="text-[11px] px-2.5 h-[26px] rounded-lg whitespace-nowrap flex items-center gap-1.5"
       style={{ color: "var(--text2)", border: EDGE }}
-      title={`${prsOntoBranch.length} open pull request${prsOntoBranch.length === 1 ? "" : "s"} merge into ${currentBranchName}:\n${prsOntoBranch.slice(0, 6).map((p) => `#${p.number} ${p.title}`).join("\n")}`}>
+      data-tip={`${prsOntoBranch.length} open pull request${prsOntoBranch.length === 1 ? "" : "s"} merge into ${currentBranchName}:\n${prsOntoBranch.slice(0, 6).map((p) => `#${p.number} ${p.title}`).join("\n")}`}>
       <span style={{ color: "var(--text4)" }}>→</span>
       {prsOntoBranch.length} PR{prsOntoBranch.length === 1 ? "" : "s"} land here
     </button>
@@ -2954,7 +2987,7 @@ export function GitView({ active }: { active: boolean }) {
         disabled={syncOff}
         className="text-[11px] px-2 h-[26px] inline-flex items-center rounded-l-[7px] whitespace-nowrap"
         style={{ color: "var(--warning-ink)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", borderRight: "none", opacity: syncOff ? 0.45 : 1 }}
-        title={!tree?.clean
+        data-tip={!tree?.clean
           ? "Commit or stash your changes first — merging over uncommitted work is how you lose it"
           : twinBehind
           // Syncing while behind your own remote makes a
@@ -3140,9 +3173,9 @@ export function GitView({ active }: { active: boolean }) {
                               const on = blockFile === relPath;
                               return (
                                 <button key={f} onClick={() => void openBlocks(relPath)}
-                                  className="w-full flex items-center gap-2 px-2.5 py-1 text-left hover:bg-white/5"
+                                  className="w-full flex items-center gap-2 px-2.5 py-1 text-left agx-hover"
                                   style={on ? { background: "color-mix(in srgb, var(--warning) 14%, transparent)" } : undefined}
-                                  title={f}>
+                                  data-tip={f}>
                                   <span className="w-3.5 text-center text-[11px] font-bold shrink-0" style={{ color: "var(--warning-ink)" }}>!</span>
                                   <span className="text-[11.5px] truncate" style={{ color: on ? "var(--text)" : "var(--text2)" }}>{relPath}</span>
                                 </button>
@@ -3152,7 +3185,7 @@ export function GitView({ active }: { active: boolean }) {
                         )}
                         {conflicts.length > 0 && !mergeRest && (
                           <button onClick={() => setMergeRest(true)}
-                            className="w-full text-left px-3 py-2 text-[10.5px] hover:bg-white/5"
+                            className="w-full text-left px-3 py-2 text-[10.5px] agx-hover"
                             style={{ color: "var(--text3)" }}>
                             <PlusIcon size={ICON.xs} className="inline-block align-[-2px] mr-1" />{(tree?.staged.length ?? 0) + (tree?.unstaged.length ?? 0)} more the merge brought — show them
                           </button>
@@ -3189,6 +3222,10 @@ export function GitView({ active }: { active: boolean }) {
                             <IconLabel icon={<CommitIcon size={ICON.xs} />}>Commit {tree?.staged.length ? `${tree.staged.length} staged` : ""}</IconLabel>
                             {!!tree?.staged.length && branch?.name && <>to <span className="px-1 rounded" style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", border: "1px solid color-mix(in srgb, currentColor 35%, transparent)" }}>{branch.name}</span></>}
                           </Button>
+                          {writeEnabled && !!tree?.staged.length && (
+                            <Button className="w-full justify-center" disabled={busy} onClick={() => setReviewing(true)} data-dock="commit-review"
+                              title="Review the files and the message before committing">Review…</Button>
+                          )}
                           {writeEnabled && toolbarFor("changes").map((a) => (
                             <Button key={a.id} className="w-full justify-center" disabled={busy} onClick={() => void startAmend()} data-dock={a.id}
                               title="Rewrite the last commit with the staged files and a new message">
@@ -3215,15 +3252,15 @@ export function GitView({ active }: { active: boolean }) {
                         <>
                           <div className="flex items-center gap-2 px-4 py-2 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                             <span className="w-3.5 text-center text-[11px] font-bold shrink-0" style={{ color: "var(--warning-ink)" }}>!</span>
-                            <span className="text-[12px] font-medium truncate" style={{ color: "var(--text)" }} title={blockFile}>{blockFile}</span>
+                            <span className="text-[12px] font-medium truncate" style={{ color: "var(--text)" }} data-tip={blockFile}>{blockFile}</span>
                             <span className="text-[10.5px] shrink-0" style={{ color: "var(--warning-ink)" }}>in conflict</span>
                             <div className="ml-auto flex items-center gap-1.5 shrink-0">
                               <button onClick={() => act(() => api.gitResolve(root, [blockFile], "ours"), `kept ours for ${blockFile}`)} disabled={busy}
                                 className="text-[10.5px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: EDGE }}
-                                title="Keep this branch's version of the whole file">ours</button>
+                                data-tip="Keep this branch's version of the whole file">ours</button>
                               <button onClick={() => act(() => api.gitResolve(root, [blockFile], "theirs"), `took theirs for ${blockFile}`)} disabled={busy}
                                 className="text-[10.5px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: EDGE }}
-                                title="Take the incoming version of the whole file">theirs</button>
+                                data-tip="Take the incoming version of the whole file">theirs</button>
                               <CloseButton onClick={() => { setBlockFile(null); setBlocks(null); setPicks({}); }} style={{ color: "var(--text3)" }} title="Back to the changes" className="rounded" />
                             </div>
                           </div>
@@ -3244,7 +3281,7 @@ export function GitView({ active }: { active: boolean }) {
                         <>
                           <div className="flex items-center gap-2 px-4 py-2 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                             <span className="w-3.5 text-center text-[11px] font-bold shrink-0" style={{ color: STATUS_TINT[selected.status] }}>{STATUS_LETTER[selected.status]}</span>
-                            <span className="text-[12px] font-medium truncate" style={{ color: "var(--text)" }} title={selected.file_path}>{rel(selected)}</span>
+                            <span className="text-[12px] font-medium truncate" style={{ color: "var(--text)" }} data-tip={selected.file_path}>{rel(selected)}</span>
                             <span className="shrink-0 text-[10.5px] tabular-nums flex items-center gap-1.5">
                               {selected.additions > 0 && <span style={{ color: "var(--success-ink)" }}>+{selected.additions}</span>}
                               {selected.deletions > 0 && <span style={{ color: "var(--error-ink)" }}>−{selected.deletions}</span>}
@@ -3475,7 +3512,7 @@ export function GitView({ active }: { active: boolean }) {
                     {writeEnabled && (
                       <>
                         <input value={snapshotLabel} onChange={(e) => setSnapshotLabel(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") snapshotNow(); }} placeholder="snapshot label (optional) — tree is not touched" className={`min-w-0 w-56 shrink-0 ${INPUT}`} style={INPUT_STYLE} />
-                        <button onClick={snapshotNow} disabled={busy || tree?.clean} className={`${CHIP} font-medium`} style={{ background: "color-mix(in srgb, var(--info) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 35%, transparent)", color: "var(--text)", opacity: tree?.clean ? 0.5 : 1 }} title="Copy the current tree into refs/agx/wip — nothing moves, restore anytime"><IconLabel icon={<RefreshIcon size={ICON.xs} />}>snapshot now</IconLabel></button>
+                        <button onClick={snapshotNow} disabled={busy || tree?.clean} className={`${CHIP} font-medium`} style={{ background: "color-mix(in srgb, var(--info) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 35%, transparent)", color: "var(--text)", opacity: tree?.clean ? 0.5 : 1 }} data-tip="Copy the current tree into refs/agx/wip — nothing moves, restore anytime"><IconLabel icon={<RefreshIcon size={ICON.xs} />}>snapshot now</IconLabel></button>
                       </>
                     )}
                     {writeEnabled && (
@@ -3504,7 +3541,7 @@ export function GitView({ active }: { active: boolean }) {
                                 <span className="shrink-0 text-[9.5px] t-dim2">{s.time}</span>
                                 {writeEnabled && (
                                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
-                                    <button onClick={() => restoreSnapshot(s.sha)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--success-ink)", border: "1px solid color-mix(in srgb, var(--success) 30%, transparent)" }} title="Apply the snapshot's tree onto the current one">restore</button>
+                                    <button onClick={() => restoreSnapshot(s.sha)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--success-ink)", border: "1px solid color-mix(in srgb, var(--success) 30%, transparent)" }} data-tip="Apply the snapshot's tree onto the current one">restore</button>
                                     <button onClick={async () => { if (await ask({ title: "Delete this snapshot?", body: "The checkpoint is gone for good.", danger: true, confirmLabel: "Delete" })) act(() => api.gitSnapshotDelete(root, s.sha), "Deleted snapshot"); }} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--error-ink)" }}>delete</button>
                                   </div>
                                 )}
@@ -3587,7 +3624,7 @@ export function GitView({ active }: { active: boolean }) {
                           ? <Button key={a.id} square label="Copy the URL" onClick={() => remoteToolbarRun(a.id)}><DockIcon name={a.icon} /></Button>
                           : <Button key={a.id} disabled={busy} onClick={() => remoteToolbarRun(a.id)}><DockIcon name={a.icon} />{a.label}</Button>)}
                         <span className="min-w-0 flex-1 truncate text-[10.5px] t-dim2" style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)" }}
-                          title={remoteUrlLine(remotes.find((r) => r.name === remoteSel))}>{remoteUrlLine(remotes.find((r) => r.name === remoteSel))}</span>
+                          data-tip={remoteUrlLine(remotes.find((r) => r.name === remoteSel))}>{remoteUrlLine(remotes.find((r) => r.name === remoteSel))}</span>
                         <input value={remoteQuery} onChange={(e) => { setRemoteQuery(e.target.value); setRowIdx(0); }}
                           placeholder="Search remote branches…" className={`w-64 min-w-0 ${INPUT}`} style={INPUT_STYLE} />
                         {/* "36 of 790" is the only way to know whether the search narrowed anything. */}
@@ -3803,6 +3840,12 @@ export function GitView({ active }: { active: boolean }) {
         />
       )}
       {dialog}
+      {reviewing && tree && (
+        <CommitModal branch={branch?.name ?? ""} ahead={branch?.upstream ? branch.ahead : null}
+          files={tree.staged.map((c) => ({ path: rel(c), additions: c.additions, deletions: c.deletions, status: c.status }))}
+          initialSubject={title} initialBody={body} busy={busy}
+          onClose={() => setReviewing(false)} onCommit={(a) => void doReviewedCommit(a)} />
+      )}
     </div>
   );
 }

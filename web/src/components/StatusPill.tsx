@@ -13,6 +13,9 @@ import { dataInk } from "../lib/contrast.ts";
  * With no colour it takes the app's own tone — never one invented to fill the
  * gap, which would stand beside real ones and read as real.
  */
+/** How a tracker status reads on screen: always upper case, as the tracker shows it. Every status render goes through this. */
+export const statusText = (status: string): string => status.toUpperCase();
+
 export function StatusPill({ status, color, dim }: { status: string; color?: string; dim?: boolean }) {
   if (!status) return null;
   const c = color || "var(--text3)";
@@ -35,7 +38,7 @@ export function StatusPill({ status, color, dim }: { status: string; color?: str
         background: `color-mix(in srgb, ${c} ${dim ? 8 : 15}%, transparent)`,
         border: `1px solid color-mix(in srgb, ${c} ${dim ? 18 : 34}%, transparent)`,
       }}>
-      <span className="truncate">{status.toUpperCase()}</span>
+      <span className="truncate">{statusText(status)}</span>
     </span>
   );
 }

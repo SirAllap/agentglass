@@ -103,3 +103,23 @@ export function __resetRendererSession(): void { sessionNoWebgl = false; }
 export function wantsCanvas(): boolean {
   return !wantsWebgl() && rendererPref() !== "dom";
 }
+
+/**
+ * Which renderer a shell should hold right now. Only a shell on screen holds
+ * one: a GL context or four canvases for a terminal nobody sees is the cost
+ * that grows with the number of agents. Pure so the rule is tested alone.
+ */
+export function rendererToHold(webgl: boolean, canvas: boolean, onScreen: boolean): "webgl" | "canvas" | "none" {
+  if (!onScreen) return "none";
+  return webgl ? "webgl" : canvas ? "canvas" : "none";
+}
+
+/**
+ * Which parked shells keep their renderer. The one just left joins the list
+ * (newest last); anything older than `max` is released. Pure, tested alone.
+ */
+export function renderersToPark<T>(recent: T[], left: T, max: number): { keep: T[]; release: T[] } {
+  const all = [...recent.filter((x) => x !== left), left];
+  const cut = Math.max(0, all.length - max);
+  return { keep: all.slice(cut), release: all.slice(0, cut) };
+}

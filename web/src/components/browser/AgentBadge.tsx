@@ -25,7 +25,7 @@ const stateWord = (a: TabAgent) => (a.paused ? "you have this tab" : a.working >
 export function AgentPill({ agent }: { agent: TabAgent }) {
   return (
     <span className="shrink-0 flex items-center gap-1 rounded-lg px-1.5 text-[9px]"
-      title={`${agent.agent}: ${stateWord(agent)}`}
+      data-tip={`${agent.agent}: ${stateWord(agent)}`}
       style={{ height: CTRL_H.compact - 6, maxWidth: 76, color: ink(agent.paused), background: `color-mix(in srgb, ${tint(agent.paused)} 16%, transparent)` }}>
       <span className="truncate">{agent.agent}</span>
       <Slot on={agent.working > 0} />
@@ -41,7 +41,7 @@ export function AgentChip({ agent }: { agent: TabAgent }) {
   return (
     <>
       <button ref={btn} onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open}
-        title={`${agent.agent} is driving this tab (${stateWord(agent)}). Click for what it did.`}
+        data-tip={`${agent.agent} is driving this tab (${stateWord(agent)}). Click for what it did.`}
         aria-label={`${agent.agent}: ${stateWord(agent)}. Show its last actions`}
         className="min-w-0 flex items-center gap-1 rounded-lg px-1.5 text-[10px]"
         style={{ height: CTRL_H.compact, color: ink(agent.paused), background: `color-mix(in srgb, ${tint(agent.paused)} 16%, transparent)` }}>
@@ -58,7 +58,7 @@ export function AgentChip({ agent }: { agent: TabAgent }) {
             <div key={i} className="flex items-center gap-2 px-2 text-[10px] min-w-0" style={{ minHeight: CTRL_H.compact, color: "var(--text2)" }}>
               <span className="shrink-0 tabular-nums w-7" style={{ color: "var(--text4)" }}>{ago(now, r.at)}</span>
               <span className="shrink-0">{r.verb}</span>
-              <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text3)" }} title={r.target}>{r.target}</span>
+              <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text3)" }} data-tip={r.target}>{r.target}</span>
               <span className="shrink-0" style={{ color: r.ok ? "var(--success-ink)" : "var(--error-ink)" }}>{r.ok ? "ok" : "failed"}</span>
             </div>
           ))}

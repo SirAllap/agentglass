@@ -147,7 +147,7 @@ export class Root {
  *  syntax error, as a real page would say about a selector it cannot parse. */
 export function matches(n: N, sel: string): boolean {
   return sel.split(",").map((s) => s.trim()).some((one) => {
-    const m = /^([a-z0-9*]*)((?:#[\w-]+|\[[\w-]+(?:="[^"]*")?\])*)$/i.exec(one);
+    const m = /^([a-z0-9*-]*)((?:#[\w-]+|\[[\w-]+(?:="[^"]*")?\])*)$/i.exec(one);
     if (!m || !one) throw new SyntaxError(`'${one}' is not a valid selector`);
     const [, tag, rest] = m;
     if (tag && tag !== "*" && n.tagName !== tag.toUpperCase()) return false;

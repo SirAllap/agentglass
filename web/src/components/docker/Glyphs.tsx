@@ -48,7 +48,7 @@ export function GlyphSvg({ kind }: { kind: ContainerKind }) {
 export function Glyph({ kind }: { kind: ContainerKind }) {
   const k = KINDS[kind];
   return (
-    <span className="dk-g" role="img" aria-label={k.word} title={k.word}>
+    <span className="dk-g" role="img" aria-label={k.word} data-tip={k.word}>
       <GlyphSvg kind={kind} />
     </span>
   );
@@ -61,14 +61,14 @@ export function Square({ kind, small, dim, current, title, onPick }: {
   const tone = SQUARE_TONE[kind];
   const inner = kind === "dead"
     ? <svg viewBox="0 0 10 10" aria-hidden><path d="m3 3 4 4M7 3 3 7" /></svg>
-    : tone === "need"
+    : kind === "unhealthy"
       ? <svg viewBox="0 0 10 10" aria-hidden><path d="M5 2v3.4M5 8h.01" /></svg>
       : kind === "paused"
         ? <svg viewBox="0 0 10 10" aria-hidden style={{ strokeWidth: 1.8 }}><path d="M3.5 2.5v5M6.5 2.5v5" /></svg>
         : null;
   const attrs = {
     className: "dk-q", "data-t": tone, "data-sq": kind, "data-small": small || undefined, "data-dim": dim || undefined, "data-current": current || undefined,
-    title,
+    "data-tip": title,
   };
   return onPick
     ? <button type="button" {...attrs} aria-label={title} onClick={onPick}>{inner}</button>
@@ -77,7 +77,7 @@ export function Square({ kind, small, dim, current, title, onPick }: {
 
 /** The mockup's badge: 16px, 10px type, a 28% edge in its own tint. */
 export function Badge({ tint, title, children }: { tint: string; title?: string; children: ReactNode }) {
-  return <span className="dk-badge" style={{ "--tint": tint } as CSSProperties} title={title}>{children}</span>;
+  return <span className="dk-badge" style={{ "--tint": tint } as CSSProperties} data-tip={title}>{children}</span>;
 }
 
 /** "Opens outside": the box with an arrow, as the port chip and the Ports fact draw it. */

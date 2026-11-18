@@ -9,7 +9,7 @@
  * held.
  */
 import { describe, expect, test } from "bun:test";
-import { powerReadout, type PowerStatus } from "../src/lib/desktop.ts";
+import { powerKeepAwakeLine, powerReadout, type PowerStatus } from "../src/lib/desktop.ts";
 
 const linuxHeld = { sleep: "block-weak", lid: true, display: true, app: false } as const;
 const linux = { platform: "linux" } as const;
@@ -75,5 +75,13 @@ describe("powerReadout", () => {
     expect(r.title).toContain("the lid switch is not held");
     const none2 = powerReadout({ ...linux, mode: "on", awake: true, working: false, locks: { sleep: null, lid: false, display: true, app: false }, inhibitMissing: false });
     expect(none2.tone).toBe("warn");
+  });
+});
+
+describe("keep-awake line", () => {
+  test("shown while held, hidden once released or idle", () => {
+    expect(powerKeepAwakeLine({ mode: "agent", awake: true, working: true })).toBe("Keeping the computer awake while agents work");
+    expect(powerKeepAwakeLine({ mode: "agent", awake: false, working: true, released: true })).toBeNull();
+    expect(powerKeepAwakeLine({ mode: "agent", awake: false, working: false })).toBeNull();
   });
 });

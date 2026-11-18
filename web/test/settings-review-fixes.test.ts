@@ -3,11 +3,12 @@
  * there is no renderer here. Each names the defect it stops coming back.
  */
 import { describe, expect, test } from "bun:test";
+import { modalSource } from "./settingsSource.ts";
 import { SETTINGS_PAGES, SETTINGS_ROWS } from "../src/lib/settingsRows.gen.ts";
 import { searchSettings, type SettingsPage } from "../src/lib/settingsIndex.ts";
 
 const read = (p: string) => Bun.file(new URL(`../src/${p}`, import.meta.url)).text();
-const modal = await read("components/SettingsModal.tsx");
+const modal = modalSource();
 const row = await read("components/SettingRow.tsx");
 const app = await read("App.tsx");
 const bar = await read("components/CommandBar.tsx");
@@ -21,7 +22,7 @@ describe("an in-modal link works every time", () => {
   });
   test("both effects depend on the whole request, so the same pane twice still runs", () => {
     expect(code(modal)).toContain("}, [open, jump]);");
-    expect(code(modal)).toContain("if (open && jump?.row) setFlashRow(jump.row); }, [open, jump]);");
+    expect(code(modal)).toContain("if (open && jump?.row) setPendingJump({ page: jump.pane ? resolvePane(jump.pane) : null, row: jump.row }); }, [open, jump]);");
   });
 });
 
@@ -80,11 +81,14 @@ describe("the modal re-reads what other screens write", () => {
 });
 
 describe("the type sample hangs under the Font row", () => {
-  test("it is the row's own `below`, with no eyebrow and no box of its own", () => {
-    const at = modal.indexOf('settingId="terminal.font"');
-    const row = modal.slice(at, modal.indexOf("terminal.fontSize", at));
-    expect(row).toMatch(/below=\{\s*<div className="rounded-lg px-3 py-2 whitespace-pre/);
-    expect(row).not.toContain("panel-eyebrow");
-    expect(row).not.toContain("border: EDGE");
+  test("it is the Look section's own preview, with no eyebrow and no box of its own", () => {
+    const page = modalSource();
+    const at = page.indexOf("const fontPreview = (");
+    expect(at).toBeGreaterThan(-1);
+    const sample = page.slice(at, page.indexOf("const down", at));
+    expect(sample).toMatch(/<div aria-label="How the chosen face looks" className="whitespace-pre/);
+    expect(sample).not.toContain("panel-eyebrow");
+    expect(sample).not.toContain("border: EDGE");
+    expect(page).toContain('<Section id="look" title="Look" preview={fontPreview}>');
   });
 });

@@ -21,6 +21,7 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Portal } from "./Portal.tsx";
+import { LAYER } from "../lib/layers.ts";
 import { TOP_BAR_H } from "./TopBar.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 import { ICON } from "../lib/iconSize.ts";
@@ -179,7 +180,7 @@ export function AskedBanners() {
   const { shown, more } = layoutBanners(list);
   if (!shown.length) return null;
   return (
-    <Portal z={10045}>
+    <Portal z={LAYER.askedBanners}>
       <div
         className="fixed flex flex-col items-center gap-1.5"
         style={{ top: TOP_BAR_H + 10, left: "50%", transform: "translateX(-50%)", width: "min(620px, calc(100vw - 32px))", pointerEvents: "none" }}

@@ -12,7 +12,7 @@
  * too late and it names a branch nobody is on.
  */
 import { describe, expect, test } from "bun:test";
-import { chipWorktree, nextSeen, paneCandidates, paneNote, readPaneSeen, vouchedSeen, pickWorktree } from "../src/lib/paneWorktree.ts";
+import { chipWorktree, namedWorktree, nextSeen, paneCandidates, paneNote, readPaneSeen, vouchedSeen, pickWorktree } from "../src/lib/paneWorktree.ts";
 import { globalStubs } from "./stubGlobal.ts";
 
 const stubGlobal = globalStubs();
@@ -186,5 +186,66 @@ describe("pickWorktree: the chip follows work, the pane's checkout is the fallba
 
   test("work outside every known checkout falls back to where the pane stands", () => {
     expect(pickWorktree(["/tmp/scratch/x"], [main.root], cands)).toEqual({ hit: main, more: 0 });
+  });
+});
+
+describe("namedWorktree: the tab's own card, never a worktree some session touched", () => {
+  const main = { root: "/code/orbit", branch: "master" };
+  const a = { root: "/code/orbit-ORBIT-144", branch: "ORBIT-144-fix-login" };
+  const b = { root: "/code/orbit-ORBIT-146", branch: "ORBIT-146-add-export" };
+  const c = { root: "/code/orbit-ORBIT-256", branch: "ORBIT-256-trim-logs" };
+  const cands = [main, a, b, c];
+
+  test("matches the candidate whose branch the card id prefixes, case-insensitively", () => {
+    expect(namedWorktree("ORBIT-146", cands)).toBe(b);
+    expect(namedWorktree("orbit-146", cands)).toBe(b);
+  });
+
+  test("no card, or a card nothing names, is null", () => {
+    expect(namedWorktree(null, cands)).toBeNull();
+    expect(namedWorktree(undefined, cands)).toBeNull();
+    expect(namedWorktree("ORBIT-999", cands)).toBeNull();
+  });
+
+  test(
+    "three tabs sharing one cwd on master, each its own card: the bound card wins over work/dirs, which cannot tell them apart",
+    () => {
+      // All three panes' agents stand on the shared parent checkout (none of
+      // them `cd`s into its worktree), so `work`/`dirs` are identical for all
+      // three — and, in the failure this pins, could even carry ANOTHER
+      // tab's worktree path if that tab's pane was the one last read. A bound
+      // card must still win.
+      const sharedDirsAndWork = [main.root];
+      const tabs = [
+        { card: "ORBIT-144", want: a },
+        { card: "ORBIT-146", want: b },
+        { card: "ORBIT-256", want: c },
+      ];
+      for (const t of tabs) {
+        const named = namedWorktree(t.card, cands);
+        expect(pickWorktree(sharedDirsAndWork, sharedDirsAndWork, cands, named)).toEqual({ hit: t.want, more: 0 });
+      }
+      // Even when `work` is actively pointing at a DIFFERENT tab's worktree —
+      // exactly the contaminated-detection case — the bound card still wins.
+      const namedB = namedWorktree("ORBIT-146", cands);
+      expect(pickWorktree([a.root + "/x.py"], [main.root], cands, namedB)).toEqual({ hit: b, more: 0 });
+    },
+  );
+
+  test("a tab with no card bound still falls back to work/dirs — switching to its own worktree is unaffected", () => {
+    expect(pickWorktree([a.root + "/x.py"], [main.root], cands, namedWorktree(undefined, cands)))
+      .toEqual({ hit: a, more: 0 });
+  });
+
+  test("break the fix on purpose: without the bound card, a shared-cwd tab shows whatever `work` last named", () => {
+    // This is the bug itself, run without `named` — the same three tabs now
+    // read as whichever worktree `work` points to, never their own card.
+    const sharedDirsAndWork = [main.root];
+    expect(pickWorktree(sharedDirsAndWork, sharedDirsAndWork, cands)).toEqual({ hit: main, more: 0 });
+    expect(pickWorktree([a.root + "/x.py"], [main.root], cands)).toEqual({ hit: a, more: 0 });
+    // Tab 146, reading tab 144's worktree (the cross-tab contamination this
+    // bug report is about), shows 144's card instead of its own — exactly
+    // what the `named` precedence above exists to prevent.
+    expect(pickWorktree([a.root + "/x.py"], [main.root], cands).hit).not.toBe(b);
   });
 });

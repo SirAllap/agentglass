@@ -11,6 +11,8 @@ import { describe, expect, test } from "bun:test";
 import { HIT } from "../src/lib/iconSize.ts";
 
 const pane = await Bun.file(new URL("../src/components/ClickUpPane.tsx", import.meta.url)).text();
+// Lot 7: the Changes switch lives on Permissions > Changes outside.
+const perm = await Bun.file(new URL("../src/components/settings/pages/PermissionsPage.tsx", import.meta.url)).text();
 // The section card and the pill drawing are shared by every tracker's page, so they live in one file.
 const parts = await Bun.file(new URL("../src/components/TrackerMapParts.tsx", import.meta.url)).text();
 const css = await Bun.file(new URL("../src/index.css", import.meta.url)).text();
@@ -18,8 +20,8 @@ const kit = await Bun.file(new URL("../src/components/SettingsKit.tsx", import.m
 const rule = (sel: string) => new RegExp(`${sel.replace(/[.:>()*]/g, "\\$&")}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? "";
 
 describe("the changes switch", () => {
-  const at = pane.indexOf('role="switch"');
-  const tag = pane.slice(pane.lastIndexOf("<button", at), pane.indexOf(">", pane.indexOf("style=", at)) + 1);
+  const at = perm.indexOf('role="switch"', perm.indexOf("function Sw("));
+  const tag = perm.slice(perm.lastIndexOf("<button", at), perm.indexOf(">", perm.indexOf("style=", at)) + 1);
 
   test("its button is padded to the house hit size, not the 19px track", () => {
     expect(tag).toContain("agx-switch-hit");

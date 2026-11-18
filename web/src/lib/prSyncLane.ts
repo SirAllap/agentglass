@@ -13,7 +13,7 @@
 // lane, so "Sync the board" cannot be spelled by accident.
 import type { PrSummary } from "../../../shared/types.ts";
 import { updateGate } from "./prCardView.ts";
-import type { LaneId } from "./prLanes.ts";
+import type { LaneId } from "../../../shared/prLanes.ts";
 
 export type SyncReason =
   | "someone-else" | "finished" | "draft" | "read-only" | "conflict"

@@ -84,20 +84,45 @@ export function chipWorktree<T>(detected: T | null, detecting: boolean, tmuxPane
 }
 
 /**
+ * The candidate whose own branch is the tab's bound card.
+ *
+ * A tab is bound to a card once, pinned as `@agx-card` when the window is
+ * made — never derived from what a session's pane happens to contain. That
+ * binding is what still answers exactly when `work`/`dirs` cannot: three tabs
+ * started in the SAME parent checkout, each reaching into its own worktree
+ * with absolute paths rather than `cd`, read identically on cwd, and the
+ * pane's own transcript is the only other evidence there is — so two tabs
+ * that read (or recently read) each other's worktree can trade places. The
+ * pin cannot: it was fixed at launch and no pane's content ever touches it.
+ * Matched the same way the chip already matches a card to a branch
+ * (`branchLabel` in paneChip.ts): the id, case-insensitively, as the
+ * branch's own prefix.
+ */
+export function namedWorktree<T extends { branch: string }>(cardId: string | undefined | null, cands: readonly T[]): T | null {
+  if (!cardId) return null;
+  const want = `${cardId.toLowerCase()}-`;
+  return cands.find((r) => r.branch.toLowerCase().startsWith(want)) ?? null;
+}
+
+/**
  * The checkout the pane's session is WORKING in, and how many other checkouts it
  * worked in lately.
  *
- * `work` is what the session edited, wrote, committed, built or tested (see
- * panewt.ts), newest first, subagents included. It decides first: a session
- * that stands in the main checkout and has a subagent editing a PR's worktree
- * is on that worktree. A read never reaches `work`, so looking at another
- * checkout leaves the chip where the pane stands. `dirs` answers only when the
- * session has done no work anywhere we know.
+ * `named` — the caller's own `namedWorktree` lookup — decides first, when the
+ * tab's bound card names one of the candidates' own branches. Only then does
+ * `work` decide: a session that stands in the main
+ * checkout and has a subagent editing a PR's worktree is on that worktree. A
+ * read never reaches `work`, so looking at another checkout leaves the chip
+ * where the pane stands. `dirs` answers only when the session has done no
+ * work anywhere we know.
  *
  * `more` is the honest part: two checkouts in `work` is not a tie to break
  * silently, so the newest is shown and the count of the rest comes with it.
  */
-export function pickWorktree<T extends { root: string }>(work: string[], dirs: string[], cands: T[]): { hit: T | null; more: number } {
+export function pickWorktree<T extends { root: string }>(
+  work: string[], dirs: string[], cands: T[], named?: T | null,
+): { hit: T | null; more: number } {
+  if (named) return { hit: named, more: 0 };
   const own = (p: string) => cands.find((r) => p === r.root || p.startsWith(r.root + "/"));
   const seen: T[] = [];
   for (const p of work) { const r = own(p); if (r && !seen.includes(r)) seen.push(r); }
@@ -198,6 +223,11 @@ export function paneNote(detecting: boolean, dir: string | null, outside: string
   // folder, and saying so reads right where "no checkout" read as a fault.
   if (cwd) return `${cwd.replace(/\/+$/, "").split("/").pop() || cwd} · plain shell`;
   return "No checkout behind this pane";
+}
+
+/** The book's answer for a pane, only when the book was filled for THIS window. */
+export function bookedFor(book: Map<string, PaneBookEntry>, bookWin: string, win: string, pane: string): PaneBookEntry | undefined {
+  return bookWin === win ? book.get(pane) : undefined;
 }
 
 export type PaneBookEntry = { dirs: string[]; work?: string[]; outside: string; agent: string };

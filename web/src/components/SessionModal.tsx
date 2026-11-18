@@ -173,25 +173,25 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                 {/* header */}
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   <div className="flex items-baseline gap-2.5 min-w-0">
-                    <span className="text-[15px] font-semibold truncate" style={{ color: "var(--text)" }} title={id}>{key}</span>
+                    <span className="text-[15px] font-semibold truncate" style={{ color: "var(--text)" }} data-tip={id}>{key}</span>
                     {d?.model_name && <span className="chip" style={{ color: modelColor(modelLabelOf(d.model_name)), background: `color-mix(in srgb, ${modelColor(modelLabelOf(d.model_name))} 15%, transparent)` }}>{modelLabelOf(d.model_name)}</span>}
                     {/* Which checkout this agent is working. With a worktree per
                         card, "which branch is this one on" is the first thing you
                         need and the session id can't tell you. */}
                     {d && sessionWorktree(d) && (
-                      <span className="chip" title={`Linked worktree — ran in ${d.cwd_path}`}
+                      <span className="chip" data-tip={`Linked worktree — ran in ${d.cwd_path}`}
                         style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 15%, transparent)" }}>
                         <BranchIcon size={ICON.xs} className="inline-block align-[-2px] mr-1" />{sessionWorktree(d)}
                       </span>
                     )}
                     {d && branch && (
-                      <span className="chip" title={`Checked out on ${branch}`}
+                      <span className="chip" data-tip={`Checked out on ${branch}`}
                         style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--border) 35%, transparent)" }}>
                         {branch}
                       </span>
                     )}
                     {d && shared && (
-                      <span className="chip" title={SHARED_TREE_TOOLTIP}
+                      <span className="chip" data-tip={SHARED_TREE_TOOLTIP}
                         style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}>
                         {SHARED_TREE_LABEL}
                       </span>
@@ -205,17 +205,17 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                         // still running would put a second writer on the same
                         // transcript, so say why rather than offer a button
                         // that corrupts the history.
-                        <span className="chip t-dim2" title="This session is still running — resume it once it stops, or watch it live below.">
+                        <span className="chip t-dim2" data-tip="This session is still running — resume it once it stops, or watch it live below.">
                           ● Running
                         </span>
                       ) : sessionCwd(d) ? (
                         <button onClick={() => { onResume(d); onClose(); }} className="chip cursor-pointer"
-                          title={`Continue this conversation in ${sessionCwd(d)} — claude keeps the full context`}
+                          data-tip={`Continue this conversation in ${sessionCwd(d)} — claude keeps the full context`}
                           style={{ color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 12%, transparent)", borderColor: "color-mix(in srgb, var(--success) 45%, transparent)" }}>
                           ↩ Resume in chat
                         </button>
                       ) : (
-                        <span className="chip t-dim2" title="No directory recorded for this session, so there's nowhere to resume it.">
+                        <span className="chip t-dim2" data-tip="No directory recorded for this session, so there's nowhere to resume it.">
                           ↩ Resume unavailable
                         </span>
                       )
@@ -283,7 +283,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                               return (
                                 <button key={s.agent_id} onClick={() => setFocusAgent(on ? null : s.agent_id)}
                                   className="chip cursor-pointer"
-                                  title={on ? `${s.agent_id}\nclick to show the whole session again` : `${s.agent_id}\nclick to read only this subagent's thread`}
+                                  data-tip={on ? `${s.agent_id}\nclick to show the whole session again` : `${s.agent_id}\nclick to read only this subagent's thread`}
                                   style={{
                                     color: on ? "var(--bg)" : "var(--info)",
                                     background: on ? "var(--info)" : "color-mix(in srgb, var(--info) 12%, transparent)",
@@ -310,7 +310,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                           </div>
                           <div className="space-y-1">
                             {d.changes.slice(0, 14).map((c) => (
-                              <button key={c.id} onClick={() => { setDiffPath(c.file_path); setDiffOpen(true); }} title={`Open diff · ${c.file_path}`} className="w-full text-left flex items-center gap-2 text-[10.5px] rounded px-1 -mx-1 py-0.5 transition-colors hover:bg-[color-mix(in_srgb,var(--primary)_12%,transparent)]">
+                              <button key={c.id} onClick={() => { setDiffPath(c.file_path); setDiffOpen(true); }} data-tip={`Open diff · ${c.file_path}`} className="w-full text-left flex items-center gap-2 text-[10.5px] rounded px-1 -mx-1 py-0.5 transition-colors hover:bg-[color-mix(in_srgb,var(--primary)_12%,transparent)]">
                                 <span className="truncate" style={{ color: "var(--text3)" }}>{c.file_path.split("/").pop()}</span>
                                 <span className="ml-auto shrink-0 tabular-nums">
                                   {c.additions > 0 && <span style={{ color: "var(--success-ink)" }}>+{c.additions} </span>}
@@ -343,14 +343,14 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                           {!pinned && (
                             <button onClick={toBottom}
                               className="text-[9.5px] px-1.5 py-0.5 rounded-full"
-                              title="Jump to the newest turn and follow again"
+                              data-tip="Jump to the newest turn and follow again"
                               style={{ color: "var(--success-ink)", background: "color-mix(in srgb, var(--success) 15%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 45%, transparent)" }}>
                               ↓ Resume live
                             </button>
                           )}
                           <button onClick={() => setShowTools((s) => !s)}
                             className="text-[9.5px] px-1.5 py-0.5 rounded-full inline-flex items-center gap-1"
-                            title={showTools ? "Hide tool runs" : "Show tool runs"}
+                            data-tip={showTools ? "Hide tool runs" : "Show tool runs"}
                             style={{
                               color: showTools ? "var(--primary-hover)" : "var(--text3)",
                               background: `color-mix(in srgb, var(--primary) ${showTools ? 15 : 6}%, transparent)`,

@@ -11,8 +11,9 @@ import { newlySecure, pickIndex, readPick, writePick, type PickedAddress } from 
 import { PairPanel } from "./PairPanel.tsx";
 import { usePoll } from "../lib/usePoll.ts";
 import type { RemoteStatus, RemoteDevice } from "../../../shared/types.ts";
-import { Button } from "./workspace/Chrome.tsx";
-import { PhoneIcon, ServerIcon, ShieldIcon } from "./settingsNavIcons.tsx";
+import { Button, LINE } from "./workspace/Chrome.tsx";
+import { ChevronRightIcon, PhoneIcon, ServerIcon, ShieldIcon } from "./settingsNavIcons.tsx";
+import { seenFold, seenHead } from "../lib/remoteView.ts";
 import { ICON } from "../lib/iconSize.ts";
 
 /**
@@ -291,7 +292,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
         <>
           {/* Mounted in both faces so the paired list — the thing that decides
               which face — is never unmounted and re-fetched. */}
-          <PairPanel baseUrl={url} variant={firstRun ? "hero" : "row"} onPaired={setPaired}
+          <PairPanel baseUrl={url} active={open} variant={firstRun ? "hero" : "row"} onPaired={setPaired}
             canTurnOnHttps={!!st.tailnet?.installed && !st.addresses.some((a) => a.secure)} onStatus={apply} />
 
           <SettingsCard title="Network" icon={<ServerIcon size={ICON.sm} />} desc="Where a phone connects, and by which route.">
@@ -379,7 +380,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
               from the phones you paired — a paired phone can arrive from three
               addresses in a day. Its own card, because the list people manage is
               the paired one, and this is the one they audit. */}
-          {seen.length > 0 && <Seen st={st} onChanged={load} />}
+          {seen.length > 0 && <SettingsCard title="Who has reached this machine" icon={<PhoneIcon size={ICON.sm} />}><Seen st={st} onChanged={load} /></SettingsCard>}
         </>
       )}
 
@@ -465,7 +466,7 @@ function TailnetTrouble({ st }: { st: RemoteStatus }) {
  * not an identity. So this is the audit list — folded, because the list people
  * manage is the other one — and its button is honest about being temporary.
  */
-function Seen({ st, onChanged }: { st: RemoteStatus; onChanged: () => void }) {
+export function Seen({ st, onChanged }: { st: RemoteStatus; onChanged: () => void }) {
   const { devices, clients } = st;
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -476,16 +477,18 @@ function Seen({ st, onChanged }: { st: RemoteStatus; onChanged: () => void }) {
     onChanged();
   };
 
+  /* Folded, because the list people manage is the paired one; open by itself once when an address
+     is cut off, so the way to let it back in is not hidden, and never shut by itself (seenFold). */
+  const anyBlocked = devices.some((d) => d.blocked);
+  const [fold, setFold] = useState(() => seenFold({ open: false, autoOpened: false }, anyBlocked));
+  useEffect(() => { setFold((f) => seenFold(f, anyBlocked)); }, [anyBlocked]);
   return (
-    <SettingsCard
-      icon={<PhoneIcon size={ICON.sm} />}
-      title="Who has reached this machine"
-      desc={clients.liveCount > 0
-        ? `${clients.liveCount === 1 ? "One device is" : `${clients.liveCount} devices are`} connected right now`
-        : clients.count > 0
-          ? `${clients.count === 1 ? "One device has" : `${clients.count} devices have`} connected before`
-          : "Nothing else has connected yet"}
-    >
+    <details className="group" open={fold.open} onToggle={(e) => { const open = e.currentTarget.open; setFold((f) => f.open === open ? f : { ...f, open }); }}>
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-[13px]" style={{ color: "var(--text)" }}>
+        <span aria-hidden className="transition-transform group-open:rotate-90" style={{ color: "var(--text3)" }}><ChevronRightIcon size={ICON.xs} /></span>
+        <span className="min-w-0 flex-1"><span className="font-semibold">{seenHead(clients.liveCount, clients.count)}</span></span>
+        <span className="shrink-0 text-[12px]" style={{ color: "var(--text3)" }}>By address, not by pairing</span>
+      </summary>
       {devices.map((d) => {
         const live = d.live > 0 && !d.blocked;
         // This machine, reaching its own server through a real address instead
@@ -494,39 +497,44 @@ function Seen({ st, onChanged }: { st: RemoteStatus; onChanged: () => void }) {
         // off would black out this window.
         const self = !!d.self;
         return (
-          <SettingRow key={d.address}
-            label={<>{d.label} <span className="t-mono text-[11px] t-dim">{d.address}</span></>}
-            status={self
+          <div key={d.address} className="flex items-center gap-3 px-3 py-2.5" style={{ borderTop: LINE }}>
+            <div className="min-w-0 flex-1">
+              <div className="break-words text-[13px] font-medium" style={{ color: "var(--text)" }}>{d.label} <span className="t-mono text-[11.5px] font-normal" style={{ color: "var(--text3)" }}>{d.address}</span></div>
+              <div className="text-[12px]" style={{ color: "var(--text2)" }}>{self
+                ? "Reaching its own server through one of its addresses rather than through localhost."
+                : d.blocked
+                  ? "Refused on every request until you let it back in."
+                  : live
+                    ? `Connected now · ${d.live === 1 ? "one open connection" : `${d.live} open connections`}`
+                    : `Last seen ${fmtAgo(d.lastAt)} · ${d.hits === 1 ? "one request" : `${d.hits} requests`}`}</div>
+            </div>
+            {self
               ? <StatusBadge tone="off">This machine</StatusBadge>
               : d.blocked
                 ? <StatusBadge tone="err">Disconnected</StatusBadge>
                 : live
                   ? <StatusBadge tone="ok">Connected</StatusBadge>
                   : <StatusBadge tone="off">Idle</StatusBadge>}
-            hint={self
-              ? "Reaching its own server through one of its addresses rather than through localhost."
-              : d.blocked
-                ? "Disconnected. Refused on every request until you let it back in."
-                : live
-                  ? `Connected now · ${d.live === 1 ? "one open connection" : `${d.live} open connections`}`
-                  : `Last seen ${fmtAgo(d.lastAt)} · ${d.hits === 1 ? "one request" : `${d.hits} requests`}`}
-            actions={!self ? (
-              <Button tone={d.blocked ? undefined : "danger"} onClick={() => setBlocked(d, !d.blocked)} disabled={busy === d.address}>
-                {busy === d.address ? "Working…" : d.blocked ? "Let it back in" : "Disconnect"}
-              </Button>
-            ) : undefined}
-          />
+            {/* A fixed slot, so the button sits in the same place on every row, self included. */}
+            <span className="flex w-[120px] shrink-0 justify-end">
+              {!self && (
+                <Button tone={d.blocked ? undefined : "danger"} onClick={() => setBlocked(d, !d.blocked)} disabled={busy === d.address}>
+                  {busy === d.address ? "Working…" : d.blocked ? "Let it back in" : "Disconnect"}
+                </Button>
+              )}
+            </span>
+          </div>
         );
       })}
-      <SettingRow
-        label="What disconnecting does"
-        hint="Disconnecting closes what that device is holding and refuses it by address until this server restarts. A device that can take a new address on your network can come back, so revoke the link when the answer needs to be permanent." />
-    </SettingsCard>
+      <div className="px-3 py-2.5 text-[12px]" style={{ color: "var(--text2)", borderTop: LINE }}>
+        Disconnecting closes what that device is holding and refuses it by address until this server restarts. A device that can take a new address on your network can come back, so forget the paired device when the answer needs to be permanent.
+      </div>
+    </details>
   );
 }
 
 /** The manual route, for a shell that cannot restart its own server. */
-function Recipe({ port }: { port: number }) {
+export function Recipe({ port }: { port: number }) {
   return (
     <SettingRow
       label="Start the server with the network open"

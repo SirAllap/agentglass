@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { ICON } from "../lib/iconSize.ts";
 import { LINE } from "./workspace/Chrome.tsx";
 import {
-  NAV_SHUT_KEY, buildNav, groupByName, hueVar, legendStates, openGroupOf, parseShut, serializeShut,
+  NAV_SHUT_KEY, buildNav, groupByName, hueVar, legendStates, openGroupOf, parseShut, railTrim, serializeShut,
   type NavGroupId, type NavPageIn, type NavSection, type PageMark,
 } from "../lib/settingsNav.ts";
 import { ChevronDownIcon, GroupIcon } from "./settingsNavIcons.tsx";
@@ -23,9 +23,9 @@ type Page = NavPageIn & { icon: (p: { size?: number }) => ReactElement };
 function Mark({ m }: { m: PageMark }) {
   if (m.state === "none") return null;
   // Red, and kept on the icon rail (data-keep): a page that could not read what it shows is the one mark worth a glance at 900px.
-  if (m.state === "err") return <span className="agx-sn-meta" data-keep><i className="agx-sn-dot" data-state="err" role="img" aria-label="problem" title={m.title} /></span>;
-  if (m.state === "needs") return <span className="agx-sn-meta"><span className="agx-sn-cnt" title={m.title}>{m.count}</span></span>;
-  if (m.state === "update") return <span className="agx-sn-meta"><span className="agx-sn-cnt" data-tone="info" title={m.title}>update</span></span>;
+  if (m.state === "err") return <span className="agx-sn-meta" data-keep><i className="agx-sn-dot" data-state="err" role="img" aria-label="problem" data-tip={m.title} /></span>;
+  if (m.state === "needs") return <span className="agx-sn-meta"><span className="agx-sn-cnt" data-tip={m.title}>{m.count}</span></span>;
+  if (m.state === "update") return <span className="agx-sn-meta"><span className="agx-sn-cnt" data-tone="info" data-tip={m.title}>update</span></span>;
   return (
     <span className="agx-sn-meta">
       <i className="agx-sn-dot" data-state={m.state} role="img" aria-label={m.state === "on" ? "on" : "off"} />
@@ -41,12 +41,14 @@ function Mark({ m }: { m: PageMark }) {
  * What a page shows at the right comes from `marks` (see navMarks in
  * lib/settingsNav.ts) and nowhere else: no mark means no real signal.
  */
-export function SettingsNav({ pages, marks, current, onGo, onClose, pinned, search }: {
+export function SettingsNav({ pages, marks, current, onGo, onIntent, onClose, pinned, search }: {
   pages: readonly Page[];
   marks: Readonly<Record<string, PageMark | undefined>>;
   /** The page on screen, as a nav id. */
   current: string;
   onGo: (id: string) => void;
+  /** The pointer or focus is on a page's row: warm its reads so the click opens it at once. */
+  onIntent?: (id: string) => void;
   onClose: () => void;
   /** The pinned "Get started" row: how many of its steps are done, or null for no row. */
   pinned: { done: number; total: number; active: boolean } | null;
@@ -68,11 +70,31 @@ export function SettingsNav({ pages, marks, current, onGo, onClose, pinned, sear
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only a change of page opens its group; a click on the header may shut it again
   }, [current]);
 
+  // The icon rail (<=1100px) scrolls; its visible height must be whole slots or an icon shows cut under the divider.
+  // The scroller is flex-1, so a bottom margin is what shortens it: size = free space - margin.
+  const aside = useRef<HTMLElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const a = aside.current, el = scroller.current;
+    if (!a || !el || typeof ResizeObserver === "undefined") return;
+    const fit = () => {
+      el.style.marginBottom = "0px";
+      if (!window.matchMedia("(max-width: 1100px)").matches) return;
+      el.style.marginBottom = `${railTrim(el.clientHeight)}px`;
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(a);
+    window.addEventListener("resize", fit);
+    return () => { ro.disconnect(); window.removeEventListener("resize", fit); };
+  }, []);
+
   const icons = useMemo(() => new Map(pages.map((p) => [p.id, p.icon])), [pages]);
   const item = (p: NavSection["pages"][number]) => {
     const Icon = icons.get(p.id)!;
     return (
-      <button key={p.id} type="button" data-settings-page={p.id} title={p.label} onClick={() => onGo(p.id)}
+      <button key={p.id} type="button" data-settings-page={p.id} data-tip={p.label} data-tip-unless-shown=".agx-sn-lbl" onClick={() => onGo(p.id)}
+        onPointerEnter={() => onIntent?.(p.id)} onFocus={() => onIntent?.(p.id)}
         aria-current={current === p.id ? "page" : undefined}
         className="agx-sn-it" data-on={current === p.id ? "" : undefined}>
         <span className="agx-sn-ic"><Icon size={ICON.lg} /></span>
@@ -83,7 +105,7 @@ export function SettingsNav({ pages, marks, current, onGo, onClose, pinned, sear
   };
 
   return (
-    <aside className="agx-settings-nav shrink-0 flex flex-col border-r"
+    <aside className="agx-settings-nav shrink-0 flex flex-col border-r" ref={aside}
       style={{ background: "var(--surface-nav)", borderColor: "var(--surface-line)" }}>
       {/* Leaving is a button you press, and it says where it takes you. It is a real
           button (border, radius, fill) that spans the sidebar with air on both sides,
@@ -106,15 +128,7 @@ export function SettingsNav({ pages, marks, current, onGo, onClose, pinned, sear
           while it has focus. */}
       <button type="button" className="agx-skip" onClick={skipToPage}>Skip to the page</button>
 
-      <div className="agx-sn-scroll min-h-0 flex-1 agx-scroll overflow-y-auto overflow-x-hidden">
-        {pinned && (
-          <button type="button" data-settings-page="onboarding" onClick={() => onGo("onboarding")}
-            aria-current={pinned.active ? "page" : undefined}
-            className="agx-sn-pin" data-on={pinned.active ? "" : undefined}>
-            <span className="min-w-0 truncate">Get started</span>
-            <span className="agx-sn-pin-n">{pinned.done}/{pinned.total}</span>
-          </button>
-        )}
+      <div ref={scroller} className="agx-sn-scroll min-h-0 flex-1 agx-scroll overflow-y-auto overflow-x-hidden">
         {model.sections.map((s) => (
           <div key={s.group.id} className="agx-sn-grp" data-shut={s.shut ? "true" : undefined} style={{ "--hue": hueVar(s.group.id) } as React.CSSProperties}>
             <button type="button" className="agx-sn-gh" aria-expanded={!s.shut}
@@ -122,11 +136,16 @@ export function SettingsNav({ pages, marks, current, onGo, onClose, pinned, sear
               <span className="agx-sn-chip"><GroupIcon name={s.group.icon} size={ICON.md} /></span>
               <span className="agx-sn-gn">{s.group.name}</span>
               {s.shut && s.rollup > 0 && (
-                <span className="agx-sn-roll"><span className="agx-sn-cnt" title={`${s.rollup} ${s.rollup === 1 ? "page wants" : "pages want"} you`}>{s.rollup}</span></span>
+                <span className="agx-sn-roll"><span className="agx-sn-cnt" data-tip={`${s.rollup} ${s.rollup === 1 ? "page wants" : "pages want"} you`}>{s.rollup}</span></span>
               )}
               <span className="agx-sn-caret"><ChevronDownIcon size={ICON.sm} /></span>
             </button>
-            <div className="agx-sn-items">{s.pages.map(item)}</div>
+            <div className="agx-sn-items">{s.pages.map((p, i) => (
+              <Fragment key={p.id}>
+                {p.sub && p.sub !== s.pages[i - 1]?.sub && <div className="agx-sn-sub" role="presentation">{p.sub}</div>}
+                {item(p)}
+              </Fragment>
+            ))}</div>
           </div>
         ))}
       </div>
@@ -135,6 +154,20 @@ export function SettingsNav({ pages, marks, current, onGo, onClose, pinned, sear
         <div className="agx-sn-sys" style={{ "--hue": hueVar("system") } as React.CSSProperties}>
           <div className="agx-sn-items">{model.system.pages.map(item)}</div>
         </div>
+      )}
+      {model.advanced && (
+        <div className="agx-sn-sys" style={{ "--hue": hueVar("advanced") } as React.CSSProperties}>
+          <div className="agx-sn-items">{model.advanced.pages.map(item)}</div>
+        </div>
+      )}
+
+      {pinned && (
+        <button type="button" data-settings-page="onboarding" onClick={() => onGo("onboarding")}
+          aria-current={pinned.active ? "page" : undefined}
+          className="agx-sn-pin" data-on={pinned.active ? "" : undefined}>
+          <span className="min-w-0 truncate">Setup guide</span>
+          <span className="agx-sn-pin-n">{pinned.done}/{pinned.total}</span>
+        </button>
       )}
       <div className="agx-sn-legend" aria-hidden>
         {legendStates(marks).map((k) => <span key={k}><i className="agx-sn-dot" data-state={k} />{LEGEND_WORD[k]}</span>)}

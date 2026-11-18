@@ -6,6 +6,7 @@
  * scrolling it sideways.
  */
 import { describe, expect, test } from "bun:test";
+import { modalSource } from "./settingsSource.ts";
 import React from "react";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -16,18 +17,18 @@ const read = (p: string) => readFileSync(join(import.meta.dir, "..", "src", p), 
 const html = renderToStaticMarkup(React.createElement(GapsPane));
 
 /** One section of the page, from its heading to the next. */
+const LABEL: Record<string, string> = { a: "What the first mockup missed, now drawn", b: "Decisions, no function removed", c: "Added functionality" };
 const section = (letter: string) => {
-  const at = html.indexOf(`id="agx-orch-gaps-${letter}"`);
+  const at = html.indexOf(`aria-label="${LABEL[letter]}"`);
   expect(at, letter).toBeGreaterThan(-1);
-  const next = html.indexOf("<h3", at);
-  return html.slice(at, next < 0 ? undefined : next);
+  return html.slice(at, html.indexOf("</table>", at));
 };
 const rows = (letter: string) => (section(letter).match(/<tr>/g) ?? []).length;
 
 describe("the gaps and additions page", () => {
   test("the three sections are drawn, A with its column names, and the row counts are the mockup's", () => {
     expect(GAPS_MISSED.length).toBe(31);
-    for (const t of ["A · What the first mockup missed, now drawn", "B · Decisions (no function removed)", "C · Added functionality"]) {
+    for (const t of ["What the first mockup missed", "Decisions", "Added functionality"]) {
       expect(html).toContain(t);
     }
     expect(section("a")).toContain(">Missing<");
@@ -71,9 +72,9 @@ describe("the gaps and additions page", () => {
     expect(src).not.toContain("onClick");
   });
 
-  test("it is reached from Settings, right under Orchestration", () => {
-    const modal = read("components/SettingsModal.tsx");
-    expect(modal).toContain('{ id: "gaps", label: "Gaps and additions", group: "Agents"');
+  test("it is reached from Settings by a link only: out of the nav, still a page", () => {
+    const modal = modalSource();
+    expect(modal).toContain('{ id: "gaps", label: "Gaps and additions", group: ""');
     expect(modal).toContain('{show("gaps") && <GapsPane />}');
   });
 

@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../../lib/api.ts";
 import { hitTarget, emptyText, partialResults, stepHot, hitPath, closesOnPress, contentsNote, flipMode, grepPath, hasScopeChoice, inScope, modeKey, scopeName, scopeRoot, searchPlaceholder, splitMatch, CONTENTS_MIN, type HitTarget, type SearchHit, type SearchMode, type SearchScope } from "../../../lib/finderSearch.ts";
-import { ICON } from "../../../lib/iconSize.ts";
+import { HIT, ICON } from "../../../lib/iconSize.ts";
 import { SearchIcon } from "../../../lib/glyphIcons.tsx";
 import { EDGE, LINE, Segmented } from "../../workspace/Chrome.tsx";
 import { MenuCap, MenuItem, Popover } from "./Popover.tsx";
@@ -74,7 +74,7 @@ export function FinderSearch({ home, here = "", mode, onMode, onTarget, onClose,
         <div className="flex items-center gap-2.5 px-3.5 shrink-0" style={{ minHeight: 58, borderBottom: LINE }}>
           <span className="flex" style={{ color: "var(--primary-ink)" }}><SearchIcon size={ICON.sm} /></span>
           <input ref={input} value={q} onChange={(e) => setQ(e.target.value)} spellCheck={false} autoComplete="off" aria-label={jump ? "Folders previously visited in the Finder" : contents ? "Search inside files" : "Search files and folders"}
-            role="combobox" aria-expanded={rows.length > 0} aria-controls="finder-search-results" aria-activedescendant={rows[hot] ? `finder-search-${hot}` : undefined} aria-autocomplete="list" title={jump ? undefined : `${key} switches between names and contents`}
+            role="combobox" aria-expanded={rows.length > 0} aria-controls="finder-search-results" aria-activedescendant={rows[hot] ? `finder-search-${hot}` : undefined} aria-autocomplete="list" data-tip={jump ? undefined : `${key} switches between names and contents`}
             placeholder={jump ? "Jump to a folder…" : searchPlaceholder(mode, where)} className="flex-1 min-w-0 bg-transparent outline-none text-[14px]" style={{ color: "var(--text)" }}
             onKeyDown={(e) => {
               e.stopPropagation();
@@ -85,8 +85,8 @@ export function FinderSearch({ home, here = "", mode, onMode, onTarget, onClose,
               else if (e.key === "Enter") { e.preventDefault(); choose(hot, e.altKey && !jump); }
               else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); onClose(); }
             }} />
-          {status === "building" && <span role="status" aria-label="Indexing files…" title="Indexing files…" className="agx-spin shrink-0" />}
-          {!jump && <button type="button" className="agx-btn rounded-md grid place-items-center shrink-0" style={{ width: 26, height: 26, color: contents ? "var(--primary-ink)" : "var(--text3)" }} title="Search settings" aria-label="Search settings" aria-haspopup="menu"
+          {status === "building" && <span role="status" aria-label="Indexing files…" data-tip="Indexing files…" className="agx-spin shrink-0" />}
+          {!jump && <button type="button" className="agx-btn rounded-md grid place-items-center shrink-0" style={{ width: HIT, height: HIT, color: contents ? "var(--primary-ink)" : "var(--text3)" }} data-tip="Search settings" aria-label="Search settings" aria-haspopup="menu"
             onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())}><StrataIcon set="act" name="sliders-horizontal" size={ICON.sm} /></button>}
         </div>
         {!jump && (

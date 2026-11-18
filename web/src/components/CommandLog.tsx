@@ -55,7 +55,7 @@ export function CommandLog({ open, onClose }: { open: boolean; onClose: () => vo
         <span className="text-[9.5px] uppercase tracking-wider font-semibold" style={{ color: "var(--text2)" }}>Command log</span>
         <span className="text-[10px] tabular-nums t-dim2">{shown.length}</span>
         <button onClick={() => setWritesOnly((v) => !v)}
-          title={writesOnly ? "Also show the read-only queries the panel runs while polling" : "Show only commands that can change the repository"}
+          data-tip={writesOnly ? "Also show the read-only queries the panel runs while polling" : "Show only commands that can change the repository"}
           className="text-[10px] px-1.5 py-0.5 rounded"
           style={{ color: writesOnly ? "var(--text)" : "var(--text3)", border: EDGE }}>
           {writesOnly ? "Writes only" : "Everything"}

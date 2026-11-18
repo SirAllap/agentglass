@@ -20,7 +20,19 @@
 // ever shrink the result to zero, which reads as broken.
 import type { PrSummary } from "../../../shared/types.ts";
 import { prTextMatch } from "../../../shared/prSearch.ts";
-import type { FieldSpec, ReadField } from "../components/tasks/filters.ts";
+import { FACET_FIELDS, checksTokenOf, statusKey } from "../../../shared/prFilterFields.ts";
+import { foldKey } from "../components/tasks/filters.ts";
+import type { FieldSpec } from "../components/tasks/filters.ts";
+
+/** A card status as the picker names it: trimmed, UPPER CASE (tracker statuses
+ *  are shown that way), so every spelling of one status is one entry. */
+export { statusKey };
+
+/* The field readers and the rule engine's entry point live in shared/: the
+   phone's saved views read the same fields, and a second copy is how one view
+   keeps different rows on two screens. Re-exported so this module stays the
+   one door the desk already imports. */
+export { EXTRA_FIELD_KEYS, readPrField, readPrFieldAt, reviewTokenOf, viewFieldReader } from "../../../shared/prFilterFields.ts";
 
 export type ReviewTok = "approved" | "changes-requested" | "required" | "none";
 export type ChecksTok = "green" | "red" | "pending";
@@ -28,6 +40,9 @@ export type IsTok = "draft" | "ready";
 export type SortTok = "recently-updated" | "newest" | "oldest" | "most-changed" | "title" | "checks";
 
 export const REVIEW_TOKS: ReviewTok[] = ["approved", "changes-requested", "required", "none"];
+export const HUMAN_REVIEWER_TOKS = ["assigned", "unassigned"];
+export const HUMAN_REVIEW_TOKS = ["approved", "changes-requested", "commented", "pending", "none"];
+export const BOT_REVIEW_TOKS = ["approved", "changes-requested", "commented", "pending", "none"];
 export const CHECKS_TOKS: ChecksTok[] = ["green", "red", "pending"];
 export const IS_TOKS: IsTok[] = ["draft", "ready"];
 export const SORT_TOKS: SortTok[] = ["recently-updated", "newest", "oldest", "most-changed", "title", "checks"];
@@ -48,6 +63,9 @@ export interface FilterState {
   labels: string[];
   milestones: string[];
   reviews: ReviewTok[];
+  humanReviewers: string[];
+  humanReviews: string[];
+  botReviews: string[];
   checks: ChecksTok[];
   is: IsTok[];
   base: string[];
@@ -62,7 +80,7 @@ export interface FilterState {
 // string; `field` reads the token(s) a PR matches for this facet — returning
 // `null` means "unknown, fail open" (only checks, and only before its second
 // fetch pass has landed). `label` names the facet in the UI.
-type ArrayKey = "authors" | "assignees" | "labels" | "milestones" | "reviews" | "checks" | "is" | "base" | "cardStatus" | "cardPeople";
+type ArrayKey = "authors" | "assignees" | "labels" | "milestones" | "reviews" | "humanReviewers" | "humanReviews" | "botReviews" | "checks" | "is" | "base" | "cardStatus" | "cardPeople";
 
 export interface FacetDef {
   key: ArrayKey;
@@ -78,31 +96,18 @@ export interface FacetDef {
   field: (p: PrSummary) => string[] | null;
 }
 
-export function reviewTokenOf(d: PrSummary["reviewDecision"]): ReviewTok {
-  return d === "APPROVED" ? "approved"
-    : d === "CHANGES_REQUESTED" ? "changes-requested"
-    : d === "REVIEW_REQUIRED" ? "required"
-    : "none";
-}
-
-function checksTokenOf(p: PrSummary): string[] | null {
-  if (p.checksLoaded === false) return null; // second pass not in yet — fail open
-  const r = p.checks;
-  if (!r || r.total === 0) return []; // known: no checks. Matches no checks-token.
-  if (r.verdict === "green") return ["green"];
-  if (r.verdict === "red") return ["red"];
-  return ["pending"]; // has checks, not yet a verdict
-}
-
 export const FACETS: FacetDef[] = [
-  { key: "authors", queryKey: "author", label: "Author", field: (p) => (p.author ? [p.author] : []) },
-  { key: "labels", queryKey: "label", label: "Label", field: (p) => p.labels.map((l) => l.name) },
-  { key: "reviews", queryKey: "review", label: "Reviews", fixed: REVIEW_TOKS, field: (p) => [reviewTokenOf(p.reviewDecision)] },
-  { key: "checks", queryKey: "checks", label: "Checks", fixed: CHECKS_TOKS, field: checksTokenOf },
-  { key: "is", queryKey: "is", label: "Draft", fixed: IS_TOKS, field: (p) => [p.isDraft ? "draft" : "ready"] },
-  { key: "base", queryKey: "base", label: "Base", field: (p) => (p.baseRefName ? [p.baseRefName] : []) },
-  { key: "assignees", queryKey: "assignee", label: "Assignee", field: (p) => p.assignees },
-  { key: "milestones", queryKey: "milestone", label: "Milestone", field: (p) => (p.milestone ? [p.milestone] : []) },
+  { key: "authors", queryKey: "author", label: "Author", field: FACET_FIELDS.author },
+  { key: "labels", queryKey: "label", label: "Label", field: FACET_FIELDS.label },
+  { key: "reviews", queryKey: "review", label: "Reviews (anyone)", fixed: REVIEW_TOKS, field: FACET_FIELDS.review },
+  { key: "humanReviewers", queryKey: "humanreviewer", label: "Human reviewer", fixed: HUMAN_REVIEWER_TOKS, field: FACET_FIELDS.humanreviewer },
+  { key: "humanReviews", queryKey: "humanreview", label: "Human review", fixed: HUMAN_REVIEW_TOKS, field: FACET_FIELDS.humanreview },
+  { key: "botReviews", queryKey: "botreview", label: "Bot review", fixed: BOT_REVIEW_TOKS, field: FACET_FIELDS.botreview },
+  { key: "checks", queryKey: "checks", label: "Checks", fixed: CHECKS_TOKS, field: FACET_FIELDS.checks },
+  { key: "is", queryKey: "is", label: "Draft", fixed: IS_TOKS, field: FACET_FIELDS.is },
+  { key: "base", queryKey: "base", label: "Base", field: FACET_FIELDS.base },
+  { key: "assignees", queryKey: "assignee", label: "Assignee", field: FACET_FIELDS.assignee },
+  { key: "milestones", queryKey: "milestone", label: "Milestone", field: FACET_FIELDS.milestone },
   /*
    * THE TRACKER CARD BEHIND THE PULL REQUEST — the two things the card on the
    * board already shows, and nothing else.
@@ -124,13 +129,13 @@ export const FACETS: FacetDef[] = [
      request (open, closed, draft) reachable as `is:`, and one word meaning two
      of them in the same box is a filter somebody applies by accident. Paired
      with `cardassignee:` so the two read as a set. */
-  { key: "cardStatus", queryKey: "cardstatus", label: "Card status", whenPresent: true, field: (p) => (p.card ? [p.card.status] : []) },
+  { key: "cardStatus", queryKey: "cardstatus", label: "Card status", whenPresent: true, field: FACET_FIELDS.cardstatus },
   {
     key: "cardPeople", queryKey: "cardassignee", label: "Card assignee", whenPresent: true,
     /* The tracker's own people, by name — NOT the GitHub logins the `assignee`
        facet above matches. The two disagree often enough that sharing one
        filter between them would be a wrong answer rather than a convenience. */
-    field: (p) => (p.card?.people ?? []).map((x) => x.name).filter(Boolean),
+    field: FACET_FIELDS.cardassignee,
   },
 ];
 
@@ -138,7 +143,7 @@ const FACET_BY_QKEY = new Map(FACETS.map((f) => [f.queryKey, f]));
 const KNOWN_KEYS = new Set([...FACET_BY_QKEY.keys(), "sort"]);
 
 function empty(): FilterState {
-  return { authors: [], assignees: [], labels: [], milestones: [], reviews: [], checks: [], is: [], base: [], cardStatus: [], cardPeople: [], text: "", sort: DEFAULT_SORT };
+  return { authors: [], assignees: [], labels: [], milestones: [], reviews: [], humanReviewers: [], humanReviews: [], botReviews: [], checks: [], is: [], base: [], cardStatus: [], cardPeople: [], text: "", sort: DEFAULT_SORT };
 }
 
 // Split into tokens, keeping `key:"a b"` whole (a space inside quotes is not a
@@ -285,7 +290,8 @@ function matches(p: PrSummary, f: FilterState): boolean {
     if (sel.length === 0) continue;
     const vals = facet.field(p);
     if (vals === null) continue; // unknown -> fail open
-    if (!sel.some((s) => vals.includes(s))) return false;
+    const have = new Set(vals.map(foldKey));
+    if (!sel.some((s) => have.has(foldKey(s)))) return false;
   }
   return textMatch(p, f.text);
 }
@@ -349,11 +355,17 @@ export interface FacetView {
 const REVIEW_LABEL: Record<string, string> = {
   approved: "Approved", "changes-requested": "Changes requested", required: "Review required", none: "No review",
 };
+const HUMAN_REVIEWER_LABEL: Record<string, string> = { assigned: "Is assigned", unassigned: "Is not assigned" };
+const PEOPLE_REVIEW_LABEL: Record<string, string> = {
+  approved: "Approved", "changes-requested": "Changes requested", commented: "Commented", pending: "Pending", none: "None",
+};
 const CHECKS_LABEL: Record<string, string> = { green: "Passing", red: "Failing", pending: "Pending" };
 const IS_LABEL: Record<string, string> = { draft: "Draft", ready: "Ready" };
 
 function optionLabel(key: ArrayKey, value: string): string {
   if (key === "reviews") return REVIEW_LABEL[value] ?? value;
+  if (key === "humanReviewers") return HUMAN_REVIEWER_LABEL[value] ?? value;
+  if (key === "humanReviews" || key === "botReviews") return PEOPLE_REVIEW_LABEL[value] ?? value;
   if (key === "checks") return CHECKS_LABEL[value] ?? value;
   if (key === "is") return IS_LABEL[value] ?? value;
   return value;
@@ -372,7 +384,17 @@ export interface RepoFacets {
   bases: string[];
   /** The tracker's whole workflow, so the filter can offer the statuses that
    *  are NOT on screen — which is the half a filter is for. */
-  cardStatuses?: { status: string; color?: string; type?: string }[];
+  cardStatuses?: { status: string; color?: string; type?: string; trackers?: string[] }[];
+}
+
+/** The statuses of the trackers the listed cards belong to: no ClickUp card, no ClickUp status. No card at all = all of them. */
+export function statusesForCards(prs: PrSummary[], all: NonNullable<RepoFacets["cardStatuses"]>): string[] {
+  const cards = prs.filter((p) => p.card);
+  if (!cards.length) return all.map((x) => x.status);
+  /* A card with no tracker is unknown, never ClickUp: it adds nothing, and if no card says, every status stays. */
+  const used = new Set<string>(cards.map((p) => p.card!.tracker).filter((t) => t === "jira" || t === "clickup"));
+  if (!used.size) return all.map((x) => x.status);
+  return all.filter((x) => !x.trackers?.length || x.trackers.some((t) => used.has(t))).map((x) => x.status);
 }
 
 export function buildFacets(prs: PrSummary[], f: FilterState, repo?: RepoFacets | null): FacetView[] {
@@ -380,9 +402,12 @@ export function buildFacets(prs: PrSummary[], f: FilterState, repo?: RepoFacets 
     const others: FilterState = { ...f, [facet.key]: [] };
     const pool = prs.filter((p) => matches(p, others));
 
+    /* Card statuses fold to one UPPER CASE entry per status, counts summed. */
+    const norm = facet.key === "cardStatus" ? statusKey : (v: string) => v;
     const counts = new Map<string, number>();
     const order: string[] = [];
-    const note = (v: string) => {
+    const note = (raw: string) => {
+      const v = norm(raw);
       if (!counts.has(v)) order.push(v);
       counts.set(v, (counts.get(v) ?? 0) + 1);
     };
@@ -410,14 +435,15 @@ export function buildFacets(prs: PrSummary[], f: FilterState, repo?: RepoFacets 
         /* The whole workflow, not the statuses that happen to be on this page.
            Seeded like the labels above and for the same reason: a filter that
            can only offer what is already visible cannot exclude anything. */
-        : facet.key === "cardStatus" ? repo?.cardStatuses?.map((x) => x.status)
+        : facet.key === "cardStatus" ? (repo?.cardStatuses ? statusesForCards(prs, repo.cardStatuses) : undefined)
         : undefined;
       const seen = order.sort((a, b) => (counts.get(b)! - counts.get(a)!) || a.localeCompare(b));
-      values = fromRepo?.length ? [...new Set([...fromRepo, ...seen])] : seen;
+      values = fromRepo?.length ? [...new Set([...fromRepo.map(norm), ...seen])] : seen;
     }
     // Keep a selected value visible even if it currently matches nothing, so its
     // checkbox stays tickable (the escape hatch out of an empty filter).
-    for (const v of f[facet.key] as string[]) if (!values.includes(v)) values.push(v);
+    const selected = [...new Set((f[facet.key] as string[]).map(norm))];
+    for (const v of selected) if (!values.includes(v)) values.push(v);
 
     return {
       key: facet.key,
@@ -427,13 +453,14 @@ export function buildFacets(prs: PrSummary[], f: FilterState, repo?: RepoFacets 
          have — see `whenPresent`. Decided here rather than there because it is
          a fact about the field, and the bar's job is to draw what it is given. */
       ...(facet.whenPresent ? { whenPresent: true } : null),
-      selected: f[facet.key] as string[],
+      selected,
       // No count. It could only ever count the page in hand, and GitHub's own
       // facet menus do not show one either — a number that means "on this page"
       // beside a filter that searches everything is worse than no number.
       options: values.map((v) => ({
         value: v,
-        label: optionLabel(facet.key, v),
+        /* A selected status no tracker has any more stays, marked, so its rule can still be edited. */
+        label: optionLabel(facet.key, v) + (facet.key === "cardStatus" && repo?.cardStatuses?.length && !repo.cardStatuses.some((x) => foldKey(x.status) === foldKey(v)) ? " (not in the workflow)" : ""),
         count: counts.get(v) ?? 0,
         // Authors and assignees are people; a face finds a name in a list of a
         // dozen faster than reading down it does.
@@ -442,7 +469,7 @@ export function buildFacets(prs: PrSummary[], f: FilterState, repo?: RepoFacets 
            chip it stands for: the same pills the card shows, not a column of
            grey words. */
         ...(facet.key === "cardStatus"
-          ? { tint: repo?.cardStatuses?.find((x) => x.status.toLowerCase() === v.toLowerCase())?.color }
+          ? { tint: repo?.cardStatuses?.find((x) => foldKey(x.status) === foldKey(v))?.color }
           : {}),
       })),
     };
@@ -477,47 +504,3 @@ export function builderFields(prs: PrSummary[], f: FilterState, repo?: RepoFacet
     }));
 }
 
-/**
- * One field of one pull request, for the rule engine.
- *
- * The `FACETS` table above already says what every field means; this is that
- * same table read one row at a time, so the pills and the builder can never
- * disagree about what `label` is.
- *
- * A field the table does not know answers nothing rather than throwing: a saved
- * view from a future version naming a field this build has never heard of
- * should narrow nothing, not break the board.
- */
-export const readPrField: ReadField<PrSummary> = (p, key) => readPrFieldAt(p, key, Date.now());
-
-/*
- * The fields the lane filter reads that no pill draws, so they stay out of
- * FACETS (which would add a dropdown for each). `updated` is the age in whole
- * days, which is why the clock is an argument: a test pins it.
- *
- * `conflict` is empty rather than "no" for a clean row, so `is not` and
- * `unset` both read it the way the sentence does.
- */
-const DAY_MS = 86_400_000;
-const EXTRA_FIELDS: Record<string, (p: PrSummary, now: number) => string[]> = {
-  text: (p) => [p.title, p.headRefName].filter(Boolean),
-  number: (p) => [String(p.number)],
-  card: (p) => (p.card ? [p.card.customId ?? p.card.id] : []),
-  conflict: (p) => (p.mergeable === "CONFLICTING" ? ["yes"] : []),
-  updated: (p, now) => {
-    const t = Date.parse(p.updatedAt);
-    return Number.isNaN(t) ? [] : [String(Math.max(0, Math.floor((now - t) / DAY_MS)))];
-  },
-};
-export const EXTRA_FIELD_KEYS = Object.keys(EXTRA_FIELDS);
-
-export function readPrFieldAt(p: PrSummary, key: string, now: number): string[] {
-  const extra = EXTRA_FIELDS[key];
-  if (extra) return extra(p, now);
-  const facet = FACET_BY_QKEY.get(key);
-  if (!facet) return [];
-  /* `null` is the fail-open the checks facet uses for a row whose checks have
-     not arrived; for the rule engine that means "no values", which `is` reads
-     as no match and `is not` as a match — the same answer the pills give. */
-  return facet.field(p) ?? [];
-}

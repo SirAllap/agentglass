@@ -26,7 +26,7 @@ import { AnchoredMenu } from "../AnchoredMenu.tsx";
 import { addCustomPin, decodeCustomPin, GIT_COMMANDS, groupByDir, matchCommands, MAX_COMMAND_PINS, RECIPE, togglePin, useCommands, usePins } from "../CommandBar.tsx";
 import { MenuRow } from "../ContextMenu.tsx";
 import { RunDialog, runRecipeSteps } from "../RecipesPane.tsx";
-import { Button, FilterField, GROUP_HEADING, INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
+import { Button, FilterField, GROUP_HEADING, INPUT, LINE, INPUT_STYLE } from "../workspace/Chrome.tsx";
 
 const SETTINGS_PAGES = HAS_BROWSER ? ALL_SETTINGS_PAGES : ALL_SETTINGS_PAGES.filter((p) => p.id !== "browser");
 const SETTINGS_NO_KW = SETTINGS_PAGES.map((p) => ({ ...p, kw: "" }) as SettingsPage);
@@ -143,7 +143,7 @@ function Body({ root, disabled, font, runTargetInTmux, onRun, onFind, done }: {
     <button type="button" role="menuitem" aria-pressed={on} disabled={!on && full}
       onClick={() => togglePin(root, c.value)}
       aria-label={on ? `Unpin ${c.label}` : `Pin ${c.label}`}
-      title={on ? "Unpin" : full ? `${MAX_COMMAND_PINS} pinned already. Unpin one first.` : `Pin ${c.label}`}
+      data-tip={on ? "Unpin" : full ? `${MAX_COMMAND_PINS} pinned already. Unpin one first.` : `Pin ${c.label}`}
       className={`shrink-0 grid place-items-center rounded-md agx-mi ${on ? "" : "opacity-0 group-hover/cr:opacity-100 focus-visible:opacity-100"}`}
       style={{ width: 24, height: 24, color: on ? "var(--warning)" : "var(--text3)", ...(!on && full ? { opacity: 0.3 } : null) }}>
       <StarIcon size={ICON.xs} filled={on} />
@@ -151,7 +151,7 @@ function Body({ root, disabled, font, runTargetInTmux, onRun, onFind, done }: {
   );
   const cmdRow = (key: string, label: ReactNode, sub: string | undefined, title: string, value: string, on: boolean, runIt: () => void, mono: boolean) => (
     <div key={key} className="group/cr flex items-center gap-1 pr-1 rounded-md agx-mi" style={{ minHeight: 28 }}>
-      <button type="button" role="menuitem" disabled={disabled} onClick={runIt} title={title}
+      <button type="button" role="menuitem" disabled={disabled} onClick={runIt} data-tip={title}
         className="min-w-0 flex-1 text-left flex items-baseline gap-2.5 px-2.5 py-1 text-[11px]">
         <span className="shrink-0 font-medium" style={{ color: "var(--primary-ink)", fontFamily: mono ? font : undefined }}>{label}</span>
         {sub && <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text3)" }}>{sub}</span>}
@@ -222,7 +222,7 @@ function Body({ root, disabled, font, runTargetInTmux, onRun, onFind, done }: {
 
       {nothing && <div className="px-3 py-2 text-[11px]" style={{ color: "var(--text3)" }}>{cmds ? `No command matches “${query.trim()}”` : "Reading the project…"}</div>}
 
-      <div className="mt-1 pt-1 px-1 pb-1" style={{ borderTop: "1px solid var(--surface-line)" }}>
+      <div className="mt-1 pt-1 px-1 pb-1" style={{ borderTop: LINE }}>
         <button type="button" role="menuitem" disabled={full} onClick={() => setCustom(custom ? null : { label: "", cmd: "", error: "" })}
           className="text-[10.5px] px-2 py-1 rounded-md"
           style={{ color: full ? "var(--text3)" : "var(--primary-ink)", border: "1px dashed color-mix(in srgb, var(--primary) 35%, transparent)", opacity: full ? 0.55 : 1 }}>

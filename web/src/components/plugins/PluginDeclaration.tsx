@@ -230,7 +230,7 @@ function FixBlock({ command, flat }: { command: string; flat?: boolean }) {
       </pre>
       <button type="button" className="agx-btn absolute top-1 right-1 rounded inline-flex items-center justify-center"
         style={{ width: HIT, height: HIT, color: "var(--text3)" }}
-        title="Copy" onClick={() => { void navigator.clipboard?.writeText(command).catch(() => {}); }}>
+        data-tip="Copy" aria-label="Copy" onClick={() => { void navigator.clipboard?.writeText(command).catch(() => {}); }}>
         <CopyIcon size={ICON.xs} />
       </button>
     </div>

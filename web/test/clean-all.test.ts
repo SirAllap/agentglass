@@ -3,7 +3,7 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { api } from "../src/lib/api.ts";
-import { cleanAll, cleanTargets, confirmBody, summaryWord } from "../src/lib/cleanAll.ts";
+import { cleanAll, cleanTargets, confirmBody, failedList, failedTip, summaryWord } from "../src/lib/cleanAll.ts";
 import type { LeftoverState } from "../src/lib/leftovers.ts";
 
 const some = (items: number, bytes: number): LeftoverState => ({ kind: "some", items, bytes, groups: [] });
@@ -77,6 +77,47 @@ describe("a pull request that was closed without merging", () => {
   test("the confirmation says which of them keep their work", () => {
     const body = confirmBody(cleanTargets([{ number: 9, state: "CLOSED" }], () => some(3, 10)));
     expect(body).toContain("1 pull request was closed without merging, so its branch and stashes stay.");
+  });
+});
+
+// "Clean up all (6)" ended "Cleaned 0 pull requests · 6 not cleaned (#…)" with no reason on screen, and a run that
+// had removed most of a checkout counted the same as one that removed nothing.
+describe("a run that kept something", () => {
+  const saved = { plan: api.cleanupPlan, run: api.cleanupRun };
+  const item = (kind: string, status: string, detail = "") => ({ id: `${kind}:x`, kind, target: "x", status, detail });
+  beforeAll(() => {
+    (api as any).cleanupPlan = async (_r: string, pr: number) => (pr === 14 ? plan(pr, { blocks: [{ kind: "live-session", why: "a tab is open" }] }) : plan(pr));
+    (api as any).cleanupRun = async (_r: string, pr: number) => {
+      // the report as the server sends it for a failed teardown: evidence went, the checkout stayed
+      if (pr === 11) return { ok: false, planId: "p11", failed: 1, freedBytes: 7, summary: "", items: [
+        item("teardown-script", "failed", "teardown failed (exit 1): not a worktree this script made; worktree kept"),
+        item("worktree", "skipped", "kept with the worktree: its teardown script did not finish"), item("evidence", "done")] };
+      // nothing of it could go
+      if (pr === 12) return { ok: false, planId: "p12", failed: 1, freedBytes: 0, summary: "", items: [item("branch", "failed", "error: the branch is not fully merged")] };
+      // an answer with no report: the server refused
+      if (pr === 13) return { ok: false, error: "the state changed since the dry run" };
+      return { ok: true, planId: `p${pr}`, failed: 0, freedBytes: 5, summary: "", items: [item("worktree", "done")] };
+    };
+  });
+  afterAll(() => { (api as any).cleanupPlan = saved.plan; (api as any).cleanupRun = saved.run; });
+  test("is counted as partly cleaned, and every one of them says why", async () => {
+    const s = await cleanAll("/r", [10, 11, 12, 13, 14]);
+    expect(s.done).toBe(1);
+    expect(s.freed).toBe(12);
+    expect(s.failed.map((f) => [f.pr, !!f.partly])).toEqual([[11, true], [12, false], [13, false], [14, false]]);
+    expect(summaryWord(s)).toBe("Cleaned 1 pull request · 12 B freed · 1 partly cleaned · 3 not cleaned");
+    expect(failedList(s)).toBe("#11: the teardown script stopped, #12: the branch was kept, #13: refused, #14: blocked: " + s.failed[3]!.short!.slice("blocked: ".length));
+    const tip = failedTip(s).split("\n");
+    expect(tip[0]).toBe("#11: the teardown script stopped: teardown failed (exit 1): not a worktree this script made; worktree kept.");
+    expect(tip[1]).toBe("#12: the branch was kept: error: the branch is not fully merged.");
+    expect(tip[2]).toBe("#13: the state changed since the dry run");
+    expect(tip[3]).toMatch(/^#14: Blocked: /);
+  });
+  test("the summary shows the reasons, and its tip is the house one", async () => {
+    const btn = await read("../src/components/CleanAllButton.tsx");
+    expect(btn).toContain("data-tip={sum.failed.length ? tipAttr(failedTip(sum)) : undefined}");
+    expect(btn).toContain("failedList(sum)");
+    expect(btn).not.toContain("title={failedTip}");
   });
 });
 

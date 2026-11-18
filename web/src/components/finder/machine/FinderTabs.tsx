@@ -28,11 +28,11 @@ export function FinderTabs({ tabs, home, onSelect, onClose, onNew }: { tabs: Tab
             style={{ minHeight: HIT, color: on ? "var(--primary-ink)" : "var(--text3)", boxShadow: on ? "inset 0 -2px 0 var(--primary)" : undefined, maxWidth: 200 }}
             onMouseDown={(e) => { if (e.button === 1) e.preventDefault(); }} onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); onClose(i); } }} onClick={(e) => { if (activates(e.button, "click")) onSelect(i); }}>
             <span className="truncate">{tabLabel(p, home)}</span>
-            <button className="agx-btn rounded-md grid place-items-center" style={{ width: HIT - 8, height: HIT - 8 }} aria-label={`Close tab ${tabLabel(p, home)}`} title="Close tab (Ctrl+W)" onClick={(e) => { e.stopPropagation(); onClose(i); }}><StrataIcon set="act" name="x" size={ICON.xs} /></button>
+            <button className="agx-btn rounded-md grid place-items-center" style={{ width: HIT - 8, height: HIT - 8 }} aria-label={`Close tab ${tabLabel(p, home)}`} data-tip="Close tab (Ctrl+W)" onClick={(e) => { e.stopPropagation(); onClose(i); }}><StrataIcon set="act" name="x" size={ICON.xs} /></button>
           </div>
         );
       })}
-      <button className="agx-btn rounded-md grid place-items-center self-center" style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} aria-label="New tab" title="New tab (Ctrl+T)" onClick={onNew}><StrataIcon set="act" name="plus" size={ICON.md} /></button>
+      <button className="agx-btn rounded-md grid place-items-center self-center" style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} aria-label="New tab" data-tip="New tab (Ctrl+T)" onClick={onNew}><StrataIcon set="act" name="plus" size={ICON.md} /></button>
     </div>
   );
 }

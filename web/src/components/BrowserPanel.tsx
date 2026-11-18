@@ -20,15 +20,20 @@
 // and whatever an agent was doing on it. `visibility`, never `display:none` —
 // a display:none ancestor measures 0x0, and a guest resized to nothing comes
 // back reflowed to a single column.
+import { openExternal } from "../lib/externalUrl.ts";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { CloseButton } from "./CloseButton.tsx";
 import { LanesRow } from "./LanesRow.tsx";
-import { Portal } from "./Portal.tsx";
+import { Portal, PortalFloor } from "./Portal.tsx";
+import { BROWSER, LAYER } from "../lib/layers.ts";
+import { browserPlace, subscribeBrowser } from "../lib/browserHost.ts";
+import { benchState, subscribeBench } from "../lib/benchStore.ts";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
-import { BROWSER_PARTITION, HAS_BROWSER, IS_DESKTOP, applySessionSettings, browserDevtools, browserDevtoolsClose, browserDevtoolsRect, browserDevtoolsZoom, browserCdp, browserZoom, browserShelfRead, captureFullPage, cookieSources, onDevtoolsZoom, onDevtoolsOpen, onBrowserZoom, onBrowserOpenTab, onBrowserKey, onBrowserSearch, onBrowserInspect, setActiveBrowserGuest, browserShown, setGuestOwner, setGuestOpener, onBrowserGuestAttached, openEphemeralTab, closeEphemeralTab } from "../lib/desktop.ts";
+import { BROWSER_PARTITION, HAS_BROWSER, IS_DESKTOP, applySessionSettings, browserDevtools, browserDevtoolsClose, browserDevtoolsRect, browserDevtoolsZoom, browserCdp, browserZoom, browserShelfRead, captureFullPage, cookieSources, onDevtoolsZoom, onDevtoolsOpen, onBrowserZoom, onBrowserOpenTab, onBrowserKey, onBrowserSearch, onBrowserInspect, setActiveBrowserGuest, browserShown, setGuestOwner, setGuestOpener, onBrowserGuestAttached, openEphemeralTab, closeEphemeralTab, guideObserve, onGuideObserved, wipeContainers } from "../lib/desktop.ts";
 import { buildSearchUrl, displayUrl, normalizeNavigationUrl } from "../lib/browserUrl.ts";
-import { BLANK, homePage, searchEngine, zoomLevel, setZoomLevel as saveZoom, zoomPercent, stepZoom, ZOOM_MIN, ZOOM_MAX, devtoolsSide, setDevtoolsSide, devtoolsSize, setDevtoolsSize, devtoolsZoom, setDevtoolsZoom, sidebarOpen, classicChrome, setClassicChrome, setSidebarOpen, sidebarWidth, setSidebarWidth, type DevtoolsSide } from "../lib/browserPrefs.ts";
-import { addTab, closeTab, SLEEP_GRACE_MS, type Recency, listable, newTab, patchTab, popupHome, pruneBlank, sleepingTab, stepTab, tabLabel, wake, withInspected, type BrowserTab } from "../lib/browserTabs.ts";
+import { agentScreenMode } from "../lib/agentScreen.ts";
+import { BLANK, homePage, searchEngine, agentsWithoutScreen,zoomLevel, setZoomLevel as saveZoom, zoomPercent, stepZoom, ZOOM_MIN, ZOOM_MAX, devtoolsSide, setDevtoolsSide, devtoolsSize, setDevtoolsSize, devtoolsZoom, setDevtoolsZoom, sidebarOpen, classicChrome, setClassicChrome, setSidebarOpen, sidebarWidth, setSidebarWidth, type DevtoolsSide } from "../lib/browserPrefs.ts";
+import { addTab, closeTab, paneTab, SLEEP_GRACE_MS, type Recency, listable, newTab, patchTab, popupHome, pruneBlank, sleepingTab, stepTab, tabLabel, wake, withInspected, type BrowserTab } from "../lib/browserTabs.ts";
 import { dropsBefore, isDrag, parseDrop, type DropAt } from "../lib/browserDrag.ts";
 import {
   MAX_ESSENTIALS, allItems, emptyShelf, findByUrl, folderCount, insertFolder, place, readShelves, removeItem, saveShelves,
@@ -39,18 +44,24 @@ import {
 } from "../lib/browserShelf.ts";
 import { forgetProfileTabs, openingStrip, readSession, saveSession, setFor } from "../lib/browserSession.ts";
 import {
-  addProfile, loadProfiles, mintAgentProfile, partitionFor, profileHue, profileName, removeProfile, saveProfiles,
-  type BrowserProfile,
+  addProfile, droppable, droppedNote, loadProfiles, mintAgentProfile, partitionFor, profileHue, profileName, removeProfile, retiredIds, retireIds, saveProfiles,
+  setUnusedContainers, touchProfiles, type BrowserProfile, type Room,
 } from "../lib/browserProfiles.ts";
+import { laneContainers } from "../lib/laneManager.ts";
 import { containerOwner, isAgentContainer } from "../../../shared/workerContainer.ts";
 import { VIEWPORTS, type Viewport } from "../lib/browserViewport.ts";
 import { browserNav, clearBrowserNav, subscribeBrowserNav } from "../lib/browserNav.ts";
 import { clientId, serveBrowserAsk, setBrowserAskHandler } from "../lib/browserBus.ts";
-import { activityReducer, actionOf, agentLabel, doneMayMark, pausedRefusal, tabState, viewportReleased, IDLE_RELEASE_MS, type Activity, type TabAgent } from "../lib/browserAgentActivity.ts";
+import { publishBrowserRail, agentDrives, nextDriveCheck, railTipFor } from "../lib/browserRail.ts";
+import { setRailTip } from "../lib/railTips.ts";
+import { activityReducer, actionOf, agentAskRefusal, agentLabel, doneMayMark, paintsBehind, tabState, viewportReleased, IDLE_RELEASE_MS, type Activity, type TabAgent } from "../lib/browserAgentActivity.ts";
 import { api, flushStorage } from "../lib/api.ts";
-import { clearAgentViewport, onAgentViewport, type ViewportBox, forgetAgentZoom, reapplyZoom, applyGuestZoom, setShellZoom, setPageZoomer, crossContainerRefusal, mintTakesThePane, notePopup, onActLanded, type ActLanding, type GuestZoom, type DrivableWebview } from "../lib/browserDrive.ts";
+import { clearAgentViewport, onAgentViewport, type ViewportBox, forgetAgentZoom, reapplyZoom, applyGuestZoom, setShellZoom, setGuideShell, insertGuideSuggestion, requestGuideSuggestion, setPageZoomer, crossContainerRefusal, mintContainer, mintTakesThePane, notePopup, onActLanded, onHandoff, isHandoffArmed, takeOverHandoff, type ActLanding, type GuestZoom, type DrivableWebview } from "../lib/browserDrive.ts";
 import { AgentPresence } from "./browser/AgentPresence.tsx";
+import { answerGuide, onGuideEvent } from "../lib/browserGuideBus.ts";
 import { BrowserIsland } from "./browser/BrowserIsland.tsx";
+import { LaneWatch } from "./browser/LaneWatch.tsx";
+import { useIslandLanes } from "../lib/laneView.ts";
 import { onBrowserTabs } from "../lib/browserBus.ts";
 import { COLLECTOR } from "../lib/browserObserve.ts";
 import { PagePicker } from "./browser/PagePicker.tsx";
@@ -59,11 +70,11 @@ import { MarkupLayer } from "./browser/MarkupLayer.tsx";
 import { DemoPage } from "./browser/DemoPage.tsx";
 import { IS_DEMO } from "../lib/demo.ts";
 import { DEMO_BROWSER_TABS } from "../lib/demoBrowser.ts";
-import { ICON } from "../lib/iconSize.ts";
+import { HIT, ICON, MIN_BOX } from "../lib/iconSize.ts";
 import { openSettings } from "../lib/openSettings.ts";
 import { registerClaim } from "../lib/findScope.ts";
 import { anyOverlayOpen, subscribeOverlays } from "../lib/overlays.ts";
-import { suggest, type Suggestion } from "../lib/suggest.ts";
+import { completion, litRow, suggestMemo, switchable, listedAsTab, tabRowKey, SUGGEST_MAX, type Suggestion } from "../lib/suggest.ts";
 import {
   BackIcon, BlankPageIcon, CloseIcon, CodeIcon, ExternalIcon, ForwardIcon, GlobeIcon,
   HomeIcon, LockIcon, MoreIcon, NoteIcon, PenIcon, ReloadIcon, SearchIcon,
@@ -73,6 +84,7 @@ import { AgentChip, AgentPill } from "./browser/AgentBadge.tsx";
 import { IslandMenu, ZoomIcon } from "./browser/IslandMenu.tsx";
 import { CheckboxIcon, CopyIcon, DoneIcon, SwapIcon } from "../lib/glyphIcons.tsx";
 import { Button, Chip, CTRL_H, INPUT, INPUT_STYLE, EDGE, LINE } from "./workspace/Chrome.tsx";
+import { omniBox } from "../lib/omniBox.ts";
 
 /** Electron's `<webview>` is not in React's JSX catalogue, and its methods are
  *  not on HTMLElement. Narrowed to the handful actually called here rather than
@@ -134,12 +146,19 @@ function BornAt({ url, children }: { url: string; children: (src: string) => Rea
 
 /** The site's own icon, or a mark in its place. Falls back on error rather than
  *  leaving a broken-image glyph in the strip. */
-function Favicon({ src }: { src: string | null }) {
+function Favicon({ src, size = ICON.sm }: { src: string | null; size?: number }) {
   const [bad, setBad] = useState(false);
   useEffect(() => { setBad(false); }, [src]);
-  if (!src || bad) return <span className="shrink-0 opacity-40 flex items-center"><GlobeIcon size={13} /></span>;
+  if (!src || bad) return <span className="shrink-0 opacity-40 flex items-center"><GlobeIcon size={size === ICON.sm ? 13 : size} /></span>;
   return <img src={src} alt="" onError={() => setBad(true)}
-    className="shrink-0 rounded-sm" style={{ width: 14, height: 14, objectFit: "contain" }} />;
+    className="shrink-0 rounded-sm" style={{ width: size, height: size, objectFit: "contain" }} />;
+}
+
+/** `text` with the first occurrence of what was typed in bold. */
+function emph(text: string, q: string): React.ReactNode {
+  const at = q ? text.toLowerCase().indexOf(q) : -1;
+  if (at < 0) return text;
+  return <>{text.slice(0, at)}<b>{text.slice(at, at + q.length)}</b>{text.slice(at + q.length)}</>;
 }
 
 /* -------------------------------------------------------------------- view */
@@ -217,23 +236,23 @@ async function pictureOf(w: { capturePage(): Promise<Shot> } | undefined): Promi
  * so twenty other tabs cost nothing.
  */
 function drivenBehind(a: TabAgent | undefined): boolean {
-  const k = tabState(a, undefined, Date.now())?.key;
-  return !!k && k !== "done" && k !== "waiting" && k !== "yours";
+  return paintsBehind(tabState(a, undefined, Date.now())?.key);
 }
 
-export function BrowserView({ active: viewOn, scope }: {
+// One-slot memo that is not a hook, for a value computed below an early return. Reuses the last result while every dep is the same.
+type DepsSlot = { deps: readonly unknown[]; value: unknown };
+function lastDeps<T>(slot: { current: DepsSlot | null }, deps: readonly unknown[], make: () => T): T {
+  const last = slot.current;
+  if (last && last.deps.length === deps.length && deps.every((d, i) => Object.is(d, last.deps[i]))) return last.value as T;
+  const value = make();
+  slot.current = { deps, value };
+  return value;
+}
+
+function BrowserViewBody({ active: viewOn }: {
+  /** Is the place showing the browser (its view, or the bench) on screen? The one
+   *  instance is moved between them by lib/browserHost.ts — never mounted twice. */
   active: boolean;
-  /**
-   * Which copy of the browser this is.
-   *
-   * Empty (the default) is THE browser view. The floating bench mounts a second
-   * one, and the two are different sets of pages: closing a tab in one must not
-   * close it in the other, and the strips are saved under their own keys
-   * (browserSession.keyFor). Everything else — the profiles, the cookies, the
-   * history, the bookmarks — is deliberately shared, because it is the same
-   * browser and the same person.
-   */
-  scope?: string;
 }) {
   // Only the *first* page is read at mount. Everything else asks
   // `browserPrefs` at the moment it needs an answer, because this view is
@@ -260,8 +279,9 @@ export function BrowserView({ active: viewOn, scope }: {
      are in `openingStrip`; read once, and the three states below seed from it. */
   const [opening] = useState(() => {
     if (IS_DEMO) return null;
-    const saved = readSession(scope);
-    const known = new Set(loadProfiles(globalThis.localStorage ?? null).map((p) => p.id));
+    const saved = readSession();
+    const loaded = loadProfiles(globalThis.localStorage ?? null);
+    const known = new Set(loaded.map((p) => p.id));
     /* A container that no longer exists: the file is told, once, rather than
        left to be re-read every launch (see `openingStrip`). */
     for (const id of Object.keys(saved?.byProfile ?? {})) {
@@ -270,7 +290,7 @@ export function BrowserView({ active: viewOn, scope }: {
     return openingStrip(saved, known, (p) => {
       const t = sleepingTab(homePage(), "", null, p);
       return wakeFirst ? { ...t, asleep: false } : t;
-    });
+    }, (id) => isAgentContainer(profileName(loaded, id)));
   });
   const [profile, setProfile] = useState<string>(() => opening?.profile ?? "");
   const [tabs, setTabs] = useState<BrowserTab[]>(() => {
@@ -346,6 +366,8 @@ export function BrowserView({ active: viewOn, scope }: {
    */
   const [places, setPlaces] = useState<Suggestion[] | null>(null);
   const [hint, setHint] = useState(-1);
+  /** True while an IME is composing: nothing may be completed or selected then. */
+  const composing = useRef(false);
   useEffect(() => {
     api.browserPlaces().then((r) => setPlaces((r.places ?? []) as unknown as Suggestion[])).catch(() => setPlaces([]));
   }, []);
@@ -388,7 +410,7 @@ export function BrowserView({ active: viewOn, scope }: {
    * the time it takes to close a window and far above the noise.
    */
   useEffect(() => {
-    const t = setTimeout(() => saveSession(profile, tabs, activeId, scope), 500);
+    const t = setTimeout(() => saveSession(profile, tabs, activeId), 500);
     return () => clearTimeout(t);
   }, [profile, tabs, activeId]);
 
@@ -402,7 +424,7 @@ export function BrowserView({ active: viewOn, scope }: {
    * after a close still restored the closed page.
    */
   const shape = tabs.map((t) => `${t.id}:${t.profile || ""}`).join(" ");
-  useEffect(() => { saveSession(profile, tabs, activeId, scope); flushStorage(); }, [profile, shape]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { saveSession(profile, tabs, activeId); flushStorage(); }, [profile, shape]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /*
    * And once more on the way out, because the debounce above may never fire:
@@ -419,10 +441,10 @@ export function BrowserView({ active: viewOn, scope }: {
   const latest = useRef({ profile, tabs, activeId });
   latest.current = { profile, tabs, activeId };
   useEffect(() => {
-    const flush = () => { const l = latest.current; saveSession(l.profile, l.tabs, l.activeId, scope); };
+    const flush = () => { const l = latest.current; saveSession(l.profile, l.tabs, l.activeId); };
     window.addEventListener("pagehide", flush);
     return () => { window.removeEventListener("pagehide", flush); flush(); };
-  }, [scope]);
+  }, []);
 
   /**
    * An ephemeral tab's jar is wiped the moment it is no longer among the
@@ -469,13 +491,26 @@ export function BrowserView({ active: viewOn, scope }: {
     if (landed) setProfile(landed.profile || "");
   }, []);
 
-  const active = tabs.find((t) => t.id === activeId) ?? tabs[0];
+  /* An agent's tab is never drawn here because it was first in the list. */
+  const active = paneTab(tabs, activeId, profile, (t) => !!t.profile && isAgentContainer(profileName(profiles, t.profile)));
   const el = useCallback(() => (active ? els.current.get(active.id) ?? null : null), [active]);
 
   // What the page is at, and what is in the bar, are two different facts: while
   // you are typing, the page has not moved. `typed` being null means "not
   // editing", so navigation is free to update the display.
   const [typed, setTyped] = useState<string | null>(null);
+  /** The inline completion, tied to the text it was made for: once `typed`
+   *  moves on, it no longer applies and nothing has to clear it. */
+  const [comp, setComp] = useState<{ for: string; text: string }>({ for: "", text: "" });
+  const omniInput = useRef<HTMLInputElement>(null);
+  const compText = typed !== null && comp.for === typed ? comp.text : "";
+  // The completion is drawn as selected text after what was typed. The value
+  // changes under a controlled input, which parks the caret at the end, so the
+  // selection is put back after every render that has one.
+  useLayoutEffect(() => {
+    const el = omniInput.current;
+    if (el && compText && typed !== null && document.activeElement === el) el.setSelectionRange(typed.length, typed.length + compText.length);
+  }, [typed, compText]);
   const [note, setNote] = useState<string | null>(null);
   /** Where the link under the pointer goes. Empty whenever nothing is under it
    *  — the bubble is not drawn at all then, the way a browser's is not. */
@@ -499,6 +534,16 @@ export function BrowserView({ active: viewOn, scope }: {
    */
   const [shelves, setShelves] = useState(() => readShelves());
   const shelf = shelfFor(shelves, profile);
+  // Icons the browser already holds as data: URIs, by host. A remote URL in an
+  // <img> is a CSP violation, so only data: ever reaches a row. Built when the
+  // tabs or the shelf change, not on every keystroke.
+  const omniIcons = useMemo(() => {
+    const hostOf = (u: string) => { try { return new URL(u).hostname.replace(/^www\./i, ""); } catch { return ""; } };
+    const icons = new Map<string, string>();
+    for (const t of tabs) if (t.icon?.startsWith("data:")) icons.set(hostOf(t.url), t.icon);
+    for (const i of allItems(shelf)) if (i.icon?.startsWith("data:") && !icons.has(hostOf(i.url))) icons.set(hostOf(i.url), i.icon);
+    return { icons, hostOf };
+  }, [tabs, shelf]);
   const editShelf = useCallback((fn: (s: Shelf) => Shelf) => {
     setShelves((all) => {
       const next = withShelf(all, profile, fn(shelfFor(all, profile)));
@@ -510,6 +555,18 @@ export function BrowserView({ active: viewOn, scope }: {
   /** The address box, when it is open: over the page for a new tab, anchored to
    *  the bar when it is this page's address being edited. */
   const [omni, setOmni] = useState<null | "new" | "edit">(null);
+  /* The pane's width while the address box is open, so the box can centre on
+     the page and shrink with it. Measured only while it is open. */
+  const paneRef = useRef<HTMLDivElement | null>(null);
+  const [paneW, setPaneW] = useState(0);
+  useLayoutEffect(() => {
+    const el = paneRef.current;
+    if (!omni || !el) return;
+    setPaneW(el.clientWidth);
+    const ro = new ResizeObserver(() => setPaneW(el.clientWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [omni]);
   /** The address as it is RIGHT NOW, for the shell's Ctrl+L — that subscription
    *  is registered once, and a closure over `active` would open the box on
    *  whatever page was up when the panel mounted. */
@@ -521,6 +578,14 @@ export function BrowserView({ active: viewOn, scope }: {
   const [classic, setClassic] = useState(() => classicChrome());
   /** The island tucked itself away because the page is the person's: the dock goes too. */
   const [islandTucked, setIslandTucked] = useState(false);
+  /* Agents' lanes, each its own offscreen window: listed in the overview, and
+     the one the person (or an agent's `--show`) picked is watched live. */
+  const [watching, setWatching] = useState<string | null>(null);
+  /* The lane an agent's --show named: marked in the overview, never opened over
+     the person's page. The watch opens only from their own click on the card. */
+  const [calledLane, setCalledLane] = useState<string | null>(null);
+  const lanes = useIslandLanes(setCalledLane);
+  const watched = watching ? lanes.find((l) => l.id === watching) ?? null : null;
   const [sideW, setSideW] = useState(() => sidebarWidth());
   const [peek, setPeek] = useState(false);
   /** Which folder is being renamed, and what it says so far. */
@@ -565,10 +630,32 @@ export function BrowserView({ active: viewOn, scope }: {
    *  answer `profiles` and to refuse a `newtab` into one that does not exist. */
   const profilesRef = useRef<BrowserProfile[]>([]);
   profilesRef.current = profiles;
+  /** Is this tab in an agent's container? Read through the ref, so the
+   *  registered tab verbs answer with the list as it is now. */
+  const isAgentTab = useCallback((t: BrowserTab) => !!t.profile && isAgentContainer(profileName(profilesRef.current, t.profile)), []);
   /** Which agent is driving which tab, whether it is mid-ask, and whether the
    *  person has taken the tab back. Read by the ask handler through a ref for
    *  the same reason as the lists above. */
   const [acts, dispatchAct] = useReducer(activityReducer, {} as Activity);
+  /* What the rail's Browser icon says: the tab count and whether an agent holds
+     an open tab. Published when either changes — see lib/browserRail.ts — and
+     once more when the earliest idle window ends, since that ends with no
+     event: one timeout, re-armed on change, never an interval. */
+  const openTabIds = tabs.map((t) => t.id).join("\n");
+  useEffect(() => {
+    const open = openTabIds ? openTabIds.split("\n") : [];
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const publish = () => {
+      const now = Date.now();
+      const driven = agentDrives(acts, now, open);
+      publishBrowserRail({ tabs: open.length, driven });
+      setRailTip("browser", railTipFor({ tabs: open.length, driven }));
+      const wait = nextDriveCheck(acts, now, open);
+      t = wait === null ? undefined : setTimeout(publish, wait);
+    };
+    publish();
+    return () => clearTimeout(t);
+  }, [openTabIds, acts]);
   /*
    * An agent's fixed viewport (`resize`, `emulate` with a size), as the share
    * of the pane it is drawn in: the guest is shrunk to that box and centred,
@@ -612,6 +699,32 @@ export function BrowserView({ active: viewOn, scope }: {
      browserDrive, filled while this panel is up. */
   const [landings, setLandings] = useState<Record<string, ActLanding>>({});
   useEffect(() => onActLanded((l) => setLandings((m) => ({ ...m, [l.tab]: l }))), []);
+  /* A handoff gives the page to the person while the agent stays on the tab:
+     the glass lifts so the banner's Done (and the page) take their clicks, and
+     comes back when Done, until or the timeout ends it. Take over is the other
+     thing — the agent let go — and stays `pause`. */
+  useEffect(() => {
+    /* The mark lives in this panel's state, the handoff in browserDrive: a
+       panel that mounts mid-handoff reads it back, or the glass would come
+       down over the banner's Done. */
+    for (const [id, w] of els.current) if (isHandoffArmed(w)) dispatchAct({ type: "handoff", tab: id, on: true, seed: true });
+    return onHandoff((el, on) => {
+      const id = [...els.current].find(([, w]) => (w as unknown) === el)?.[0];
+      if (id) dispatchAct({ type: "handoff", tab: id, on });
+    });
+  }, []);
+  /* Guide mode: the relay's and the observer's events fold into the tab's state; the bubble draws from it. */
+  useEffect(() => onGuideEvent((ev) => dispatchAct(ev)), []);
+  /* Take over during a handoff ends it: the banner's Done would mean nothing
+     once the tab is the person's, and the waiting call hears `takenover`
+     rather than being refused until its timeout. Ending it dispatches the
+     `handoff` off above, so this runs once per take-over. */
+  useEffect(() => {
+    for (const [id, a] of Object.entries(acts)) {
+      const el = a.paused && a.handoff ? els.current.get(id) : undefined;
+      if (el) void takeOverHandoff(el as unknown as DrivableWebview);
+    }
+  }, [acts]);
   /* The last picture seen of each tab, for the overview: it opens with these
      at once instead of waiting on a capture. Refreshed while an agent acts on
      the tab in front (at most every 3 s, only while it is on screen, since a
@@ -651,6 +764,9 @@ export function BrowserView({ active: viewOn, scope }: {
    *  one statement before `TabOps.open` reads it — see the note there for why a
    *  ref is safe here and an argument was not available. */
   const mintShow = useRef(false);
+  /** Whether the pane is on screen, for the ask handler (registered once per tab change). */
+  const viewOnRef = useRef(viewOn);
+  viewOnRef.current = viewOn;
   /** The same trick, for `newtab --from-template`: did the ask now being
    *  served ask for an ephemeral tab? `TabOps.open` reads this to decide
    *  whether to mint a partition from main first (see the note there). */
@@ -687,14 +803,6 @@ export function BrowserView({ active: viewOn, scope }: {
      need: installed once, they must read the CURRENT tabs rather than the
      ones that existed when they were registered. */
   useEffect(() => {
-    // The bench mounts a second BrowserView (scope="bench") over the same
-    // module-level slot in browserBus.ts. Left unguarded, whichever view
-    // mounted or changed profile LAST owns the slot — measured live: with
-    // both open, `agentglass-browser --shared tabs` answered from the bench,
-    // not the workspace pane on screen, and it stayed that way (bench-null)
-    // once the bench closed, because these deps never re-ran for the
-    // workspace view. Only the unscoped (workspace) copy answers agent verbs.
-    if (scope) return;
     return onBrowserTabs({
     list: () => tabsRef.current.map((t) => ({
       id: t.id, title: tabLabel(t), url: t.url, active: t.id === activeIdRef.current,
@@ -713,8 +821,9 @@ export function BrowserView({ active: viewOn, scope }: {
        sharing a container share a login, and the second to act changes what
        the first is looking at. */
     makeProfile: (name) => {
-      const r = addProfile(profilesRef.current, name);
+      const r = addProfile(profilesRef.current, name, roomNow());
       if ("error" in r) return { error: r.error };
+      if (r.dropped) letGo([r.dropped]);
       /*
        * THE REF MOVES NOW, not at the next render.
        *
@@ -783,14 +892,19 @@ export function BrowserView({ active: viewOn, scope }: {
        * review-pr-540 whose requests carried the default session. Nothing
        * failed; `tabs` reported the isolated identity it had been asked for.
        */
+      let minted = false;
       let id = wanted && !isAgentContainer(wanted)
         ? known.find((p) => p.name === wanted || p.id === wanted)?.id
         : undefined;
       if (wanted && !id) {
         /* A reserved name is minted, never resolved: see `mintAgentProfile`
            and `shared/workerContainer.ts`. */
-        const r = isAgentContainer(wanted) ? mintAgentProfile(known, wanted) : addProfile(known, wanted);
+        const r = isAgentContainer(wanted) ? mintAgentProfile(known, wanted, roomNow()) : addProfile(known, wanted, roomNow(), "agent");
         if ("error" in r) return { error: `${r.error} — pick another name for the container, or use one from \`profiles\`` };
+        /* This call made it: the relay records that, so only a container an
+           agent made is ever signed in from the vault (never the person's). */
+        minted = !known.some((p) => p.id === r.profile.id);
+        if (r.dropped) letGo([r.dropped]);
         known = r.profiles;
         profilesRef.current = known;
         setProfiles(known);
@@ -830,7 +944,7 @@ export function BrowserView({ active: viewOn, scope }: {
       // means the count BEFORE it — the very first tab ever must still read
       // as `existing === 0`.
       const existing = tabsRef.current.length;
-      const made = addTab(tabsRef.current, url, activeIdRef.current, id ?? profile, undefined, partition, recency());
+      const made = addTab(tabsRef.current, url, activeIdRef.current, mintContainer(wanted, id, profile), undefined, partition, recency());
       /* The reason travels. It used to be dropped here and the caller was told
          "could not open a tab" — with the panel holding a sentence that says
          exactly what to do about it. */
@@ -860,15 +974,16 @@ export function BrowserView({ active: viewOn, scope }: {
        * wake-up. Background is not asleep, and that distinction is the reason
        * this could be done at all.
        */
-      if (mintTakesThePane({ existing, show: wantsShow })) {
+      if (mintTakesThePane({ existing, show: wantsShow, agent: isAgentTab(made.tab) })) {
         setActiveId(made.tab.id);
       }
-      return { id: made.tab.id };
+      const agentMade = !!id && known.some((p) => p.id === id && p.agentMade === true);
+      return { id: made.tab.id, ...(id ? { container: id } : {}), ...(minted ? { minted: true } : {}), ...(agentMade ? { agentMade: true } : {}) };
     },
     close: ({ index, id }) => {
       const t = id ? tabsRef.current.find((x) => x.id === id) : tabsRef.current[index ?? -1];
       if (!t) return false;
-      const next = closeTab(tabsRef.current, t.id);
+      const next = closeTab(tabsRef.current, t.id, { agent: isAgentTab });
       els.current.delete(t.id);
       /* The same rule as the × on a row — see `close`. An agent closing its
          last page is the COMMON case for this one, and without it that
@@ -885,7 +1000,7 @@ export function BrowserView({ active: viewOn, scope }: {
       return true;
     },
   });
-  }, [profile, scope]);
+  }, [profile]);
 
   /**
    * A second page beside the first.
@@ -930,6 +1045,65 @@ export function BrowserView({ active: viewOn, scope }: {
     setNote(msg);
     setTimeout(() => setNote((n) => (n === msg ? null : n)), 3600);
   }, []);
+
+  /*
+   * A FULL CONTAINER LIST GIVES UP ITS OLDEST IDLE AGENT CONTAINER.
+   *
+   * Measured: 64 of 64, every one with no tab, most of them workers long gone,
+   * and the next agent could not get a container at all. What may go is
+   * decided in `droppable`; what has a tab open and what a lane uses is read
+   * here, at the moment of asking.
+   */
+  const roomNow = (): Room => ({
+    busy: new Set(tabsRef.current.map((t) => t.profile || "")),
+    lanes: laneContainers(),
+    now: Date.now(),
+    retired: retiredIds(globalThis.localStorage ?? null),
+  });
+  /** A dropped container's saved strip and its whole jar go with its name. */
+  const letGo = useCallback((gone: readonly BrowserProfile[]) => {
+    if (!gone.length) return;
+    for (const p of gone) { forgetProfileTabs(p.id); console.info(`[browser] ${droppedNote(p)}`); }
+    say(gone.length === 1 ? droppedNote(gone[0]!) : `dropped ${gone.length} idle agent containers`);
+    // Retired before the wipe starts: no mint may hand out a jar mid-wipe.
+    retireIds(globalThis.localStorage ?? null, gone.map((p) => p.id));
+    void wipeContainers(gone.map((p) => p.id));
+  }, [say]);
+  /* "Used" is a tab open in it. Stamped at most hourly, so a tab strip that
+     changes every second does not rewrite the list every second. */
+  const openRef = useRef<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    const ids = new Set(tabs.map((t) => t.profile || "").filter(Boolean));
+    // A container whose last tab just closed: idle starts now.
+    const closed = new Set([...openRef.current].filter((id) => !ids.has(id)));
+    openRef.current = ids;
+    if (!ids.size && !closed.size) return;
+    const next = touchProfiles(profilesRef.current, ids, Date.now(), closed);
+    if (next === profilesRef.current) return;
+    profilesRef.current = [...next];
+    setProfiles(profilesRef.current);
+    saveProfiles(globalThis.localStorage ?? null, profilesRef.current);
+  }, [tabs]);
+  /* Settings ▸ Browser ▸ Containers ▸ Remove unused asks this panel, because
+     the list is the panel's: a write from behind its back would be undone by
+     its next save. */
+  useEffect(() => {
+    setUnusedContainers({
+      list: () => droppable(profilesRef.current, roomNow()),
+      remove: (only) => {
+        const gone = droppable(profilesRef.current, roomNow()).filter((p) => only.includes(p.id));
+        if (!gone.length) return 0;
+        const ids = new Set(gone.map((p) => p.id));
+        const next = profilesRef.current.filter((p) => !ids.has(p.id));
+        profilesRef.current = next;
+        setProfiles(next);
+        saveProfiles(globalThis.localStorage ?? null, next);
+        letGo(gone);
+        return gone.length;
+      },
+    });
+    return () => setUnusedContainers(null);
+  }, [letGo]);
 
   const patch = useCallback((id: string, p: Partial<BrowserTab>) => {
     setTabs((prev) => patchTab(prev, id, p));
@@ -986,7 +1160,7 @@ export function BrowserView({ active: viewOn, scope }: {
      for a frame — the nudge that forces a new compositor frame. Only THE view,
      not the bench's copy: the bench is not hidden by a view switch. */
   useEffect(() => {
-    if (!viewOn || scope || !HAS_BROWSER) return;
+    if (!viewOn || !HAS_BROWSER) return;
     const t = setTimeout(async () => {
       const w = el();
       const tab = tabsRef.current.find((x) => x.id === activeIdRef.current);
@@ -1014,11 +1188,9 @@ export function BrowserView({ active: viewOn, scope }: {
      * ready, so the failure arrived as "the browser did not answer in time"
      * rather than as anything a person could act on.
      *
-     * An agent drives ONE browser and it is this view — the one the CLI knows
-     * how to open, the one a person can watch. The bench's copy is a human
-     * surface and stays out of it.
+     * An agent drives ONE browser and it is this one — the one the CLI knows
+     * how to open, the one a person can watch, in the view or on the bench.
      */
-    if (scope) return;
     setBrowserAskHandler((ask) => {
       /*
        * WHETHER A MINT MAY TAKE THE PANE, handed to `open` above.
@@ -1031,7 +1203,10 @@ export function BrowserView({ active: viewOn, scope }: {
        * nothing can interleave between this line and the read. The delayed
        * call site sets it again inside its own timeout, from the same frame.
        */
-      mintShow.current = ask.args.show === true;
+      /* "No screen": with the setting on and the pane hidden, an agent's `show`
+         cannot take the pane either. The tab loads where it is, in the
+         background. Off, or with the pane up, nothing changes. */
+      mintShow.current = ask.args.show === true && agentScreenMode(viewOnRef.current, agentsWithoutScreen()) === "raise";
       mintEphemeral.current = ask.args.ephemeral === true;
       /* §9: if a page is addressed explicitly, route to that tab's webview.
          Otherwise use the active one. */
@@ -1126,14 +1301,15 @@ export function BrowserView({ active: viewOn, scope }: {
         void serveBrowserAsk(null, ask);
         return;
       }
-      /* The person has this tab: an agent's ask is answered, not served. Same
-         early reply as the refusal above, so it is instant rather than a 45 s
-         timeout, and it comes before anything reaches the guest. */
-      if (owner && actsRef.current[owner.id]?.paused) {
-        void api.browserResult({
-          id: ask.id, ok: false, client: clientId(),
-          error: pausedRefusal(typeof ask.args.as === "string" ? ask.args.as : ""),
-        }).catch(() => { /* already timed out */ });
+      /* The person has this tab — taken over, or handed to them by a handoff:
+         an agent's ask is answered, not served. Same early reply as the refusal
+         above, so it is instant rather than a 45 s timeout, and it comes before
+         anything reaches the guest, the badge or the log. In a handoff only
+         reading and the handoff's own verb pass, from any caller. */
+      const held = owner ? agentAskRefusal(actsRef.current[owner.id], ask) : null;
+      if (held) {
+        void api.browserResult({ id: ask.id, ok: false, client: clientId(), error: held })
+          .catch(() => { /* already timed out */ });
         return;
       }
       /* The tab shows who is driving it and whether it is mid-ask; the log row
@@ -1185,7 +1361,7 @@ export function BrowserView({ active: viewOn, scope }: {
       setTimeout(() => {
         /* Re-armed from THIS frame: 1.2 s is long enough for another agent's
            ask to have run and left its own answer in the ref. */
-        mintShow.current = ask.args.show === true;
+        mintShow.current = ask.args.show === true && agentScreenMode(viewOnRef.current, agentsWithoutScreen()) === "raise";
         mintEphemeral.current = ask.args.ephemeral === true;
           serve(els.current.get(targetId) as unknown as DrivableWebview | null);
       }, 1200);
@@ -1193,7 +1369,7 @@ export function BrowserView({ active: viewOn, scope }: {
     return () => setBrowserAskHandler(null);
     // Re-registered when the active tab changes, so the closure serves the tab
     // that is up rather than the one that was up when this mounted.
-  }, [activeId, el, scope]);
+  }, [activeId, el]);
 
   /*
    * "This window can drive a browser" — said ONCE, and it matters that it is
@@ -1218,18 +1394,19 @@ export function BrowserView({ active: viewOn, scope }: {
     /* And a copy does not volunteer for the work either — see the ask handler
        above. Counting twice would make "is a browser open?" true because of a
        window nobody can drive. */
-    if (scope) return;
     const id = clientId();
     const beat = () => { void api.browserReady(id, true).catch(() => {}); };
     beat();
     // Well inside the server's ninety-second expiry, so a missed one costs
     // nothing and a dead window stops counting on its own.
+    // Liveness, not UI refresh: server/src/lanes.ts drops a lane whose host stops beating
+    // after HOST_GONE_MS (60 s), so this must keep running while the window is hidden.
     const timer = setInterval(beat, 30_000);
     return () => {
       clearInterval(timer);
       void api.browserReady(id, false).catch(() => {});
     };
-  }, [scope]);
+  }, []);
 
   /*
    * The person's zoom, through the only call that takes effect.
@@ -1326,7 +1503,9 @@ export function BrowserView({ active: viewOn, scope }: {
    */
   useEffect(() => {
     setShellZoom(browserZoom);
-    return () => setShellZoom(null);
+    /* Guide mode: the observer in Electron main, and the person's answers, reach the drive's `guide next`. */
+    setGuideShell({ observe: guideObserve, onObserved: onGuideObserved, report: (ev) => api.guideEvent(ev) });
+    return () => { setShellZoom(null); setGuideShell(null); };
   }, []);
   useEffect(() => {
     setPageZoomer(async (dir) => applyZoom(dir === 0 ? 0 : stepZoom(zoomRef.current, dir)));
@@ -1369,7 +1548,7 @@ export function BrowserView({ active: viewOn, scope }: {
     sayers.delete(id);
     dispatchAct({ type: "forget", tab: id });
     setTabs((prev) => {
-      const r = closeTab(prev, id);
+      const r = closeTab(prev, id, { agent: isAgentTab });
       setActiveId(r.activeId);
       /* The space follows the page here too (see `select`): closing a
          container's last page puts another container's page in front, and a
@@ -1417,7 +1596,7 @@ export function BrowserView({ active: viewOn, scope }: {
   const switchTo = useCallback((profileId: string) => {
     setNaming(null);
     if (profileId === profile) return;
-    saveSession(profile, tabs, activeId, scope);
+    saveSession(profile, tabs, activeId);
     /*
      * ONLY OUR OWN GUESTS ARE LET GO.
      *
@@ -1433,7 +1612,7 @@ export function BrowserView({ active: viewOn, scope }: {
        ARE the profile's tabs; restoring the saved set on top would show every
        page twice. */
     const already = kept.filter((t) => (t.profile || "") === profileId);
-    const set = already.length ? null : setFor(readSession(scope), profileId);
+    const set = already.length ? null : setFor(readSession(), profileId);
     const restored = already.length
       ? []
       : set
@@ -1451,15 +1630,17 @@ export function BrowserView({ active: viewOn, scope }: {
   }, [profile, tabs, activeId]);
 
   const makeProfile = useCallback((name: string) => {
-    const r = addProfile(profiles, name);
+    const r = addProfile(profilesRef.current, name, roomNow());
     if ("error" in r) { say(r.error); return; }
+    if (r.dropped) letGo([r.dropped]);
+    profilesRef.current = r.profiles;
     setProfiles(r.profiles);
     saveProfiles(globalThis.localStorage ?? null, r.profiles);
     // Straight into it. Naming a profile and then having to pick it from the
     // menu you just used is a step that exists only because it was easier to
     // write.
     switchTo(r.profile.id);
-  }, [profiles, say, switchTo]);
+  }, [say, switchTo]);
 
   /** Forget the name. Chromium keeps the partition and its cookies — see
    *  browserProfiles.ts; erasing them is a different question with a different
@@ -2084,12 +2265,14 @@ export function BrowserView({ active: viewOn, scope }: {
   // conditional return runs on some renders and not others, React loses its
   // place in the hook list, and the window goes black — this app has had that
   // bug once already (web/test/hook-tdz.test.ts is the other half of it).
+  // The slot for lastDeps below: a ref, so it belongs to this instance, and declared here so the hook order stays fixed.
+  const depsSlot = useRef<DepsSlot | null>(null);
   if (!HAS_BROWSER && !IS_DEMO && !forced) return null;
 
   const blank = !active?.url || active.url === BLANK;
   // Only while typing: `typed` is null the moment the bar is not being edited,
   // and a completion list over a page you are reading is a list in the way.
-  const tips = typed !== null && typed.trim() ? suggest(places ?? [], typed) : [];
+  const tips = typed !== null && typed.trim() ? suggestMemo(places ?? [], typed, SUGGEST_MAX, switchable(tabs, activeId)) : [];
   // A new tab shows the PLACEHOLDER, not the word "blank". `about:blank` is
   // where a new tab genuinely is, and displayUrl trims it to "blank", which
   // read as the name of a page nobody asked for.
@@ -2225,28 +2408,41 @@ export function BrowserView({ active: viewOn, scope }: {
    * knew how to rank.
    */
   const omniQuery = (typed ?? "").trim().toLowerCase();
-  const omniHits = (): { key: string; kind: "tab" | "kept" | "tip"; label: string; sub: string; run: () => void }[] => {
+  type OmniRow = { key: string; kind: "tab" | "kept" | "tip"; switchTo?: boolean; label: string; sub: string; icon: string | null; run: () => void };
+  const omniHits = (): OmniRow[] => {
     if (!omniQuery) return [];
     const hit = (hay: string) => hay.toLowerCase().includes(omniQuery);
-    const out: { key: string; kind: "tab" | "kept" | "tip"; label: string; sub: string; run: () => void }[] = [];
+    const out: OmniRow[] = [];
+    // Icons the browser already holds as data: URIs, by host. A remote URL in an
+    // <img> is a CSP violation, so only data: ever reaches a row.
+    const iconFor = (u: string) => omniIcons.icons.get(omniIcons.hostOf(u)) ?? null;
+    // The completion is row 0 and the lit row, so what is lit is what Enter opens.
+    if (compText) {
+      const full = (typed ?? "") + compText;
+      const url = /^https?:\/\//i.test(full) ? full : `https://${full}`;
+      const same = tips.find((t) => displayUrl(t.url) === displayUrl(url));
+      out.push({ key: "c:comp", kind: "tip", label: same?.title || full.replace(/^https?:\/\//i, "").replace(/\/$/, ""), sub: displayUrl(url), icon: iconFor(url), run: () => runOmni(full) });
+    }
     for (const t of tabs) {
-      if (!hit(`${t.url} ${tabLabel(t)}`)) continue;
-      out.push({ key: `t:${t.id}`, kind: "tab", label: tabLabel(t), sub: displayUrl(t.url), run: () => show(t.id) });
-      if (out.length >= 3) break;
+      if (!hit(`${t.url} ${tabLabel(t)}`) || out.some((r) => r.sub === displayUrl(t.url))) continue;
+      out.push({ key: tabRowKey(t.id), kind: "tab", label: tabLabel(t), sub: displayUrl(t.url), icon: iconFor(t.url), run: () => show(t.id) });
+      if (out.length >= (compText ? 4 : 3)) break;
     }
     for (const i of allItems(shelf)) {
-      if (out.length >= 6 || !hit(`${i.url} ${i.title}`)) continue;
+      if (out.length >= (compText ? 7 : 6) || !hit(`${i.url} ${i.title}`)) continue;
       if (out.some((r) => r.sub === displayUrl(i.url))) continue;
-      out.push({ key: `k:${i.id}`, kind: "kept", label: i.title || displayUrl(i.url), sub: displayUrl(i.url), run: () => openShelf(i) });
+      out.push({ key: `k:${i.id}`, kind: "kept", label: i.title || displayUrl(i.url), sub: displayUrl(i.url), icon: iconFor(i.url), run: () => openShelf(i) });
     }
     for (const t of tips) {
-      if (out.length >= 9) break;
-      if (out.some((r) => r.sub === displayUrl(t.url))) continue;
+      if (out.length >= (compText ? 10 : 9)) break;
+      if (out.some((r) => r.sub === displayUrl(t.url)) || listedAsTab(out, t)) continue;
       out.push({
         key: `h:${t.url}`, kind: "tip",
         label: t.why === "search" ? (t.query ?? t.url) : (t.title || displayUrl(t.url)),
         sub: t.why === "search" ? "search" : displayUrl(t.url),
-        run: () => runOmni(t.url),
+        icon: t.why === "search" ? null : iconFor(t.url),
+        switchTo: !!t.tabId,
+        run: () => { if (t.tabId) { show(t.tabId); setOmni(null); setTyped(null); setHint(-1); } else runOmni(t.url); },
       });
     }
     return out;
@@ -2262,6 +2458,14 @@ export function BrowserView({ active: viewOn, scope }: {
     else go(next);
     setOmni(null); setTyped(null); setHint(-1);
   };
+
+  /** The lit row: only a completion lights one by itself; otherwise Enter takes
+   *  what was typed, as a browser's does. */
+  const dflt = compText ? 0 : -1;
+  const sel = litRow(hint, !!compText);
+  // omniHits closes over these only; hover and other renders must not rebuild the rows.
+  // Not useMemo: this sits below the early return, and a hook there breaks the hook order (web/test/hook-order.test.ts).
+  const rows = lastDeps(depsSlot, [omni, omniQuery, compText, typed, tabs, shelf, tips, omniIcons, activeId, active, profile], () => (omni ? omniHits() : []));
 
   /* --------------------------------------------------------- drag and drop */
 
@@ -2529,7 +2733,7 @@ export function BrowserView({ active: viewOn, scope }: {
         onContextMenu={(e) => { e.preventDefault(); setMenuAt({ x: e.clientX, y: e.clientY, kind: "item", id: item.id }); }}
         onClick={() => { if (!dragged.current) openShelf(item); }}
         onMouseDown={(e) => { if (e.button === 1 && live) { e.preventDefault(); close(live.id); } }}
-        title={item.url}
+        data-tip={item.url}
         className="group flex items-center gap-2 rounded-md px-1.5 py-1 cursor-default min-w-0"
         style={{
           marginLeft: depth * 9,
@@ -2543,7 +2747,7 @@ export function BrowserView({ active: viewOn, scope }: {
         {/* Loaded right now. A kept page with nothing behind it costs nothing —
             it is an address until you press it — and this is the only thing on
             the row that says which of the two it is. */}
-        {live && <span aria-hidden title="loaded" className="shrink-0 rounded-full" style={{ width: 5, height: 5, background: "var(--success)" }} />}
+        {live && <span aria-hidden data-tip="loaded" className="shrink-0 rounded-full" style={{ width: 5, height: 5, background: "var(--success)" }} />}
         {/* Off the shelf, and DOWN — not gone.
             The × moves it to the ordinary tabs below. A page
             you un-keep is a page you are still reading; closing it would be a
@@ -2556,7 +2760,7 @@ export function BrowserView({ active: viewOn, scope }: {
           if (live) patch(live.id, { shelfId: "" });
         }}
           aria-label={`Take ${item.title || item.url} off the shelf`}
-          title={live ? "Take it off the shelf — the page stays open below" : "Take it off the shelf"}
+          data-tip={live ? "Take it off the shelf — the page stays open below" : "Take it off the shelf"}
           /* Bigger, and in a box: at 20px with a 12px glyph it read as a speck
              on a row of text, and this is the control that changes what the
              sidebar holds. */
@@ -2584,7 +2788,7 @@ export function BrowserView({ active: viewOn, scope }: {
         <button onClick={() => editShelf((sh) => toggleFolder(sh, f.id))}
           aria-label={f.open ? `Fold ${f.name}` : `Unfold ${f.name}`}
           className="shrink-0 grid place-items-center rounded"
-          style={{ width: 18, height: 18, color: f.open ? "var(--text3)" : "var(--text4)" }}>
+          style={{ width: ICON.lg, height: ICON.lg, color: f.open ? "var(--text3)" : "var(--text4)" }}>
           <FolderIcon open={f.open} />
         </button>
         {renaming?.id === f.id ? (
@@ -2601,15 +2805,15 @@ export function BrowserView({ active: viewOn, scope }: {
         ) : (
           <button onDoubleClick={() => setRenaming({ id: f.id, name: f.name })}
             onClick={() => editShelf((sh) => toggleFolder(sh, f.id))}
-            title={`${f.name} — double-click to rename`}
+            data-tip={`${f.name} — double-click to rename`}
             className="flex-1 min-w-0 truncate text-left text-[10px] uppercase tracking-[0.1em]"
             style={{ color: "var(--text3)" }}>{f.name}</button>
         )}
         <span className="shrink-0 text-[9.5px] tabular-nums" style={{ color: "var(--text4)" }}>{folderCount(f)}</span>
         <button onClick={() => editShelf((sh) => removeFolder(sh, f.id))}
-          aria-label={`Delete the folder ${f.name}`} title="Delete the folder. What is in it goes back to the pins below."
+          aria-label={`Delete the folder ${f.name}`} data-tip="Delete the folder. What is in it goes back to the pins below."
           className="shrink-0 grid place-items-center opacity-0 group-hover:opacity-100 rounded"
-          style={{ color: "var(--text3)", width: 20, height: 20 }}><CloseIcon size={ICON.xs} /></button>
+          style={{ color: "var(--text3)", width: MIN_BOX, height: MIN_BOX }}><CloseIcon size={ICON.xs} /></button>
       </div>
       {/*
         * Folded, but not blind.
@@ -2665,13 +2869,13 @@ export function BrowserView({ active: viewOn, scope }: {
 
   const barMenu = menuOpen && menuAtXY && classic ? (
     <Portal>
-      <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={() => setMenuOpen(false)} />
+      <div className="fixed inset-0" style={{ zIndex: BROWSER.menuScrim }} onClick={() => setMenuOpen(false)} />
       <div className="fixed rounded-lg text-[11px] py-1 shadow-2xl"
-        style={{ top: menuAtXY.top, right: menuAtXY.right, zIndex: 41, width: Math.max(230, Math.min(320, sideW - 8)), background: "var(--surface-card)", border: EDGE }}>
+        style={{ top: menuAtXY.top, right: menuAtXY.right, zIndex: BROWSER.menu, width: Math.max(230, Math.min(320, sideW - 8)), background: "var(--surface-card)", border: EDGE }}>
         {[
           // First in the classic bar: it is the way back, and buried at the bottom nobody found it.
-          { key: "chrome", node: menuRow(<PanelIcon size={14} />, classic ? "Back to the island" : "Classic tab list"), hint: "", run: () => { const c = !classic; setClassic(c); setClassicChrome(c); if (c) { setSideOpen(true); setSidebarOpen(true); } } },
-          { key: "home", node: menuRow(<HomeIcon size={14} />, "Home"), hint: "", run: () => go(homePage()) },
+          { key: "chrome", node: menuRow(<PanelIcon size={ICON.sm} />, classic ? "Back to the island" : "Classic tab list"), hint: "", run: () => { const c = !classic; setClassic(c); setClassicChrome(c); if (c) { setSideOpen(true); setSidebarOpen(true); } } },
+          { key: "home", node: menuRow(<HomeIcon size={ICON.sm} />, "Home"), hint: "", run: () => go(homePage()) },
           { key: "new", node: menuRow(<span style={{ fontSize: 13, lineHeight: 1 }}>+</span>, "New tab"), hint: "Ctrl+T", run: () => setOmni("new") },
           { key: "keep", node: menuRow(<FolderIcon size={13} />, "Keep this page"), hint: "", run: () => { if (activeId) keep({ kind: "tab", id: activeId }, { to: "loose" }); } },
           { key: "folder", node: menuRow(<FolderIcon size={13} />, "New folder"), hint: "", run: () => newFolder() },
@@ -2683,24 +2887,24 @@ export function BrowserView({ active: viewOn, scope }: {
             openBeside(homePage());
           } },
           { key: "sep1", sep: true },
-          { key: "shot", node: menuRow(<CameraIcon size={14} />, "Take a screenshot", mode === "shoot"), hint: "Ctrl+Shift+S", run: () => setMode((m) => (m === "shoot" ? "none" : "shoot")) },
-          { key: "find", node: menuRow(<SearchIcon size={14} />, "Find on this page", find !== null), hint: "Ctrl+F", run: () => { setFind((f) => (f === null ? "" : null)); setTimeout(() => findRef.current?.focus(), 0); } },
-          { key: "pick", node: menuRow(<TargetIcon size={14} />, "Point at an element", mode === "pick"), hint: "", run: () => setMode((m) => (m === "pick" ? "none" : "pick")) },
-          { key: "note", node: menuRow(<NoteIcon size={14} />, "Tell an agent about an element", mode === "feedback"), hint: "", run: () => setMode((m) => (m === "feedback" ? "none" : "feedback")) },
-          { key: "draw", node: menuRow(<PenIcon size={14} />, "Draw on the page", mode === "draw"), hint: "", run: () => setMode((m) => (m === "draw" ? "none" : "draw")) },
-          { key: "dev", node: menuRow(<CodeIcon size={14} />, "Developer tools", !!dt), hint: "", run: () => { if (dt) { setDt(null); return; } if (activeId) setDt({ tab: activeId }); } },
+          { key: "shot", node: menuRow(<CameraIcon size={ICON.sm} />, "Take a screenshot", mode === "shoot"), hint: "Ctrl+Shift+S", run: () => setMode((m) => (m === "shoot" ? "none" : "shoot")) },
+          { key: "find", node: menuRow(<SearchIcon size={ICON.sm} />, "Find on this page", find !== null), hint: "Ctrl+F", run: () => { setFind((f) => (f === null ? "" : null)); setTimeout(() => findRef.current?.focus(), 0); } },
+          { key: "pick", node: menuRow(<TargetIcon size={ICON.sm} />, "Point at an element", mode === "pick"), hint: "", run: () => setMode((m) => (m === "pick" ? "none" : "pick")) },
+          { key: "note", node: menuRow(<NoteIcon size={ICON.sm} />, "Tell an agent about an element", mode === "feedback"), hint: "", run: () => setMode((m) => (m === "feedback" ? "none" : "feedback")) },
+          { key: "draw", node: menuRow(<PenIcon size={ICON.sm} />, "Draw on the page", mode === "draw"), hint: "", run: () => setMode((m) => (m === "draw" ? "none" : "draw")) },
+          { key: "dev", node: menuRow(<CodeIcon size={ICON.sm} />, "Developer tools", !!dt), hint: "", run: () => { if (dt) { setDt(null); return; } if (activeId) setDt({ tab: activeId }); } },
           { key: "sep2", sep: true },
           { key: "dup", node: menuRow(null, "Duplicate this tab"), hint: "", run: () => active && open(active.url, active.id) },
           { key: "hard", node: menuRow(null, "Reload, ignoring the cache"), hint: "", run: () => { try { el()?.reloadIgnoringCache(); } catch { el()?.reload(); } } },
           { key: "copy", node: menuRow(null, "Copy the address"), hint: "", run: () => { void navigator.clipboard.writeText(active?.url ?? ""); say("Address copied"); } },
-          { key: "ext", node: menuRow(<ExternalIcon size={14} />, "Open in your own browser"), hint: "", run: () => {
+          { key: "ext", node: menuRow(<ExternalIcon size={ICON.sm} />, "Open in your own browser"), hint: "", run: () => {
             const u = active?.url;
             if (!u || u === BLANK) { say("There is no page to open"); return; }
-            window.open(u, "_blank");
+            openExternal(u, { machine: true });
             say("Opened in your browser");
           } },
           { key: "zoom", node: menuRow(null, "Zoom back to 100%"), hint: "Ctrl+0", run: () => applyZoom(0) },
-          ...(classic ? [{ key: "hide", node: menuRow(<PanelIcon size={14} />, "Hide this bar"), hint: "Ctrl+S", run: () => { setSideOpen(false); setSidebarOpen(false); } }] : []),
+          ...(classic ? [{ key: "hide", node: menuRow(<PanelIcon size={ICON.sm} />, "Hide this bar"), hint: "Ctrl+S", run: () => { setSideOpen(false); setSidebarOpen(false); } }] : []),
         ].map((it) => (it.sep ? (
           <div key={it.key} className="my-1" style={{ borderTop: LINE }} />
         ) : (
@@ -2747,7 +2951,7 @@ export function BrowserView({ active: viewOn, scope }: {
       { key: "ext", label: "Open in your own browser", icon: <ExternalIcon size={ICON.sm} />, run: () => {
         const u = active?.url;
         if (!u || u === BLANK) { say("There is no page to open"); return; }
-        window.open(u, "_blank");
+        openExternal(u, { machine: true });
         say("Opened in your browser");
       } },
       { key: "chrome", label: "Classic tab list", icon: <PanelIcon size={ICON.sm} />, rule: true, run: () => { setClassic(true); setClassicChrome(true); setSideOpen(true); setSidebarOpen(true); } },
@@ -2800,10 +3004,10 @@ export function BrowserView({ active: viewOn, scope }: {
       </div>
       <div className="px-1.5 pt-1 pb-1.5 shrink-0 flex items-center gap-1">
         <button onClick={() => setOmni("edit")}
-          title={active?.url || "Type an address"}
+          data-tip={active?.url || "Type an address"}
           className="min-w-0 flex-1 flex items-center gap-1.5 px-2 rounded-lg text-left"
           style={{
-            height: 26, background: "color-mix(in srgb, var(--bg3) 45%, transparent)",
+            height: HIT, background: "color-mix(in srgb, var(--bg3) 45%, transparent)",
             border: EDGE,
           }}>
           <span className="shrink-0 flex items-center" style={{ color: active?.url.startsWith("https://") ? "var(--success)" : "var(--text3)" }}>
@@ -2826,11 +3030,11 @@ export function BrowserView({ active: viewOn, scope }: {
         */}
         {zoom !== 0 && (
           <button onClick={() => applyZoom(0)}
-            title={`The page is at ${zoomPercent(zoom)}% — click to put it back to 100%`}
+            data-tip={`The page is at ${zoomPercent(zoom)}% — click to put it back to 100%`}
             aria-label={`Page zoom ${zoomPercent(zoom)} per cent. Back to 100%`}
             className="shrink-0 grid place-items-center text-[9px] tabular-nums rounded"
             style={{
-              minWidth: 34, height: 20, color: "var(--text2)",
+              minWidth: 34, height: MIN_BOX, color: "var(--text2)",
               background: "color-mix(in srgb, var(--text) 10%, transparent)",
             }}>{zoomPercent(zoom)}%</button>
         )}
@@ -2864,7 +3068,8 @@ export function BrowserView({ active: viewOn, scope }: {
                     onClick={() => { if (!dragged.current) openShelf(i); }}
                     onMouseDown={(e) => { if (e.button === 1 && live) { e.preventDefault(); close(live.id); } }}
                     onContextMenu={(e) => { e.preventDefault(); editShelf((sh) => removeItem(sh, i.id)); }}
-                    title={`${i.title || i.url}\n${i.url}\nRight-click to take it off`}
+                    aria-label={i.title || displayUrl(i.url)}
+                    data-tip={`${i.title || i.url} — ${i.url}. Right-click to take it off`}
                     className="grid place-items-center rounded-lg"
                     style={{
                       aspectRatio: "1", minWidth: 0,
@@ -2951,7 +3156,7 @@ export function BrowserView({ active: viewOn, scope }: {
                 style={{ height: 24, marginTop: 4 }}
                 onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenuAt({ x: e.clientX, y: e.clientY, kind: "space", id: pid }); }}>
               <button onClick={() => foldSpace(pid)}
-                title={`${name} — a container: its own tabs, logins and cache. Click to ${shut ? "show" : "fold"} its pages.`}
+                data-tip={`${name} — a container: its own tabs, logins and cache. Click to ${shut ? "show" : "fold"} its pages.`}
                 className="min-w-0 flex-1 flex items-center gap-1.5 rounded-md px-1.5 select-none"
                 style={{
                   /* The space you are in is filled, not outlined: "new tabs
@@ -2966,10 +3171,10 @@ export function BrowserView({ active: viewOn, scope }: {
                     jump inside one control, and 25% under the floor the scale calls
                     the point where a stroked glyph stops resolving. */}
                 <span className="shrink-0 grid place-items-center"
-                  style={{ width: 12, height: 12, color: `hsl(${hue} 60% 62%)`, transform: shut ? "rotate(-90deg)" : "none" }}>
+                  style={{ width: ICON.xs, height: ICON.xs, color: `hsl(${hue} 60% 62%)`, transform: shut ? "rotate(-90deg)" : "none" }}>
                   <DownIcon size={ICON.xs} />
                 </span>
-                <span className="shrink-0 grid place-items-center" style={{ width: 14, height: 14, color: `hsl(${hue} 72% 64%)` }}>
+                <span className="shrink-0 grid place-items-center" style={{ width: ICON.sm, height: ICON.sm, color: `hsl(${hue} 72% 64%)` }}>
                   <ContainerIcon size={13} />
                 </span>
                 <span className="min-w-0 flex-1 truncate text-left text-[11px]"
@@ -2984,7 +3189,7 @@ export function BrowserView({ active: viewOn, scope }: {
               {pid ? (
                 <button onClick={(e) => { e.stopPropagation(); forgetProfile(pid); }}
                   aria-label={`Close the container ${name}`}
-                  title={rows.length
+                  data-tip={rows.length
                     ? `Close ${name} — its ${rows.length} page${rows.length === 1 ? "" : "s"} close with it`
                     : `Close ${name} — it has no pages open`}
                   className="agx-x shrink-0 self-center grid place-items-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 rounded-lg"
@@ -3011,7 +3216,7 @@ export function BrowserView({ active: viewOn, scope }: {
                           show(t.id);
                         }}
                         onMouseDown={(e) => { if (e.button === 1) { e.preventDefault(); close(t.id); } }}
-                        title={t.url || "New tab"}
+                        data-tip={t.url || "New tab"}
                         className="group flex items-center gap-2 rounded-md px-1.5 min-h-[28px] cursor-default min-w-0"
                         style={{
                           /* Its own space's colour, not the theme's accent: on
@@ -3033,19 +3238,19 @@ export function BrowserView({ active: viewOn, scope }: {
                         {/* Which one is the other half. Without it a split reads as one tab
                             being active and another one being, somehow, also on screen. */}
                         {split && t.id === splitId && (
-                          <span className="shrink-0" title="beside the one you are on" style={{ color: "var(--primary-hover)" }}><SplitIcon size={ICON.xs} /></span>
+                          <span className="shrink-0" data-tip="beside the one you are on" style={{ color: "var(--primary-hover)" }}><SplitIcon size={ICON.xs} /></span>
                         )}
                         {/* The inspector, on the page rather than in a menu.
                             The same glyph the ⋯ menu uses for Developer tools,
                             because it is the same thing — a second drawing for
                             one idea is how a vocabulary stops being one. */}
                         {inspected.has(t.id) && (
-                          <span className="shrink-0" title="the inspector is open on this page" style={{ color: "var(--warning-ink)" }}><CodeIcon size={ICON.xs} /></span>
+                          <span className="shrink-0" data-tip="the inspector is open on this page" style={{ color: "var(--warning-ink)" }}><CodeIcon size={ICON.xs} /></span>
                         )}
                         {/* Same size and the same reddish box as the shelf's ×: one glyph,
                             one meaning, one target big enough to aim at. */}
                         <button onClick={(e) => { e.stopPropagation(); close(t.id); }} aria-label={`Close ${tabLabel(t)}`}
-                          title="Close this page"
+                          data-tip="Close this page"
                           className="agx-x shrink-0 grid place-items-center opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 rounded-lg ml-1"
                           style={{ width: CLOSE_CELL, height: CLOSE_CELL }}><CloseIcon size={ICON.md} /></button>
                       </div>
@@ -3095,7 +3300,7 @@ export function BrowserView({ active: viewOn, scope }: {
             style={INPUT_STYLE} />
         </div>
       )}
-      <LanesRow />
+      <LanesRow active={viewOn} />
       {/* The way back, always at the foot and in the accent: inside the menu it was not found. */}
       <div className="shrink-0 px-1.5 pb-1.5 pt-1" style={{ borderTop: LINE }}>
         <button type="button" onClick={() => { setClassic(false); setClassicChrome(false); }}
@@ -3118,7 +3323,7 @@ export function BrowserView({ active: viewOn, scope }: {
      * living in a row of its own — a bar that is empty most of the time was
      * 34px of chrome before the page got a pixel.
      */
-    <div className="flex h-full min-h-0 outline-none relative" tabIndex={-1}>
+    <div ref={paneRef} className="flex h-full min-h-0 outline-none relative" tabIndex={-1}>
       <div className="flex-1 min-w-0 flex flex-col">
       {/*
        * No view header here, and this is the only view without one.
@@ -3147,7 +3352,7 @@ export function BrowserView({ active: viewOn, scope }: {
       {find !== null && (
         <div className="absolute left-1/2 -translate-x-1/2 rounded-xl shadow-2xl px-2.5 py-2 flex flex-col gap-1.5"
           style={{
-            bottom: 14, zIndex: 34, minWidth: 460, maxWidth: "min(680px, 92%)",
+            bottom: 14, zIndex: BROWSER.find, minWidth: 460, maxWidth: "min(680px, 92%)",
             background: "color-mix(in srgb, var(--surface-card) 96%, black)",
             border: EDGE,
           }}>
@@ -3223,6 +3428,7 @@ export function BrowserView({ active: viewOn, scope }: {
           * long url is truncated, because two lines of address bouncing the
           * page's bottom corner is worse than the half you cannot read.
           */}
+        {watched && <LaneWatch lane={watched} onClose={() => setWatching(null)} />}
         {!classic && !IS_DEMO && (
           <BrowserIsland tabs={tabs} activeId={activeId} acts={acts}
             spaceName={spaceName}
@@ -3235,18 +3441,20 @@ export function BrowserView({ active: viewOn, scope }: {
             picture={snapTab}
             gutter={gutterOf}
             lastPicture={(id) => shots.current.get(id) ?? null}
-            onTucked={setIslandTucked} />
+            onTucked={setIslandTucked}
+            onEndGuide={(id) => { dispatchAct({ type: "guideAnswer", tab: id, answer: "stop", at: Date.now() }); answerGuide(id, "stop"); }}
+            lanes={lanes} calledLane={calledLane} onShowLane={(id) => { setCalledLane(null); setWatching(id); }} />
         )}
         {hover && (
           <div className="absolute bottom-0 left-0 max-w-[70%] truncate text-[10.5px] px-2 py-1 rounded-tr-md pointer-events-none"
-            style={{ zIndex: 20, color: "var(--text2)", background: "var(--surface-card)",
+            style={{ zIndex: BROWSER.note, color: "var(--text2)", background: "var(--surface-card)",
               borderTop: LINE,
               borderRight: LINE }}
-            title={hover}>{displayUrl(hover)}</div>
+            data-tip={hover}>{displayUrl(hover)}</div>
         )}
         {note && (
-          <div className="agx-zoom-in absolute bottom-3 right-3 text-[10px] px-2.5 py-1.5 rounded-md shadow-lg pointer-events-none"
-            style={{ zIndex: 20, color: "var(--warning-ink)", background: "var(--surface-card)",
+          <div className="agx-zoom-in absolute bottom-3 text-[10px] px-2.5 py-1.5 rounded-md shadow-lg pointer-events-none"
+            style={{ zIndex: BROWSER.note, right: dt ? 12 : "var(--fab-reserve)", /* no inspector: the page reaches the window corner, where the bench button sits */ color: "var(--warning-ink)", background: "var(--surface-card)",
               border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }}>{note}</div>
         )}
         {tabs.map((t) => (
@@ -3282,11 +3490,23 @@ export function BrowserView({ active: viewOn, scope }: {
               ? { left: 0, width: `${splitAt * 100}%` }
               : split && t.id === splitId
                 ? { left: `${splitAt * 100}%`, right: 0 }
-                : { left: 0, right: 0, ...(t.id === activeId ? { zIndex: 1 } : drivenBehind(acts[t.id]) ? { zIndex: 0, pointerEvents: "none" as const } : { visibility: "hidden" as const }) }}>
+                : { left: 0, right: 0, ...(t.id === activeId ? { zIndex: BROWSER.tabFront } : drivenBehind(acts[t.id]) ? { zIndex: BROWSER.tabBehind, pointerEvents: "none" as const } : { visibility: "hidden" as const }) }}>
             <div style={{ position: "relative", width: viewport.width ? `${viewport.width}px` : "100%", height: "100%", maxWidth: "100%", ...(boxes[t.id] ? { background: "var(--surface-inset)" } : {}) }}>
               {acts[t.id] && (
                 <AgentPresence agent={acts[t.id]!} landing={landings[t.id] ?? null} url={t.url} quiet={!classic && islandTucked && t.id === activeId}
-                  onToggle={() => dispatchAct({ type: "pause", tab: t.id, paused: !acts[t.id]!.paused })} />
+                  onToggle={() => dispatchAct({ type: "pause", tab: t.id, paused: !acts[t.id]!.paused })}
+                  onGuide={(answer) => {
+                    dispatchAct({ type: "guideAnswer", tab: t.id, answer, at: Date.now() });
+                    /* The answer goes to whatever holds the agent's `guide next`; close is the person's alone. */
+                    if (answer !== "close") answerGuide(t.id, answer);
+                  }}
+                  /* The person's click on the card's Insert suggestion: only this panel's button reaches the page's field. */
+                  onSuggest={(replace) => {
+                    const el = els.current.get(t.id);
+                    return el ? insertGuideSuggestion(el as unknown as DrivableWebview, t.id, replace) : Promise.resolve({ ok: false as const, error: "The page is not open" });
+                  }}
+                  /* The person's "Suggest another": news for the agent, which answers with guide say --suggest. */
+                  onRegenerate={(note) => requestGuideSuggestion(t.id, note)} />
               )}
               {IS_DEMO ? (
                 <DemoPage url={t.url || BLANK} />
@@ -3355,10 +3575,10 @@ export function BrowserView({ active: viewOn, scope }: {
                 window.addEventListener("pointerup", up);
               }}
               className="absolute inset-y-0"
-              style={{ left: `calc(${splitAt * 100}% - 3px)`, width: 6, cursor: "col-resize", zIndex: 12, background: "color-mix(in srgb, var(--border) 45%, transparent)" }} />
-            <div className="absolute flex items-center gap-1" style={{ left: `calc(${splitAt * 100}% + 8px)`, top: 8, zIndex: 13 }}>
+              style={{ left: `calc(${splitAt * 100}% - 3px)`, width: 6, cursor: "col-resize", zIndex: BROWSER.splitGrip, background: "color-mix(in srgb, var(--border) 45%, transparent)" }} />
+            <div className="absolute flex items-center gap-1" style={{ left: `calc(${splitAt * 100}% + 8px)`, top: 8, zIndex: BROWSER.splitTools }}>
               <button onClick={() => { const other = splitId!; setSplitId(activeId); show(other); }}
-                title="Put the bar on this side" aria-label="Swap the sides"
+                data-tip="Put the bar on this side" aria-label="Swap the sides"
                 className="grid place-items-center rounded-lg"
                 style={{ width: CTRL_H.compact, height: CTRL_H.compact, background: "var(--surface-card)", color: "var(--text3)", border: EDGE }}><SwapIcon size={ICON.sm} /></button>
               <CloseButton onClick={() => setSplitId(null)} title="Close the split" hit={CTRL_H.compact}
@@ -3430,7 +3650,7 @@ export function BrowserView({ active: viewOn, scope }: {
         <>
           <div role="separator" aria-orientation={dtSide === "right" ? "vertical" : "horizontal"} tabIndex={0}
             aria-label="Drag to resize the inspector"
-            title="Drag to resize"
+            data-tip="Drag to resize"
             onKeyDown={(e) => {
               const step = e.shiftKey ? 60 : 20;
               const grow = dtSide === "right" ? "ArrowLeft" : "ArrowUp";
@@ -3484,21 +3704,22 @@ export function BrowserView({ active: viewOn, scope }: {
                   }}
                   disabled={dir < 0 ? dtZoom <= ZOOM_MIN : dtZoom >= ZOOM_MAX}
                   title={dir < 0 ? "Make the inspector smaller" : "Make the inspector bigger"}
-                  className="inline-flex items-center justify-center rounded hover:bg-white/10 disabled:opacity-30 text-[13px] leading-none"
-                  style={{ width: 20, height: 20, color: "var(--text3)" }}>{glyph}</button>
+                  className="inline-flex items-center justify-center rounded hover:bg-[color-mix(in_srgb,var(--text)_10%,transparent)] disabled:opacity-30 text-[13px] leading-none"
+                  style={{ width: MIN_BOX, height: MIN_BOX, color: "var(--text3)" }}>{glyph}</button>
               ))}
               <button
                 onClick={() => { setDtZoom(0); setDevtoolsZoom(0); if (dtGuest) browserDevtoolsZoom(dtGuest, 0); }}
-                title="Back to 100%"
-                className="rounded px-1 tabular-nums text-[9.5px] hover:bg-white/10"
+                data-tip="Back to 100%"
+                className="rounded px-1 tabular-nums text-[9.5px] hover:bg-[color-mix(in_srgb,var(--text)_10%,transparent)]"
                 style={{ color: dtZoom ? "var(--text2)" : "var(--text4)", minWidth: 30 }}>{zoomPercent(dtZoom)}%</button>
               <span aria-hidden className="mx-0.5" style={{ width: 1, height: 13, background: "color-mix(in srgb, var(--border) 40%, transparent)" }} />
               {(["bottom", "right"] as const).map((sd) => (
                 <button key={sd} onClick={() => { setDtSide(sd); setDevtoolsSide(sd); setDtSize(devtoolsSize(sd)); }}
                   aria-pressed={dtSide === sd}
-                  title={sd === "bottom" ? "Dock underneath the page" : "Dock to the right of the page"}
-                  className="inline-flex items-center justify-center rounded hover:bg-white/10"
-                  style={{ width: 20, height: 18, color: dtSide === sd ? "var(--primary)" : "var(--text4)" }}>
+                  aria-label={sd === "bottom" ? "Dock underneath the page" : "Dock to the right of the page"}
+                  data-tip={sd === "bottom" ? "Dock underneath the page" : "Dock to the right of the page"}
+                  className="inline-flex items-center justify-center rounded hover:bg-[color-mix(in_srgb,var(--text)_10%,transparent)]"
+                  style={{ width: MIN_BOX, height: 18, color: dtSide === sd ? "var(--primary)" : "var(--text4)" }}>
                   <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden>
                     <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" stroke="currentColor" />
                     {sd === "bottom"
@@ -3508,7 +3729,7 @@ export function BrowserView({ active: viewOn, scope }: {
                 </button>
               ))}
               <CloseButton onClick={() => setDt(null)} title="Close the inspector"
-                style={{ color: "var(--text3)" }} className="rounded hover:bg-white/10" />
+                style={{ color: "var(--text3)" }} className="rounded hover:bg-[color-mix(in_srgb,var(--text)_10%,transparent)]" />
             </div>
             <div ref={dtBox} className="flex-1 min-h-0" style={{ background: "var(--bg)" }} />
           </div>
@@ -3521,7 +3742,7 @@ export function BrowserView({ active: viewOn, scope }: {
       {classic && sideOpen && (
         <div role="separator" aria-orientation="vertical" tabIndex={0}
           aria-label="Drag to resize the bar"
-          title="Drag to resize · double-click for the usual width"
+          data-tip="Drag to resize · double-click for the usual width"
           onDoubleClick={() => { setSideW(228); setSidebarWidth(228); }}
           onKeyDown={(e) => {
             if (e.key === "ArrowLeft") { e.preventDefault(); setSideW((w) => { const n = Math.min(460, w + 12); setSidebarWidth(n); return n; }); }
@@ -3541,7 +3762,7 @@ export function BrowserView({ active: viewOn, scope }: {
             window.addEventListener("pointerup", up);
           }}
           className="shrink-0 self-stretch"
-          style={{ width: 5, marginLeft: -3, cursor: "col-resize", zIndex: 5 }} />
+          style={{ width: 5, marginLeft: -3, cursor: "col-resize", zIndex: BROWSER.sideGrip }} />
       )}
       {!classic ? null : sideOpen ? (
         <aside className="shrink-0 min-h-0" style={{ width: sideW }}>{sideBody}</aside>
@@ -3550,13 +3771,13 @@ export function BrowserView({ active: viewOn, scope }: {
           {/* Hidden, it leaves a hot edge. The bar comes back OVER the page
               rather than pushing it, so a page you hid the bar to read does not
               reflow every time the pointer strays right. */}
-          <div onMouseEnter={() => setPeek(true)} title="The bar (Ctrl+Alt+S)"
+          <div onMouseEnter={() => setPeek(true)} data-tip="The bar (Ctrl+Alt+S)"
             className="shrink-0 self-stretch"
             style={{ width: 6, background: "linear-gradient(90deg, transparent, color-mix(in srgb, var(--primary) 22%, transparent))" }} />
           {peek && (
             <aside onMouseLeave={() => setPeek(false)}
               className="absolute top-0 right-0 bottom-0 shadow-2xl"
-              style={{ width: sideW, zIndex: 30 }}>{sideBody}</aside>
+              style={{ width: sideW, zIndex: BROWSER.overlay }}>{sideBody}</aside>
           )}
         </>
       )}
@@ -3576,10 +3797,10 @@ export function BrowserView({ active: viewOn, scope }: {
         const ess = sh.items.filter((i) => i.essential).length;
         return (
           <>
-            <div className="absolute inset-0" style={{ zIndex: 48, background: "rgba(6, 4, 12, 0.5)" }} onClick={() => setBringing(null)} />
+            <div className="absolute inset-0" style={{ zIndex: BROWSER.bringScrim, background: "rgba(6, 4, 12, 0.5)" }} onClick={() => setBringing(null)} />
             <div className="absolute rounded-xl shadow-2xl p-3 flex flex-col gap-2"
               style={{
-                zIndex: 49, left: "50%", top: 90, transform: "translateX(-50%)", width: 420,
+                zIndex: BROWSER.bring, left: "50%", top: 90, transform: "translateX(-50%)", width: 420,
                 background: "var(--surface-card)", border: EDGE,
               }}>
               <div className="text-[12px]" style={{ color: "var(--text)" }}>Import from {bringing.label}</div>
@@ -3626,7 +3847,7 @@ export function BrowserView({ active: viewOn, scope }: {
       {carry && (
         <div className="fixed rounded-md px-2 py-1 text-[10.5px] shadow-2xl pointer-events-none truncate"
           style={{
-            left: carry.x + 12, top: carry.y + 12, zIndex: 60, maxWidth: 220,
+            left: carry.x + 12, top: carry.y + 12, zIndex: BROWSER.carry, maxWidth: 220,
             background: "var(--surface-card)", color: "var(--text)",
             border: `1px solid color-mix(in srgb, var(--primary) ${carry.at ? 70 : 30}%, transparent)`,
           }}>
@@ -3653,7 +3874,7 @@ export function BrowserView({ active: viewOn, scope }: {
           <div className="fixed rounded-lg shadow-2xl p-1 flex flex-col gap-0.5"
             onMouseEnter={() => setPeep(peep)} onMouseLeave={() => setPeep(null)}
             style={{
-              top: peep.top, right: peep.right, width: 200, maxHeight: 320, overflowY: "auto", zIndex: 45,
+              top: peep.top, right: peep.right, width: 200, maxHeight: 320, overflowY: "auto", zIndex: BROWSER.peep,
               background: "var(--surface-card)", border: EDGE,
             }}>
             <div className="px-1.5 pt-0.5 pb-1 text-[9px] uppercase tracking-[0.12em] flex items-center gap-1.5" style={{ color: "var(--text4)" }}>
@@ -3820,7 +4041,7 @@ export function BrowserView({ active: viewOn, scope }: {
                are about the page in front of you, under a rule. */
             const row = (icon: React.ReactNode, label: string) => (
               <span className="flex items-center gap-2">
-                <span className="shrink-0 grid place-items-center" style={{ width: 14, height: 14, color: "var(--text4)" }}>{icon}</span>
+                <span className="shrink-0 grid place-items-center" style={{ width: ICON.sm, height: ICON.sm, color: "var(--text4)" }}>{icon}</span>
                 {label}
               </span>
             );
@@ -3846,34 +4067,71 @@ export function BrowserView({ active: viewOn, scope }: {
       )}
 
       {/* The address box.
-          Over the page, and in one of two places: in the middle when it is a new
-          tab — nothing is being replaced, so it is not attached to anything —
-          and against the bar when it is THIS page's address, because that is
-          where the thing you clicked was. */}
+          Over the page, centred on it like a desktop browser's omnibox, at the
+          same width either way (omniBox). Lower down when it is a new tab —
+          nothing is being replaced — and at the top when it is THIS page's
+          address, next to the bar you clicked. */}
       {omni && (
         <>
-          <div className="absolute inset-0" style={{ zIndex: 38, background: omni === "new" ? "rgba(6, 4, 12, 0.5)" : "rgba(6, 4, 12, 0.25)" }}
+          <div className="absolute inset-0" style={{ zIndex: BROWSER.omniScrim, background: omni === "new" ? "rgba(6, 4, 12, 0.5)" : "rgba(6, 4, 12, 0.25)" }}
             onClick={() => { setOmni(null); setTyped(null); setHint(-1); }} />
           <div className="absolute rounded-xl shadow-2xl p-1.5 flex flex-col gap-0.5"
             style={{
-              zIndex: 39, background: "var(--surface-card)",
+              zIndex: BROWSER.omni, background: "var(--surface-card)",
               border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)",
-              ...(omni === "new"
-                ? { left: "14%", right: (sideOpen ? sideW : 0) + 40, top: 120 }
-                : { right: (sideOpen ? 6 : 6), top: 6, width: Math.max(380, Math.min(620, sideW * 2.4)) }),
+              ...omniBox(paneW, sideOpen ? sideW : 0),
+              top: omni === "new" ? 120 : 6,
             }}>
             <input autoFocus
               data-agx-omni="1"
-              value={typed ?? ""}
-              onChange={(e) => { setTyped(e.target.value); setHint(-1); }}
+              ref={omniInput}
+              value={(typed ?? "") + compText}
+              onChange={(e) => {
+                const el = e.currentTarget;
+                const v = el.value;
+                setHint(-1);
+                // Complete only what was ADDED at the end of the text: not a
+                // deletion, not an edit in the middle after the caret moved, and
+                // never mid-composition, where a selection would break the IME.
+                const ne = e.nativeEvent as InputEvent;
+                const added = !composing.current && !ne.isComposing && !ne.inputType?.startsWith("delete") && el.selectionStart === v.length;
+                setTyped(v);
+                setComp({ for: v, text: added ? completion(places ?? [], v) ?? "" : "" });
+              }}
               onFocus={(e) => { if (omni === "edit") e.currentTarget.select(); }}
+              onCompositionStart={() => { composing.current = true; setComp({ for: "", text: "" }); }}
+              onCompositionEnd={() => { composing.current = false; }}
+              onMouseUp={(e) => {
+                // A click that moved the caret or the selection drops the completion.
+                const el = e.currentTarget;
+                if (compText && typed !== null && (el.selectionStart !== typed.length || el.selectionEnd !== typed.length + compText.length)) setComp({ for: "", text: "" });
+              }}
               onKeyDown={(e) => {
-                const rows = omniHits();
-                if (e.key === "ArrowDown" && rows.length) { e.preventDefault(); setHint((i) => Math.min(rows.length - 1, i + 1)); return; }
-                if (e.key === "ArrowUp" && rows.length) { e.preventDefault(); setHint((i) => Math.max(-1, i - 1)); return; }
+                if (compText && typed !== null && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                  // Right/End take the completion as typed; Left/Home leave it behind.
+                  if (e.key === "ArrowRight" || e.key === "End") {
+                    e.preventDefault();
+                    const el = e.currentTarget, full = typed + compText;
+                    el.value = full; el.setSelectionRange(full.length, full.length);
+                    setTyped(full); setComp({ for: "", text: "" }); return;
+                  }
+                }
+                // Anything that moves the caret (modified arrows, Home, Left) drops
+                // the completion first, and the caret then sits where the typed text
+                // ends, not one short of it.
+                if (compText && typed !== null && (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End")) {
+                  const el = e.currentTarget, end = typed.length;
+                  el.value = typed; el.setSelectionRange(end, end);
+                  setComp({ for: "", text: "" });
+                  if (e.key === "ArrowLeft" && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) { e.preventDefault(); const c = Math.max(0, end - 1); el.setSelectionRange(c, c); }
+                }
+                if (e.key === "ArrowDown" && rows.length) { e.preventDefault(); setHint(Math.min(rows.length - 1, sel + 1)); return; }
+                if (e.key === "ArrowUp" && rows.length) { e.preventDefault(); setHint(Math.max(dflt, sel - 1)); return; }
                 if (e.key === "Enter") {
                   e.preventDefault();
-                  const row = hint >= 0 ? rows[hint] : null;
+                  if (e.nativeEvent.isComposing) return;
+                  // The lit row is what Enter opens; the completion is row 0.
+                  const row = sel >= 0 ? rows[sel] : null;
                   if (row) { row.run(); setOmni(null); setTyped(null); setHint(-1); }
                   else runOmni(typed ?? "");
                   return;
@@ -3887,19 +4145,24 @@ export function BrowserView({ active: viewOn, scope }: {
               placeholder={omni === "new" ? "Type an address, or something to search for" : "This page's address"}
               className="w-full text-[13px] px-2.5 py-2 outline-none bg-transparent"
               style={{ color: "var(--text)" }} />
-            {omniHits().map((r, i) => (
+            {rows.map((r, i) => (
               <button key={r.key}
                 onMouseDown={(e) => { e.preventDefault(); r.run(); setOmni(null); setTyped(null); setHint(-1); }}
-                onMouseEnter={() => setHint(i)}
-                className="w-full text-left px-2.5 py-1.5 rounded-lg flex items-center gap-2 text-[11px]"
-                style={{ background: i === hint ? "color-mix(in srgb, var(--primary) 14%, transparent)" : "transparent" }}>
-                <span className="truncate" style={{ color: "var(--text)", maxWidth: "46%" }}>{r.label}</span>
-                <span className="truncate font-mono text-[10px]" style={{ color: "var(--text3)" }}>{r.sub}</span>
+                onMouseMove={(e) => { if ((e.movementX || e.movementY) && hint !== i) setHint(i); }}
+                className="w-full text-left px-2.5 rounded-lg flex items-center gap-2 text-[12px]"
+                style={{ height: HIT, background: i === sel ? "var(--primary)" : "transparent", color: i === sel ? "var(--on-primary)" : "var(--text)" }}>
+                <Favicon src={r.icon} size={ICON.md} />
+                {/* One line: the title, then " — " and the address dimmed, the
+                    typed part bold in both. */}
+                <span className="truncate min-w-0">
+                  <span>{emph(r.label, omniQuery)}</span>
+                  <span style={{ opacity: 0.7 }}>{" — "}{emph(r.sub, omniQuery)}</span>
+                </span>
                 {/* Why it is on the list. "open" is the one that changes what
                     pressing it does — it jumps rather than loading a copy. */}
-                <span className="ml-auto shrink-0 text-[9px] uppercase tracking-[0.08em]"
-                  style={{ color: r.kind === "tab" ? "var(--success)" : "var(--text4)" }}>
-                  {r.kind === "tab" ? "open" : r.kind === "kept" ? "kept" : ""}
+                <span className={r.switchTo ? "ml-auto shrink-0 text-[11px]" : "ml-auto shrink-0 text-[9px] uppercase tracking-[0.08em]"}
+                  style={{ color: i === sel ? "var(--on-primary)" : r.kind === "tab" || r.switchTo ? "var(--success)" : "var(--text4)" }}>
+                  {r.switchTo ? "Switch to tab" : r.kind === "tab" ? "open" : r.kind === "kept" ? "kept" : ""}
                 </span>
               </button>
             ))}
@@ -3907,5 +4170,22 @@ export function BrowserView({ active: viewOn, scope }: {
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * The one browser, mounted in the workspace's React tree and laid over the
+ * bench's slot by lib/browserHost.ts. React context follows the tree, not the
+ * screen, so the bench's PortalFloor never reached this panel and its menus
+ * (the ⋯ bar menu, context menus, pickers) portalled at 9999 — under the
+ * bench. While the bench holds the browser, give its portals the bench floor.
+ */
+export function BrowserView(props: { active: boolean }) {
+  const place = useSyncExternalStore(subscribeBrowser, browserPlace, () => null);
+  const benchOpen = useSyncExternalStore(subscribeBench, benchState, benchState).open;
+  return (
+    <PortalFloor.Provider value={place === "bench" && benchOpen ? LAYER.benchOverlay : 0}>
+      <BrowserViewBody {...props} />
+    </PortalFloor.Provider>
   );
 }

@@ -8,7 +8,7 @@
  * gives way is the selection chip on the left.
  */
 import { Fragment, useState, type ReactNode } from "react";
-import { Button } from "./workspace/Chrome.tsx";
+import { Button, EDGE } from "./workspace/Chrome.tsx";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
 import {
   BranchIcon, CopyIcon, EyeIcon, MoreIcon, PlusIcon, SwapIcon, UndoIcon, MinusIcon, ArrowIcon, MergeIcon, FolderIcon, LinkIcon,
@@ -58,7 +58,7 @@ function Label({ a }: { a: DockAction }) {
   return (
     <>
       {a.label.slice(0, at)}
-      <span className="shrink-0 min-w-0 max-w-full truncate px-1 rounded" title={a.chip}
+      <span className="shrink-0 min-w-0 max-w-full truncate px-1 rounded" data-tip={a.chip}
         style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", border: "1px solid color-mix(in srgb, currentColor 35%, transparent)" }}>
         {a.chip}
       </span>
@@ -113,11 +113,11 @@ export function GitDock({ actions, more, onRun, selection, selectionTitle, selec
     <div className="shrink-0 flex flex-wrap items-center gap-1.5 px-3 py-2" ref={bar} data-git-dock
       style={{ paddingRight: 12 + clear, borderTop: "1px solid color-mix(in srgb, var(--text) 8%, transparent)", background: "var(--surface-card)" }}>
       <span className="min-w-[88px] flex-1 basis-0 truncate text-[10.5px] px-2 py-1 rounded-lg inline-flex items-center gap-1.5"
-        title={selectionTitle} style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 12%, transparent)", maxWidth: 160 }}>
+        data-tip={selectionTitle} style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", color: "var(--text2)", border: EDGE, maxWidth: 160 }}>
         {selectionIcon && <span className="shrink-0 inline-flex"><DockIcon name={selectionIcon} size={ICON.xs} /></span>}
         <span className="truncate">{selection}</span>
       </span>
-      {cmd && <span className="shrink-0 text-[11px]" title={cmd} style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", color: "var(--text3)" }}>{cmd}</span>}
+      {cmd && <span className="shrink-0 text-[11px]" data-tip={cmd} style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)", color: "var(--text3)" }}>{cmd}</span>}
       <div className="flex flex-wrap items-center justify-end gap-1.5 ml-auto min-w-0 max-w-full">
         {safe.map(btn)}
         {!!more.length && (
@@ -135,7 +135,7 @@ export function GitDock({ actions, more, onRun, selection, selectionTitle, selec
             <Fragment key={a.id}>
               {sepBefore(a, i) && <hr className="m-0 mx-0.5 my-1 border-0 border-t" style={{ borderColor: "color-mix(in srgb, var(--text) 8%, transparent)" }} />}
               {a.disabled
-                ? <span className="px-2 py-1.5 text-[12.5px] inline-flex items-center gap-2 opacity-50 cursor-not-allowed" title={a.reason}><DockIcon name={a.icon} />{a.label}</span>
+                ? <span className="px-2 py-1.5 text-[12.5px] inline-flex items-center gap-2 opacity-50 cursor-not-allowed" data-tip={a.reason}><DockIcon name={a.icon} />{a.label}</span>
                 : <MenuItem danger={a.kind === "danger"} onClick={() => { setMenu(null); onRun(a.id); }}>
                     <span className="inline-flex items-center gap-2 text-[12.5px]"><DockIcon name={a.icon} />{a.label}</span>
                   </MenuItem>}

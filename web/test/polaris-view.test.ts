@@ -8,7 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { DOOR_IDS, DOOR_MODES, PRESETS, resolvePolaris, withPreset, withEnabled, safeDoor, type BaseRed, type PolarisItem, type SettingsAnswer, type StoredPolaris } from "../../shared/polaris.ts";
 import { DOOR_COPY, GROUPS } from "../src/lib/polarisCopy.ts";
 import {
-  assistPrompt, assistState, changeDoor, chipLabel, baseBanners, baseOfItem, beaconOf, classCounts, courseText, fixNotice, syncResult, syncWarning, doorView, draftSaveable, formatBadge, formatNotice, groupViews, limitViews, stampFormat, undoStamp, inheritAll, itemView, liveQuestion, markOf, newDoors, presetQuestion, resetDoors,
+  assistPrompt, assistState, githubLine, changeDoor, chipLabel, baseBanners, baseOfItem, beaconOf, classCounts, courseText, fixNotice, syncResult, syncWarning, doorView, draftSaveable, formatBadge, formatNotice, groupViews, limitViews, stampFormat, undoStamp, inheritAll, itemView, liveQuestion, markOf, newDoors, presetQuestion, resetDoors,
   scopeOf, sendState, showsParams, sortItems, storedOf, waitingOnYou, withoutNumber,
 } from "../src/lib/polarisView.ts";
 
@@ -450,5 +450,20 @@ describe("a red the base branch has too", () => {
     expect(beaconOf(item({ cls: "In orbit", reason: "waiting", syncDraft: "Pull before you push." }))).toEqual({ draft: "Pull before you push.", reason: "synced" });
     expect(beaconOf(item({ cls: "Needs you", reason: "conflict", draft: "Rebase.", syncDraft: "Pull." }))).toEqual({ draft: "Rebase.", reason: "conflict" });
     expect(waitingOnYou([item({ cls: "In orbit", syncDraft: "Pull." })], doors)).toHaveLength(1);
+  });
+});
+
+describe("GitHub on the card and in the setup prompt", () => {
+  test("githubLine says who is connected or the one thing to fix; nothing yet is no line", () => {
+    expect(githubLine(null)).toBe("");
+    expect(githubLine({ ok: true, login: "ada-orbit", repo: "acme/orbit" })).toBe("GitHub: connected as ada-orbit to acme/orbit.");
+    expect(githubLine({ ok: false, problem: "gh is signed out: run gh auth login" })).toBe("GitHub: gh is signed out: run gh auth login.");
+  });
+  test("the prompt checks GitHub first, asks the base branch, and ends with a read-back and a count", () => {
+    const p = assistPrompt("/home/me/code/orbit");
+    expect(p.indexOf("agentglass-ui polaris github --root /home/me/code/orbit")).toBeLessThan(p.indexOf("Read the current doors"));
+    expect(p).toContain("which base branch");
+    expect(p).toContain("agentglass-ui polaris items --root /home/me/code/orbit");
+    expect(p).toContain("in dry run");
   });
 });

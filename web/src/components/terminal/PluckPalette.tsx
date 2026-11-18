@@ -58,7 +58,7 @@ export function PluckPalette({ rows, onPick, onCopy, onClose }: {
           {items.map((it: Pluck, i) => (
             <div key={it.text} role="option" className="agx-mi flex items-center gap-2.5 px-3 py-1 text-[11.5px] cursor-pointer"
               onClick={(e) => { if (e.shiftKey) onCopy(it.text); else onPick(it.text); onClose(); }}
-              title={`${it.text}\nrow ${it.row + 1} · click to paste, Shift+click to copy`}>
+              data-tip={`${it.text} — row ${it.row + 1} · click to paste, Shift+click to copy`}>
               <kbd className="shrink-0 grid place-items-center rounded font-mono text-[10.5px]"
                 style={{ width: 20, height: 20, color: "var(--text)", background: "color-mix(in srgb, var(--text) 8%, transparent)", border: EDGE }}>{PLUCK_KEYS[i]}</kbd>
               <span className="shrink-0 text-[9px] uppercase tracking-[0.1em] w-8" style={{ color: KIND_TONE[it.kind] }}>{KIND_WORD[it.kind]}</span>

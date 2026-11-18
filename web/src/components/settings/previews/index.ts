@@ -19,12 +19,12 @@ import { LocalReviewPreview } from "./LocalReviewPreview.tsx";
  *   <PagePreview id="diff" split={split} wrap={wrap} />  ->  PREVIEWS.diff.component
  */
 export const PREVIEWS = {
-  prefs: { component: WindowPreview, props: ["zoomPct", "fullscreen", "startAtLogin", "launchAnimation", "showClock", "codexQuota", "view", "rail?"] },
-  appearance: { component: AppearancePreview, props: ["theme", "accent", "density", "fontPx", "translucent", "view", "rail?"] },
+  prefs: { component: WindowPreview, props: ["zoomPct", "fullscreen", "startAtLogin", "launchAnimation", "showClock", "codexQuota", "rail?"] },
+  appearance: { component: AppearancePreview, props: ["theme", "accent", "density", "fontPx", "translucent", "rail?"] },
   rail: { component: SidebarPreview, props: ["items", "selected", "view?"] },
   diff: { component: DiffPreview, props: ["split", "wrap", "syntaxTheme?"] },
   lantern: { component: LanternPreview, props: ["watch", "everyMin", "wakeMin"] },
-  browser: { component: BrowserPreview, props: ["home", "searchEngine"] },
+  browser: { component: BrowserPreview, props: ["home", "searchEngine", "compact?"] },
   orchestration: { component: OrchestrationPreview, props: ["policy", "readiness", "root", "limited?", "facts?"] },
   "jev-inbox": { component: JevInboxPreview, props: ["hasKey", "consent", "mode", "threshold", "sendRepo", "maxTitle"] },
   "context-diet": { component: ContextDietPreview, props: ["cap", "countSubagents", "windowDays"] },

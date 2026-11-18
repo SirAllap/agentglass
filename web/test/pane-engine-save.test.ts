@@ -6,7 +6,7 @@
 import { test, expect } from "bun:test";
 import { savePaneField } from "../src/lib/paneEngineSave.ts";
 
-const src = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url)).text();
+const src = await Bun.file(new URL("../src/components/settings/pages/TerminalPage.tsx", import.meta.url)).text();
 const lines = src.split("\n").filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*") && !l.trim().startsWith("/*"));
 const code = lines.join("\n");
 
@@ -31,21 +31,18 @@ test("an unreachable server is a failed save, not a thrown one", async () => {
 });
 
 test("the controls call the saving path, and the binary Save no longer carries them", () => {
-  const sw = code.indexOf('label="Restore the layout"');
-  const card = code.slice(sw, sw + 1800);
-  expect(card).toContain('savePaneField({ restore: !restore }, "Restore")');
-  expect(card).toContain('savePaneField({ resume: v === "all" ? "all" : "lazy" }, "Resume mode")');
-  expect(card).not.toContain("onChange={setResume}");
-  const at = code.indexOf("const saveSettings = () => {");
+  // The Restore and Resume rows live on the Terminal page and save at once through saveEngine.
+  expect(code).toContain('saveEngine({ restore: v }, "Restore", { restore: !v })');
+  expect(code).toContain('saveEngine({ resume: v === "all" ? "all" : "lazy" }, "Resume mode"');
+  const at = code.indexOf("const saveEngine = async (");
   const fn = code.slice(at, code.indexOf("\n  };", at));
-  expect(fn).toContain("api.tmuxSettingsSave({ source");
-  expect(fn).not.toMatch(/\brestore\b|\bresume\b/);
+  expect(fn).toContain("savePaneField(api.tmuxSettingsSave, field, what)");
+  expect(code).not.toContain("onChange={setResume}");
 });
 
-test("a failed save rolls the control back and shows the failure without blanking the page", () => {
-  const at = code.indexOf("const savePaneField = (");
+test("a failed save shows the failure and reloads the real value, without blanking the page", () => {
+  const at = code.indexOf("const saveEngine = async (");
   const fn = code.slice(at, code.indexOf("\n  };", at));
-  expect(fn).toContain("setRestore(prev.restore); setResume(prev.resume);");
-  expect(fn).toContain("setSaveFail(r.error)");
-  expect(fn).not.toContain("setErr(");
+  expect(fn).toContain("setSaid(r.error)");
+  expect(fn).toContain("await load()");
 });

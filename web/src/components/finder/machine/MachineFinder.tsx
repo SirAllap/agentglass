@@ -119,6 +119,12 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
     window.addEventListener("keydown", esc, true);
     return () => window.removeEventListener("keydown", esc, true);
   }, [onClose]);
+  /* The Finder page in Settings writes the same stored preferences; it fires this so an open Finder follows. */
+  useEffect(() => {
+    const again = () => setPrefsState(loadPrefs());
+    window.addEventListener("agx:finder-prefs", again);
+    return () => window.removeEventListener("agx:finder-prefs", again);
+  }, []);
   const setPrefs = useCallback((p: Partial<Prefs>) => { if ("hidden" in p) setVisitHidden(false); setPrefsState((cur) => { const n = { ...cur, ...p }; savePrefs(n); return n; }); }, []);
 
   /* Where it was left, if that is still where the palette says it is: a chip or a link that moved the place wins over the memory. */
@@ -992,21 +998,21 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
     <div ref={root} data-machine-finder onAuxClick={onHistoryButton} onContextMenu={noNativeMenu} {...dnd} onMouseMove={(e) => { pointerDir.current = (e.target as HTMLElement).closest<HTMLElement>("[data-dir]")?.dataset.dir ?? null; }} onMouseUp={(e) => { if (historyClaims(pointerAction(prefs.view, "empty", e.button, 1), { back: canBack(hist), forward: canForward(hist) })) e.preventDefault(); }} className="relative flex-1 min-h-0 min-w-0 flex flex-col" style={{ fontSize: prefs.textSize, color: "var(--text)", ["--fz" as string]: fzScale(prefs.textSize) }}>
       <FinderTabs tabs={tabs} home={home} onNew={() => newTab()} onSelect={(i) => toTab(selectTab(tabs, i))} onClose={(i) => toTab(closeTab(tabs, i))} />
       <div data-finder-topbar className="flex items-center gap-1.5 px-2.5 py-1.5 shrink-0" style={{ borderBottom: LINE }}>
-        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: sideOn ? 1 : 0.7 }} aria-pressed={sideOn} title={sidebarTip(compact ? (sidePage ? "full" : "hidden") : sideMode, "Ctrl+B")} aria-label="Toggle sidebar (Ctrl+B)"
+        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: sideOn ? 1 : 0.7 }} aria-pressed={sideOn} data-tip={sidebarTip(compact ? (sidePage ? "full" : "hidden") : sideMode, "Ctrl+B")} aria-label="Toggle sidebar (Ctrl+B)"
           onClick={toggleSide}><StrataIcon set="act" name="panel-left-symbolic" size={17} /></button>
         {prefs.view !== "columns" && <>
-          <button className={tool} disabled={!canBack(hist)} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: canBack(hist) ? 1 : 0.4 }} title="Back (Alt+Left)" aria-label="Back" onClick={() => goHist(histBack(hist))}><StrataIcon set="act" name="arrow-left" size={17} /></button>
-          <button className={tool} disabled={!canForward(hist)} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: canForward(hist) ? 1 : 0.4 }} title="Forward (Alt+Right)" aria-label="Forward" onClick={() => goHist(histForward(hist))}><StrataIcon set="act" name="arrow-right" size={17} /></button>
-          <button className={tool} disabled={!parentOf(trail[0]!)} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: parentOf(trail[0]!) ? 1 : 0.4 }} title="Parent folder (Alt+Up)" aria-label="Parent folder" onClick={goUp}><StrataIcon set="act" name="arrow-up" size={17} /></button>
+          <button className={tool} disabled={!canBack(hist)} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: canBack(hist) ? 1 : 0.4 }} data-tip="Back (Alt+Left)" aria-label="Back" onClick={() => goHist(histBack(hist))}><StrataIcon set="act" name="arrow-left" size={17} /></button>
+          <button className={tool} disabled={!canForward(hist)} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: canForward(hist) ? 1 : 0.4 }} data-tip="Forward (Alt+Right)" aria-label="Forward" onClick={() => goHist(histForward(hist))}><StrataIcon set="act" name="arrow-right" size={17} /></button>
+          <button className={tool} disabled={!parentOf(trail[0]!)} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", opacity: parentOf(trail[0]!) ? 1 : 0.4 }} data-tip="Parent folder (Alt+Up)" aria-label="Parent folder" onClick={goUp}><StrataIcon set="act" name="arrow-up" size={17} /></button>
         </>}
         <FinderPathBar path={trail[last] ?? trail[0]!} home={home} onGo={go} signalEdit={pathSignal} onEditing={setPathEditing} volumes={devices.volumes} onRemote={devices.openAddress} onFail={setPathFailed} />
-        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="New tab (Ctrl+T)" aria-label="New tab" onClick={() => newTab()}><StrataIcon set="act" name="plus" size={17} /></button>
-        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Search (Ctrl+K)" aria-label="Search" onClick={openSearch}><StrataIcon set="act" name="search" size={17} /></button>
-        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Appearance" aria-label="Appearance" aria-haspopup="menu" onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())}><StrataIcon set="act" name={prefs.view} size={17} /></button>
+        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} data-tip="New tab (Ctrl+T)" aria-label="New tab" onClick={() => newTab()}><StrataIcon set="act" name="plus" size={17} /></button>
+        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} data-tip="Search (Ctrl+K)" aria-label="Search" onClick={openSearch}><StrataIcon set="act" name="search" size={17} /></button>
+        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} data-tip="Appearance" aria-label="Appearance" aria-haspopup="menu" onClick={(e) => setMenu(e.currentTarget.getBoundingClientRect())}><StrataIcon set="act" name={prefs.view} size={17} /></button>
         {/* The way back after the preview's own ×: lit while the panel is open, one click either way (Space does the same). */}
-        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", ...toggleLook(wide ? prefs.preview : peek) }} aria-pressed={wide ? prefs.preview : peek} title="Preview panel (Space)" aria-label="Toggle the preview panel (Space)" onClick={() => (wide ? setPrefs({ preview: !prefs.preview }) : setPeek((p) => !p))}><StrataIcon set="act" name="panel-right-close" size={17} /></button>
-        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Settings" aria-label="Settings" aria-haspopup="menu" onClick={(e) => setSettings(e.currentTarget.getBoundingClientRect())}><StrataIcon set="act" name="settings" size={17} /></button>
-        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Close window" aria-label="Close the finder" onClick={onClose}><StrataIcon set="act" name="x" size={17} /></button>
+        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", ...toggleLook(wide ? prefs.preview : peek) }} aria-pressed={wide ? prefs.preview : peek} data-tip="Preview panel (Space)" aria-label="Toggle the preview panel (Space)" onClick={() => (wide ? setPrefs({ preview: !prefs.preview }) : setPeek((p) => !p))}><StrataIcon set="act" name="panel-right-close" size={17} /></button>
+        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} data-tip="Settings" aria-label="Settings" aria-haspopup="menu" onClick={(e) => setSettings(e.currentTarget.getBoundingClientRect())}><StrataIcon set="act" name="settings" size={17} /></button>
+        <button className={tool} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} data-tip="Close window" aria-label="Close the finder" onClick={onClose}><StrataIcon set="act" name="x" size={17} /></button>
       </div>
 
       <div className="flex-1 min-h-0 flex" style={{ background: COLUMNS_SURFACE }}>
@@ -1043,7 +1049,7 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
             </div>
             {previewInline && (
               <div className="relative min-h-0 flex" style={{ flex: `${prevDrag === undefined && prefs.view === "columns" ? 1 : 0} 0 ${previewWidth(box.w, prevDrag, sideTaken)}px`, minWidth: 0, borderLeft: LINE, background: PREVIEW_SURFACE }}>
-                <div role="separator" aria-orientation="vertical" aria-label="Resize the preview" tabIndex={0} title="Drag to resize, double-click to reset"
+                <div role="separator" aria-orientation="vertical" aria-label="Resize the preview" tabIndex={0} data-tip="Drag to resize, double-click to reset"
                   className="absolute top-0 bottom-0 agx-col-edge" style={{ left: 0, width: 6, cursor: "col-resize", zIndex: 3, touchAction: "none" }}
                   onDoubleClick={() => setPrevDrag(undefined)}
                   onPointerDown={(e) => {
@@ -1063,10 +1069,10 @@ export function MachineFinder({ home, workspace, start, wantFile, onWanted, plac
         )}
       </div>
 
-      <footer className="flex items-center gap-3 px-2.5 shrink-0 text-[11px]" style={{ minHeight: 26, borderTop: LINE, color: "var(--text3)" }}>
+      <footer className="flex items-center gap-3 px-2.5 shrink-0 text-[11px]" style={{ minHeight: 26, paddingRight: "var(--fab-reserve)", borderTop: LINE, color: "var(--text3)" }}>
         {prefs.f1 && (
           <button type="button" className="agx-btn rounded-md px-2 inline-flex items-center gap-1.5" style={{ minHeight: HIT - 6, color: "var(--text2)" }}
-            title="Show all file-view shortcuts (F1)" onClick={() => setHelp(true)}><kbd className="text-[10px]" style={{ fontFamily: "inherit", fontWeight: 600 }}>F1</kbd> Shortcuts</button>
+            data-tip="Show all file-view shortcuts (F1)" onClick={() => setHelp(true)}><kbd className="text-[10px]" style={{ fontFamily: "inherit", fontWeight: 600 }}>F1</kbd> Shortcuts</button>
         )}
         <span className="flex-1" />
         <span className="truncate" aria-live="polite" aria-description={describedCount}>{note ?? count}</span>

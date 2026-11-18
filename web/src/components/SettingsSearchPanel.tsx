@@ -62,13 +62,14 @@ export function SettingsSearchPanel({ q, onQ, mode, onMode, model, absent, onLan
         <SearchIcon size={ICON.md} />
         <input ref={inputRef} className="bg-transparent" value={q} onChange={(e) => onQ(e.target.value)} onKeyDown={onKeyDown}
           placeholder="Search settings" aria-label="Search settings" aria-keyshortcuts="Control+F"
-          aria-expanded={open} aria-controls="agx-sp-list" autoComplete="off" spellCheck={false} />
+          role="combobox" aria-haspopup="listbox" aria-autocomplete="list" aria-expanded={open}
+          aria-controls={open ? "agx-sp-list" : undefined} aria-activedescendant={open && sel >= 0 ? `agx-sp-opt-${sel}` : undefined} autoComplete="off" spellCheck={false} />
         <kbd>Ctrl F</kbd>
       </label>
       {open && (
         <>
           <div className="agx-sp-scrim" onClick={() => onQ("")} aria-hidden />
-          <div className="agx-sp-pop" role="group" aria-label="Search results">
+          <div className="agx-sp-pop">
             <div className="agx-sp-head">
               <b>
                 {searchSummary(model, q)}
@@ -80,7 +81,7 @@ export function SettingsSearchPanel({ q, onQ, mode, onMode, model, absent, onLan
                 <button type="button" aria-pressed={mode === "names"} onClick={() => onMode("names")}>Names</button>
               </div>
             </div>
-            <div className="agx-sp-list" id="agx-sp-list" ref={list} role="listbox">
+            <div className="agx-sp-list" id="agx-sp-list" ref={list} role="listbox" aria-label="Search results">
               {model.pages.map((pg) => {
                 const Icon = icons.get(pg.pane);
                 return (
@@ -94,7 +95,7 @@ export function SettingsSearchPanel({ q, onQ, mode, onMode, model, absent, onLan
                       at++;
                       const i = at;
                       return (
-                        <div key={`${h.pane}/${h.row}/${h.label}`} className="agx-sp-hit" role="option" aria-selected={sel === i}
+                        <div key={`${h.pane}/${h.row}/${h.label}`} id={`agx-sp-opt-${i}`} className="agx-sp-hit" role="option" aria-selected={sel === i}
                           data-sel={sel === i ? "true" : undefined}
                           onMouseMove={() => { if (sel !== i) setSel(i); }}
                           onClick={() => onLand({ pane: h.pane, row: h.row })}>

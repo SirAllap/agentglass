@@ -24,6 +24,7 @@ import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNo
 import { api, type JiraLinkKind } from "../../lib/api.ts";
 import { followLink } from "../../lib/linkRouter.ts";
 import { ICON } from "../../lib/iconSize.ts";
+import { tipAttr } from "../../lib/tip.ts";
 import { TRACKERS } from "../../lib/trackerApi.ts";
 import { canHaveSubtasks, linkEffect, linkWays, madeLink, parseCardId, parseSubtaskTitle, parseWebAddress, type LinkWay } from "../../lib/jiraJoins.ts";
 import type { CardLinked, CardWebLink, ProviderTask } from "../../../../shared/providers.ts";
@@ -34,6 +35,10 @@ import { TrackerStatusPick } from "../TrackerStatusPick.tsx";
 import { CommentAction } from "../tasks/CardEdit.tsx";
 import { Button, EDGE, LINE, ListRow } from "../workspace/Chrome.tsx";
 import { CardRow, Progress, JiraSection, groupLinked } from "./JiraSections.tsx";
+import { Pr } from "./list/JiraRow.tsx";
+import { PeopleFaces } from "./list/PeopleFaces.tsx";
+import { StateCollapse } from "../tasks/BoardState.tsx";
+import type { AddAsk } from "../../lib/stateRule.ts";
 
 /** What the pane gives the joins to change the card with; each says why it did not land, or null. */
 export interface JoinAct {
@@ -52,24 +57,39 @@ const INPUT_STYLE = { background: "var(--bg)", color: "var(--text)", border: EDG
 export interface Said { text: string; warn?: boolean; undo?: () => Promise<string | null> }
 
 /** The line a change leaves in the section's header, with its Undo; and the "+" that opens the section's form, always at the end. */
-export function Aside({ plain, said, onSaid, open, onToggle, label, canAdd }: {
+export function Aside({ plain, said, onSaid, open, onToggle, label, canAdd, dock }: {
   plain: ReactNode; said: Said | null; onSaid: (s: Said | null) => void; open: boolean; onToggle: () => void; label: string; canAdd: boolean;
+  /** A right-click menu lands on the add button through this name (see list/menus/dockIntent.ts). */
+  dock?: string;
 }) {
   const [busy, setBusy] = useState(false);
   return (
     <span className="inline-flex items-center gap-1.5 min-w-0">
       {said ? (
         <span className="inline-flex items-center gap-1.5 min-w-0" role={said.warn ? "alert" : "status"} style={{ color: said.warn ? "var(--warning-ink)" : "var(--success-ink)" }}>
-          <span className="truncate min-w-0" title={said.text}>{said.text}</span>
+          <span className="truncate min-w-0" data-tip={tipAttr(said.text)}>{said.text}</span>
           {said.undo && (
-            <Button size="compact" className="shrink-0" disabled={busy} title="Put it back"
+            <Button size="compact" className="shrink-0" disabled={busy} data-tip="Put it back"
               onClick={async () => { setBusy(true); const why = await said.undo!(); setBusy(false); onSaid(why ? { text: why, warn: true } : { text: "Put back" }); }}>Undo</Button>
           )}
           <CloseButton size={ICON.xs} onClick={() => onSaid(null)} title="Dismiss" />
         </span>
       ) : plain}
-      {canAdd && <CommentAction iconOnly label="Add" title={label} d={PLUS} on={open} tone="var(--primary)" onClick={onToggle} />}
+      {canAdd && <span className="contents" data-dock={dock}><CommentAction iconOnly label="Add" title={label} d={PLUS} on={open} tone="var(--primary)" onClick={onToggle} /></span>}
     </span>
+  );
+}
+
+/** An empty section that can take one: a quiet dashed button that opens the form, so the empty line is the way in. Read-only: one grey line. */
+function EmptyAdd({ can, label, onAdd }: { can: boolean; label: string; onAdd: () => void }) {
+  if (!can) return <StateCollapse />;
+  return (
+    <button type="button" onClick={onAdd} className="agx-jd-emptyadd">
+      <span className="agx-jd-emptyadd-go">
+        <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" aria-hidden><path d={PLUS} /></svg>
+        {label}
+      </span>
+    </button>
   );
 }
 
@@ -84,7 +104,7 @@ function Line({ children, busy, ok, onSend, onCancel, sendLabel, error }: {
       <div className="flex items-center gap-2 text-[10.5px]">
         <Button type="submit" size="compact" disabled={!ok || busy}>{busy ? "Saving…" : sendLabel}</Button>
         <Button size="compact" tone="quiet" disabled={busy} onClick={onCancel}>Cancel</Button>
-        {error && <span role="alert" className="min-w-0 truncate" title={error} style={{ color: "var(--error-ink)" }}>{error}</span>}
+        {error && <span role="alert" className="min-w-0 truncate" data-tip={tipAttr(error)} style={{ color: "var(--error-ink)" }}>{error}</span>}
       </div>
     </form>
   );
@@ -100,9 +120,10 @@ export const Ask = ({ children, onYes, onNo, yes, busy }: { children: ReactNode;
 
 // --- sub-tasks --------------------------------------------------------------
 
-export function SubtasksBlock({ rows, parent, writable, act, onMenu }: { rows: ProviderTask[]; parent: ProviderTask; writable: boolean; act: JoinAct; onMenu?: (e: MouseEvent, t: ProviderTask) => void }) {
+export function SubtasksBlock({ rows, parent, writable, act, onMenu, onOpenCard, folded, ask }: { folded?: boolean; ask?: AddAsk;  rows: ProviderTask[]; parent: ProviderTask; writable: boolean; act: JoinAct; onMenu?: (e: MouseEvent, t: ProviderTask) => void; onOpenCard?: (t: ProviderTask) => void }) {
   const canAdd = writable && canHaveSubtasks(parent.issueType);
   const [open, setOpen] = useState(false);
+  useEffect(() => { if (ask?.k === "subtask") setOpen(true); }, [ask?.n]); // eslint-disable-line react-hooks/exhaustive-deps
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -117,23 +138,25 @@ export function SubtasksBlock({ rows, parent, writable, act, onMenu }: { rows: P
     setBusy(false);
     if (why) { setErr(why); return; }
     setSaid({ text: `Sub-task “${title.trim().slice(0, 30)}” added` });
-    setTitle(""); setOpen(false);
+    /* The line stays open for the next one: sub-tasks are written in a run, not one per visit. */
+    setTitle("");
   };
   const rowSaid = (s: string) => setSaid(s === "moving…" ? { text: "Moving…" } : s.startsWith("!") ? { text: s.slice(1), warn: true } : { text: `Moved: ${s}` });
 
+  if (folded && !rows.length && !open) return null;
   return (
     <JiraSection id="subtasks" title="Subtasks" meter={rows.length ? <Progress rows={rows} /> : undefined}
-      aside={<Aside plain={rows.length ? `${done} of ${rows.length} done` : null} said={said} onSaid={setSaid} open={open} onToggle={() => { setOpen((o) => !o); setErr(""); }} label="Add a sub-task" canAdd={canAdd} />}>
+      aside={<Aside plain={rows.length ? <span className="inline-flex items-center gap-1.5"><span aria-hidden className="agx-jd-subbar"><i style={{ width: `${(done / rows.length) * 100}%` }} /></span>{`${done} of ${rows.length} done`}</span> : null} said={said} onSaid={setSaid} open={open} onToggle={() => { setOpen((o) => !o); setErr(""); }} label="Add a sub-task" canAdd={canAdd} dock="subtask" />}>
       {open && (
         <Line busy={busy} ok={parseSubtaskTitle(title).ok} onSend={() => void send()} onCancel={() => { setOpen(false); setErr(""); }} sendLabel="Add" error={err}>
           <input value={title} autoFocus disabled={busy} aria-label="What the sub-task is" placeholder="What needs doing?" maxLength={255}
             onChange={(e) => { setTitle(e.target.value); setErr(""); }} className="w-full text-[11.5px] rounded px-2 py-1.5 outline-none" style={INPUT_STYLE} />
         </Line>
       )}
-      {!rows.length && <div className="text-[11px]" style={{ color: "var(--text4)" }}>No sub-tasks yet.</div>}
+      {!rows.length && !open && <EmptyAdd can={canAdd} label="Add a sub-task" onAdd={() => { setOpen(true); setErr(""); }} />}
       <div className="agx-dk-stack">
         {rows.map((s) => (
-          <CardRow key={s.id} t={s} onMenu={onMenu} tail={writable
+          <CardRow key={s.id} t={s} onMenu={onMenu} onOpen={onOpenCard} meta={<><Pr card={s} /><PeopleFaces people={(s.people ?? []).slice(0, 1)} /></>} tail={writable
             ? <span className="shrink-0"><TrackerStatusPick tracker={TRACKERS.jira} task={s} query={s.customId ?? s.id} onSaid={rowSaid} onTask={act.onRowTask} align="right" chip={22} /></span>
             : undefined} />
         ))}
@@ -144,8 +167,9 @@ export function SubtasksBlock({ rows, parent, writable, act, onMenu }: { rows: P
 
 // --- linked work items ------------------------------------------------------
 
-export function LinkedBlock({ linked, card, writable, act }: { linked: CardLinked[]; card: string; writable: boolean; act: JoinAct }) {
+export function LinkedBlock({ linked, card, writable, act, folded, ask }: { folded?: boolean; ask?: AddAsk;  linked: CardLinked[]; card: string; writable: boolean; act: JoinAct }) {
   const [open, setOpen] = useState(false);
+  useEffect(() => { if (ask?.k === "link") setOpen(true); }, [ask?.n]); // eslint-disable-line react-hooks/exhaustive-deps
   const [kinds, setKinds] = useState<JiraLinkKind[] | null>(null);
   const [kindsErr, setKindsErr] = useState("");
   const [way, setWay] = useState("");
@@ -228,6 +252,7 @@ export function LinkedBlock({ linked, card, writable, act }: { linked: CardLinke
   };
 
   if (!linked.length && !writable) return null;
+  if (folded && !linked.length && !open) return null;
   return (
     <JiraSection id="linked" title="Linked work items" count={linked.length || undefined}
       aside={<Aside plain={null} said={said} onSaid={setSaid} open={open} onToggle={() => (open ? close() : setOpen(true))} label="Link another work item" canAdd={writable} />}>
@@ -240,7 +265,7 @@ export function LinkedBlock({ linked, card, writable, act }: { linked: CardLinke
           {picked ? (
             <div className="flex items-center gap-2 text-[11px] min-w-0">
               <span className="min-w-0 truncate" style={{ color: "var(--text)" }}>{chosen ? linkEffect(card, chosen, other) : other}</span>
-              <Button size="compact" className="shrink-0" onClick={() => setPicked(null)} title="Pick another card">Change</Button>
+              <Button size="compact" className="shrink-0" onClick={() => setPicked(null)} data-tip="Pick another card">Change</Button>
             </div>
           ) : (
             <>
@@ -264,7 +289,7 @@ export function LinkedBlock({ linked, card, writable, act }: { linked: CardLinke
           )}
         </Line>
       )}
-      {!linked.length && <div className="text-[11px]" style={{ color: "var(--text4)" }}>No linked work items.</div>}
+      {!linked.length && !open && <EmptyAdd can={writable} label="Link a work item" onAdd={() => setOpen(true)} />}
       <div className="agx-dk-stack">
       {groupLinked(linked).flatMap((g) => g.rows.map((l) => (
             <div key={l.id}>
@@ -284,8 +309,9 @@ export function LinkedBlock({ linked, card, writable, act }: { linked: CardLinke
 
 // --- web links --------------------------------------------------------------
 
-export function WebLinksBlock({ links, error, writable, card, act }: { links: CardWebLink[] | null; error: string; writable: boolean; card: string; act: JoinAct }) {
+export function WebLinksBlock({ links, error, writable, card, act, folded, ask }: { folded?: boolean; ask?: AddAsk;  links: CardWebLink[] | null; error: string; writable: boolean; card: string; act: JoinAct }) {
   const [open, setOpen] = useState(false);
+  useEffect(() => { if (ask?.k === "web") setOpen(true); }, [ask?.n]); // eslint-disable-line react-hooks/exhaustive-deps
   const [url, setUrl] = useState("");
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
@@ -313,6 +339,7 @@ export function WebLinksBlock({ links, error, writable, card, act }: { links: Ca
     setSaid(why ? { text: why, warn: true } : { text: `${w.host} taken off`, undo: async () => (await act.webAdd(w.url, w.title)).error ?? null });
   };
 
+  if (folded && links !== null && !links.length && !open) return null;
   return (
     <JiraSection id="weblinks" title="Web links" count={links.length || undefined}
       aside={<Aside plain={null} said={said} onSaid={setSaid} open={open} onToggle={() => (open ? close() : setOpen(true))} label="Add a web link" canAdd={writable} />}>
@@ -325,12 +352,12 @@ export function WebLinksBlock({ links, error, writable, card, act }: { links: Ca
             onChange={(e) => setTitle(e.target.value)} className="w-full text-[11.5px] rounded px-2 py-1.5 outline-none" style={INPUT_STYLE} />
         </Line>
       )}
-      {!links.length && !error && <div className="text-[11px]" style={{ color: "var(--text4)" }}>No web links.</div>}
+      {!links.length && !error && !open && <EmptyAdd can={writable} label="Add a web link" onAdd={() => setOpen(true)} />}
       <div className="flex flex-col">
         {links.map((l) => (
           <div key={l.id}>
             <div className="flex items-center gap-2 min-w-0 w-full" style={{ borderBottom: LINE }}>
-              <button onClick={(e) => followLink(l.url, e)} title={l.url} className="agx-btn flex items-center gap-2 min-w-0 flex-1 text-left text-[11px] py-1.5">
+              <button onClick={(e) => followLink(l.url, e)} data-tip={tipAttr({ name: l.url, mono: true })} className="agx-btn flex items-center gap-2 min-w-0 flex-1 text-left text-[11px] py-1.5">
                 <span className="shrink-0 inline-flex items-center justify-center text-[9px] font-medium rounded"
                   style={{ width: ICON.sm, height: ICON.sm, background: "var(--bg4)", color: "var(--text3)" }} aria-hidden>{(l.host[0] ?? "?").toUpperCase()}</span>
                 <span className="flex-1 min-w-0 truncate" style={{ color: "var(--text)" }}>{l.title}</span>

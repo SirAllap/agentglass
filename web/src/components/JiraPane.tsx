@@ -7,22 +7,26 @@ import { rememberTaskSource } from "../lib/taskLanding.ts";
 import { __forgetTrackerSetup } from "../lib/trackerSetup.ts";
 import { PROVIDERS, type JiraStatus, type JiraSteps } from "../../../shared/providers.ts";
 import { SettingRow } from "./SettingRow.tsx";
+import { StateDisconnected, StateError } from "./tasks/BoardState.tsx";
 import { Field, ProblemNote, SettingsCard, SettingsForm, StatusBadge, helpIdFor } from "./SettingsKit.tsx";
 import { useReportProblem, useReportSaving } from "./SettingsPageState.tsx";
 import { problemChip } from "../lib/settingsStates.ts";
 import { Button, INPUT, INPUT_STYLE, Segmented } from "./workspace/Chrome.tsx";
-import { JiraSettingsView } from "./jira/JiraSettingsView.tsx";
+import { JiraSettingsView, type JiraViewProps } from "./jira/JiraSettingsView.tsx";
+import { JiraPairList } from "./jira/JiraPairs.tsx";
 import { WaitingMap } from "./ClickUpPane.tsx";
 import { __forgetJiraUnits, useJiraUnits } from "../lib/jiraUnits.ts";
 import type { StepsPatch } from "../lib/jiraWorkflow.ts";
+import { jiraFields } from "../lib/jiraWorkflow.ts";
 import { noteJiraSteps } from "../lib/jiraStepUi.ts";
 import { PlugIcon } from "./settingsNavIcons.tsx";
+import { AccountsSection } from "./AccountsSection.tsx";
 import { ICON } from "../lib/iconSize.ts";
 
 const SPEC = PROVIDERS.find((p) => p.id === "jira")!;
 
 /** Sign in: the page's face before Jira is connected. Jira's Cloud / Data Center choice comes first because it decides which fields there are. */
-function ConnectCard({ onDone, onCancel }: { onDone: () => void; onCancel?: () => void }) {
+export function ConnectCard({ onDone, onCancel }: { onDone: () => void; onCancel?: () => void }) {
   const [kind, setKind] = useState<"cloud" | "dc">("cloud");
   const [site, setSite] = useState("");
   const [email, setEmail] = useState("");
@@ -44,7 +48,9 @@ function ConnectCard({ onDone, onCancel }: { onDone: () => void; onCancel?: () =
   };
   return (
     <SettingsCard title="Jira" icon={<PlugIcon size={ICON.sm} />} desc="Link it once and a pull request knows its card."
-      status={<StatusBadge tone="off">Not connected</StatusBadge>}>
+      >
+      <StateDisconnected service="Jira" why="Add an API token and a pull request knows its card." connectLabel="Connect"
+        onConnect={() => document.getElementById("jira-site")?.focus()} />
       <SettingRow agentExempt label="Connect with a token" hint={SPEC.what}
         detail={SPEC.note ? { summary: SPEC.noteTitle ?? "Where the token is stored", body: SPEC.note } : undefined}
         below={
@@ -87,7 +93,7 @@ function ConnectCard({ onDone, onCancel }: { onDone: () => void; onCancel?: () =
   );
 }
 
-const EMPTY_STEPS: JiraSteps = { handoff: { enabled: false, blocks: [] }, review: { enabled: false, blocks: [] }, merge: { enabled: false, blocks: [] } };
+const EMPTY_STEPS: JiraSteps = { handoff: { enabled: false, blocks: [] }, review: { enabled: false, blocks: [] }, merge: { enabled: false, blocks: [] }, people: { enabled: false, blocks: [] }, note: { enabled: false, blocks: [] } };
 
 /**
  * Jira's own page: the connection form before Jira is connected, and after it the
@@ -95,7 +101,9 @@ const EMPTY_STEPS: JiraSteps = { handoff: { enabled: false, blocks: [] }, review
  * `tracker` is the per-project tracker choice, drawn between the map and the saved views.
  * Everything saved here is the local settings file; only the switch lets a press write to Jira.
  */
-export function JiraPane({ tracker }: { tracker?: ReactNode }) {
+export type JiraRender = (v: { kind: "out"; connect: ReactNode } | { kind: "on"; v: JiraViewProps; tracker?: ReactNode } | { kind: "replace"; connect: ReactNode }) => ReactNode;
+
+export function JiraPane({ tracker, render }: { tracker?: ReactNode; render?: JiraRender }) {
   const [status, setStatus] = useState<JiraStatus | null>(null);
   const [failed, setFailed] = useState(false);
   const [steps, setSteps] = useState<JiraSteps | null>(null);
@@ -137,15 +145,13 @@ export function JiraPane({ tracker }: { tracker?: ReactNode }) {
     if (failed) {
       return (
         <SettingsCard title="Jira" icon={<PlugIcon size={ICON.sm} />} tone="error" status={<StatusBadge tone="err">Not reachable</StatusBadge>}>
-          <ProblemNote title="Could not read Jira's state" action={<Button onClick={read}>Try again</Button>}>
-            The local server did not answer, so nothing here is known. Nothing was changed.
-          </ProblemNote>
+          <StateError title="Could not read Jira's state" cause="The local server did not answer, so nothing here is known. Nothing was changed." onRetry={read} />
         </SettingsCard>
       );
     }
     return <div className="py-6 text-[11px]" style={{ color: "var(--text3)" }}>Reading your settings…</div>;
   }
-  if (!connected) return <div className="wfm"><ConnectCard onDone={read} /><WaitingMap name="Jira" /></div>;
+  if (!connected) return render ? <>{render({ kind: "out", connect: <><ConnectCard onDone={read} /><WaitingMap name="Jira" /></> })}</> : <div className="wfm"><ConnectCard onDone={read} /><WaitingMap name="Jira" /></div>;
 
   const writes = settings ? settings.writes : status.writes;
   const setWrites = async (on: boolean) => {
@@ -194,12 +200,24 @@ export function JiraPane({ tracker }: { tracker?: ReactNode }) {
     closeSettings();
   };
 
-  if (replacing) return <div className="wfm"><ConnectCard onDone={() => { setReplacing(false); read(); }} onCancel={() => setReplacing(false)} /></div>;
+  if (replacing) {
+    const form = <ConnectCard onDone={() => { setReplacing(false); read(); }} onCancel={() => setReplacing(false)} />;
+    return render ? <>{render({ kind: "replace", connect: form })}</> : <div className="wfm">{form}</div>;
+  }
+  if (render) {
+    return <>{render({ kind: "on", tracker, v: { status, writes, writesBusy: busy, steps, overrides, units, views, note,
+      tracker, pairs: status?.connected ? <JiraPairList /> : null, busy, fields: jiraFields,
+      onWrites: (on) => void setWrites(on), onWriteKind: (k, on) => void setWriteKind(k, on), onReplace: () => setReplacing(true), onSteps: saveSteps, onReread: reread,
+      onClearOverride: (k) => void clearOverride(k), onOpenTab: openTab, onDisconnect: () => void disconnect() } })}</>;
+  }
 
   return (
-    <JiraSettingsView status={status} writes={writes} writesBusy={busy} steps={steps} overrides={overrides} units={units} views={views} note={note}
-      tracker={tracker} busy={busy}
-      onWrites={(on) => void setWrites(on)} onWriteKind={(k, on) => void setWriteKind(k, on)} onReplace={() => setReplacing(true)} onSteps={saveSteps} onReread={reread}
-      onClearOverride={(k) => void clearOverride(k)} onOpenTab={openTab} onDisconnect={() => void disconnect()} />
+    <>
+      <JiraSettingsView status={status} writes={writes} writesBusy={busy} steps={steps} overrides={overrides} units={units} views={views} note={note}
+        tracker={tracker} pairs={status?.connected ? <JiraPairList /> : null} busy={busy} fields={jiraFields}
+        onWrites={(on) => void setWrites(on)} onWriteKind={(k, on) => void setWriteKind(k, on)} onReplace={() => setReplacing(true)} onSteps={saveSteps} onReread={reread}
+        onClearOverride={(k) => void clearOverride(k)} onOpenTab={openTab} onDisconnect={() => void disconnect()} />
+      <AccountsSection provider="jira" label="Jira" onChanged={() => { __forgetTrackerSetup(); __forgetJiraUnits(); reread(); }} />
+    </>
   );
 }

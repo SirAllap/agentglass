@@ -160,15 +160,12 @@ describe("the scope is remembered", () => {
     expect(() => rememberScope(null, "/w/acme")).not.toThrow();
   });
   test("the page opens on the remembered scope and stores each choice", () => {
-    expect(PANE).toContain("useState(() => recallScope(storage()) ?? \"\")");
-    expect(PANE).toContain("rememberScope(storage(), r)");
+    // The shared hook remembers the choice; the pane reads the root from it.
+    const HOOK = readFileSync(join(DIR, "..", "settings", "scope", "useScope.ts"), "utf8");
+    expect(HOOK).toContain("recallScope(store())");
+    expect(HOOK).toContain("rememberScope(store(), root)");
+    expect(PANE).toContain("useScope()");
     expect(PANE).toContain("onRoot={pick}");
-    expect(PANE).toContain("if (!chosen.current) setRoot(openingScope(");
-  });
-  test("a project with its own setting has a dot and says so in its title", () => {
-    const html = view({ projects: ["/w/orbit", "/w/acme"], overrides: ["/w/orbit"] });
-    expect(html).toContain(`/w/orbit — ${OWN_SETTING}`);
-    expect(html).not.toContain(`/w/acme — ${OWN_SETTING}`);
   });
 });
 
@@ -245,46 +242,23 @@ describe("undo", () => {
 });
 
 describe("the project bar", () => {
-  const BAR = strip(readFileSync(join(DIR, "ScopeBar.tsx"), "utf8"));
-  test("it is the first thing on the page and sticks to the top of it", () => {
-    const html = view({ projects: ["/w/orbit"], root: "/w/orbit", scope: "project", overrides: ["/w/orbit"] });
+  const BAR = strip(readFileSync(join(DIR, "OrchestrationPane.tsx"), "utf8"));
+  test("it is the first thing on the page and holds the shared control, not pills", () => {
+    const html = view({ projects: ["/w/orbit"], root: "/w/orbit", scope: "project" });
     expect(html.indexOf("data-scope-bar")).toBeGreaterThan(-1);
-    expect(html.indexOf("data-scope-bar")).toBeLessThan(html.indexOf(`role="tablist"`));
-    expect(BAR).not.toContain("Applies to");
-    expect(BAR).toMatch(/className="sticky /);
-    expect(BAR).toContain("--orch-stick");
+    expect(html.indexOf("data-scope-bar")).toBeLessThan(html.indexOf('data-section="session"'));
+    expect(BAR).toContain("ScopeControl");
+    expect(BAR).not.toContain("OrchSeg");
+    expect(BAR).not.toContain("<ScopeStrip");
   });
-  test("it pins at the frame's published offset, not at a number of its own", () => {
-    // The band's height is measured, so the bar's offset is a property of the
-    // frame's stack; a literal here is the hand-stacked pair this replaced.
-    expect(BAR).toContain('top: "var(--agx-pin-top, 0px)"');
-    expect(BAR).toContain("--orch-stick");
-    const header = readFileSync(join(import.meta.dir, "..", "src", "components", "SettingsPageHeader.tsx"), "utf8");
-    expect(header).not.toContain("--agx-ph-h");
-    const modal = readFileSync(join(import.meta.dir, "..", "src", "components", "SettingsModal.tsx"), "utf8");
-    expect(modal).toMatch(/data-settings-scroll/);
-    expect(modal).toMatch(/className="agx-settings-scroll[^"]*"/);
-    expect(modal).not.toMatch(/className="agx-settings-main [^"]*overflow-y-auto"/);
-  });
-  test("the bar's height is published, and no card adds a second offset of its own", () => {
-    expect(BAR).toContain('setProperty("--orch-stick"');
-    const css = readFileSync(join(import.meta.dir, "..", "src", "index.css"), "utf8");
-    // The landing is the scroll region's, derived from the published stack.
-    expect(css).not.toContain("scroll-margin-top");
-    expect(css).toMatch(/\.agx-settings-scroll \{[^}]*scroll-padding-top: calc\(var\(--agx-pin-stack\)/);
-  });
-  test("a project on the general setting offers to get its own, one with its own offers the way back", () => {
+  test("a project on the general setting is edited in place; the way back is the row's Reset, not a banner", () => {
     const inherited = view({ projects: ["/w/orbit"], root: "/w/orbit", scope: "global" });
-    const bar = inherited.slice(inherited.indexOf("data-scope-bar"), inherited.indexOf(`role="tablist"`));
-    expect(bar).toContain("Make it specific to orbit");
-    expect(bar).not.toContain("Use the general setting");
-    expect(inherited).toContain("orbit uses the general setting");
-    const own = view({ projects: ["/w/orbit"], root: "/w/orbit", scope: "project", overrides: ["/w/orbit"] });
-    expect(own).toContain("Use the general setting");
-    expect(own).toContain("orbit has its own settings");
-    const all = view();
-    expect(all).not.toContain("Use the general setting");
-    expect(all).toContain("The setting every project without its own uses");
+    expect(inherited).not.toContain("Make it specific to orbit");
+    expect(inherited).not.toContain("orbit uses the general setting");
+    const own = view({ projects: ["/w/orbit"], root: "/w/orbit", scope: "project" });
+    expect(own).not.toContain("Use the general setting");
+    expect(own).not.toContain("orbit has its own settings");
+    expect(view()).toContain("Applies to");
   });
   test("a settings search that is listing rows leaves the bar out, and one that is not leaves it in", () => {
     const el = React.createElement(OrchestrationView, {
@@ -297,7 +271,7 @@ describe("the project bar", () => {
   });
   test("a refusal of the change shows inside the bar", () => {
     const html = view({ projects: ["/w/orbit"], root: "/w/orbit", notes: { scope: "Could not save." } });
-    const bar = html.slice(html.indexOf("data-scope-bar"), html.indexOf("Right now"));
+    const bar = html.slice(html.indexOf("data-scope-bar"), html.indexOf("data-hero"));
     expect(bar).toContain("Could not save.");
   });
 });

@@ -339,7 +339,22 @@ export function buildRollups(sessions: SessionRollup[]): RollupLookup {
 const weighted = (r: { equiv_tokens?: number; input_tokens: number; output_tokens: number }): number =>
   r.equiv_tokens ?? r.input_tokens + r.output_tokens;
 
+/**
+ * The part of the fleet fold that depends only on the buffer: grouping and
+ * sorting the events, the open-tool pairing, the roll-up merge. The cards in
+ * it carry no verdict that is a function of the clock. `settleAgents` adds
+ * that, cheaply, so the 10 s tick does not re-fold the events.
+ */
+export interface AgentBase { cards: AgentCard[]; recent: Map<string, number[]> }
+
+const SPARK_BUCKET_MS = 3000;
+const SPARK_WINDOW_MS = 20 * SPARK_BUCKET_MS;
+
 export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [], titles?: TitleLookup, rollups?: RollupLookup): AgentCard[] {
+  return settleAgents(deriveAgentsBase(events, openTools, titles, rollups));
+}
+
+export function deriveAgentsBase(events: WatchEvent[], openTools: OpenToolCall[] = [], titles?: TitleLookup, rollups?: RollupLookup): AgentBase {
   const now = Date.now();
   const map = new Map<string, AgentCard>();
   // Subagents fold into their parent session_id but carry agent_id/agent_type,
@@ -467,12 +482,14 @@ export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [
     }
   }
 
-  // Spark buckets over the last 20 * 3s = 60s window.
-  const bucketMs = 3000;
+  // Spark: only the timestamps inside the last 60 s are kept; settleAgents
+  // buckets them against the clock of the moment.
+  const recent = new Map<string, number[]>();
   for (const e of events) {
-    const a = map.get(agentKey(e))!;
-    const idx = 19 - Math.floor((now - e.timestamp) / bucketMs);
-    if (idx >= 0 && idx < 20) a.spark[idx]++;
+    if (now - e.timestamp >= SPARK_WINDOW_MS) continue;
+    const k = agentKey(e);
+    const arr = recent.get(k);
+    if (arr) arr.push(e.timestamp); else recent.set(k, [e.timestamp]);
   }
 
   for (const a of map.values()) {
@@ -492,6 +509,35 @@ export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [
       a.tokens = Math.max(a.tokens, weighted(r));
       a.tools = Math.max(a.tools, r.tool_count);
       if (r.risks) a.risks = r.risks;
+    }
+    a.ctxLimit = ctxLimitOf(a.model_name, a.ctxTokens);
+
+    const m = subs.get(a.key);
+    if (m) {
+      a.subagents = m.size;
+      const byType = new Map<string, number>();
+      for (const type of m.values()) byType.set(type, (byType.get(type) ?? 0) + 1);
+      a.subagentTypes = [...byType.entries()].sort((x, y) => y[1] - x[1]);
+    }
+  }
+
+  // Applied at the end rather than in blankCard: a card is created from the
+  // first event seen, which can be before the sessions poll has ever answered.
+  if (titles) for (const a of map.values()) a.title = titles.get(a.session_id);
+  return { cards: [...map.values()].sort((a, b) => b.lastSeen - a.lastSeen), recent };
+}
+
+/**
+ * The verdicts that are a function of the clock — spark buckets, idle, stalled,
+ * the running-tool note, the outcome — put on copies of the base cards. One
+ * pass over the agents, none over the events, so it is the part a tick re-runs.
+ */
+export function settleAgents(base: AgentBase, now = Date.now()): AgentCard[] {
+  return base.cards.map((card) => {
+    const a: AgentCard = { ...card, spark: new Array(20).fill(0) };
+    for (const t of base.recent.get(a.key) ?? []) {
+      const idx = 19 - Math.floor((now - t) / SPARK_BUCKET_MS);
+      if (idx >= 0 && idx < 20) a.spark[idx]++;
     }
     const since = now - a.lastSeen;
     // A session that ended can't still be running a tool, whatever pair we
@@ -550,22 +596,8 @@ export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [
         : " · still working";
       a.lastAction = `running ${a.runningTool} · ${fmtMs(openFor)}${note}`;
     }
-
-    a.ctxLimit = ctxLimitOf(a.model_name, a.ctxTokens);
-
-    const m = subs.get(a.key);
-    if (m) {
-      a.subagents = m.size;
-      const byType = new Map<string, number>();
-      for (const type of m.values()) byType.set(type, (byType.get(type) ?? 0) + 1);
-      a.subagentTypes = [...byType.entries()].sort((x, y) => y[1] - x[1]);
-    }
-  }
-
-  // Applied at the end rather than in blankCard: a card is created from the
-  // first event seen, which can be before the sessions poll has ever answered.
-  if (titles) for (const a of map.values()) a.title = titles.get(a.session_id);
-  return [...map.values()].sort((a, b) => b.lastSeen - a.lastSeen);
+    return a;
+  });
 }
 
 export interface Alert {

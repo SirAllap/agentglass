@@ -12,7 +12,7 @@
 // terminal that is printing its log, is the whole reason the ports panel exists
 // rather than being a nicer `ss`.
 
-export type BrowserNav = { url: string; n: number };
+export type BrowserNav = { url: string; n: number; /** Who must bring the browser on screen: the view, or nobody (the caller did). */ goto?: "view" };
 
 let pending: BrowserNav | null = null;
 const subs = new Set<() => void>();
@@ -27,8 +27,8 @@ export function browserNav(): BrowserNav | null { return pending; }
 /** `n` increments so asking for the same address twice is two requests —
  *  otherwise navigating away and clicking the same port again would be
  *  indistinguishable from the request already served. */
-export function requestBrowserNav(url: string): void {
-  pending = { url, n: (pending?.n ?? 0) + 1 };
+export function requestBrowserNav(url: string, goto?: "view"): void {
+  pending = { url, n: (pending?.n ?? 0) + 1, ...(goto ? { goto } : null) };
   subs.forEach((f) => f());
 }
 

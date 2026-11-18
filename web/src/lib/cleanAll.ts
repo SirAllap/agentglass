@@ -10,11 +10,12 @@
 import { humanSize } from "../../../shared/dockerSize.ts";
 import { api } from "./api.ts";
 import { beginRun, endRun } from "./cleanupEvents.ts";
-import { blockViews, defaultOff, excludeOf, plural, type Report } from "./cleanupPr.ts";
-import type { LeftoverState } from "./leftovers.ts";
+import { blockViews, defaultOff, excludeOf, groupOf, plural, type Report } from "./cleanupPr.ts";
+import { failureLine, type LeftoverState } from "./leftovers.ts";
 
 export interface CleanTarget { pr: number; items: number; bytes: number; /** Closed without merging: its branches and stashes stay, and the dialog's confirmation is what lets it run at all. */ closedUnmerged: boolean }
-export interface CleanFailure { pr: number; why: string }
+/** `short` is the few words beside the number; `why` is the whole reason, for the tip. `partly`: some of it was cleaned. */
+export interface CleanFailure { pr: number; why: string; short?: string; partly?: boolean }
 export interface CleanSummary { done: number; freed: number; failed: CleanFailure[] }
 
 /** The finished pull requests whose inventory says something is left, in the order given. */
@@ -42,8 +43,20 @@ export const confirmBody = (t: readonly CleanTarget[]): string => {
 
 export const progressWord = (at: number, of: number): string => `Cleaning ${at} of ${of}…`;
 
-export const summaryWord = (s: CleanSummary): string =>
-  [`Cleaned ${plural(s.done, "pull request")}`, ...(s.freed > 0 ? [`${humanSize(s.freed)} freed`] : []), ...(s.failed.length ? [`${s.failed.length} not cleaned`] : [])].join(" · ");
+/**
+ * A pull request whose run removed some items and kept others is "partly cleaned", not "not cleaned": with one
+ * word for both, a run that freed most of six checkouts read "Cleaned 0 pull requests · 6 not cleaned".
+ */
+export const summaryWord = (s: CleanSummary): string => {
+  const partly = s.failed.filter((f) => f.partly).length, not = s.failed.length - partly;
+  return [`Cleaned ${plural(s.done, "pull request")}`, ...(s.freed > 0 ? [`${humanSize(s.freed)} freed`] : []),
+    ...(partly ? [`${partly} partly cleaned`] : []), ...(not ? [`${not} not cleaned`] : [])].join(" · ");
+};
+
+/** "#12: the teardown script stopped, #15: blocked": the reason beside each number, in the summary itself. */
+export const failedList = (s: CleanSummary): string => s.failed.map((f) => `#${f.pr}${f.short ? `: ${f.short}` : ""}`).join(", ");
+/** One line per pull request with its whole reason, for the tip. */
+export const failedTip = (s: CleanSummary): string => s.failed.map((f) => `#${f.pr}: ${f.why}`).join("\n");
 
 /** Runs them one by one. A failure is recorded and the next one still runs. `onStep(n)` is called before the n-th (1-based). */
 export async function cleanAll(repo: string, prs: readonly number[], onStep: (n: number) => void = () => {}): Promise<CleanSummary> {
@@ -55,17 +68,22 @@ export async function cleanAll(repo: string, prs: readonly number[], onStep: (n:
     let began = false;
     try {
       const r = await api.cleanupPlan(repo, pr);
-      if (!r.ok || !r.plan) { sum.failed.push({ pr, why: r.error ?? "The plan could not be read." }); continue; }
+      if (!r.ok || !r.plan) { sum.failed.push({ pr, short: "its plan could not be read", why: r.error ?? "The plan could not be read." }); continue; }
       const block = blockViews(r.plan)[0];
-      if (block) { sum.failed.push({ pr, why: `Blocked: ${block.title}.` }); continue; }
-      if (!beginRun(repo, pr)) { sum.failed.push({ pr, why: "Already being cleaned up." }); continue; }
+      if (block) { sum.failed.push({ pr, short: `blocked: ${block.title}`, why: `Blocked: ${block.title}.` }); continue; }
+      if (!beginRun(repo, pr)) { sum.failed.push({ pr, short: "already being cleaned", why: "Already being cleaned up." }); continue; }
       began = true;
       /* The dialog's own default selection: a pull request closed without merging keeps its branches and stashes, and the
          person's "Clean up all" is the confirmation its run needs. */
       const out = await api.cleanupRun(repo, pr, r.plan.id, excludeOf(r.plan, defaultOff(r.plan)), r.plan.notMerged);
-      if (out.items) { report = out as Report; sum.freed += report.freedBytes; if (report.failed > 0) sum.failed.push({ pr, why: `${plural(report.failed, "item")} failed.` }); else sum.done++; }
-      else sum.failed.push({ pr, why: out.error ?? "The cleanup was refused." });
-    } catch (e) { sum.failed.push({ pr, why: String((e as Error).message ?? e) }); }
+      /* A report is an answer whatever the HTTP status was: its items say what went and what stayed, and why. */
+      if (out.items) {
+        report = out as Report; sum.freed += report.freedBytes;
+        const f = report.failed > 0 ? failureLine(report.items) : null;
+        if (report.failed > 0) sum.failed.push({ pr, short: f?.short ?? `${plural(report.failed, "item")} failed`, why: `${f?.why ?? `${plural(report.failed, "item")} failed`}.`, partly: report.items.some((i) => i.status === "done" && groupOf(i.kind)) });
+        else sum.done++;
+      } else sum.failed.push({ pr, short: "refused", why: out.error ?? "The cleanup was refused." });
+    } catch (e) { sum.failed.push({ pr, short: "the run did not answer", why: String((e as Error).message ?? e) }); }
     finally { if (began) endRun(repo, pr, report); } // the cards refresh on this, as for any run
   }
   return sum;

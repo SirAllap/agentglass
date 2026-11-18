@@ -103,9 +103,9 @@ export function stackSummary(cs: DockerContainer[]) {
   return { up, total: cs.length, need, text: `${up}/${cs.length} up${need ? ` · ${need} ${need === 1 ? "needs" : "need"} you` : ""}` };
 }
 
-export type SquareTone = "up" | "need" | "restart" | "pause" | "stop" | "made";
+export type SquareTone = "up" | "need" | "crash" | "restart" | "pause" | "stop" | "made";
 export const SQUARE_TONE: Record<ContainerKind, SquareTone> = {
-  up: "up", healthy: "up", unhealthy: "need", crash: "need", dead: "need", restarting: "restart", paused: "pause", stop: "stop", made: "made",
+  up: "up", healthy: "up", unhealthy: "need", crash: "crash", dead: "need", restarting: "restart", paused: "pause", stop: "stop", made: "made",
 };
 
 /** One square per container, the ones that need you first. Squares outside the

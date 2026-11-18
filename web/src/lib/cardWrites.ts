@@ -31,6 +31,8 @@
 // what happened.
 
 import type { ProviderTask } from "../../../shared/providers.ts";
+import { CLICKUP_READ_ONLY, clickupReadOnly } from "../../../shared/clickupWrites.ts";
+import { whatMoved } from "./conflictSentence.ts";
 
 /** What a disabled write control says. One sentence, the same on every control. */
 export const WRITES_OFF = "Changes to ClickUp are off. Turn them on in Tasks.";
@@ -56,6 +58,8 @@ export function writeBlock(setup: { writeEnabled?: boolean } | null | undefined)
 }
 
 export const JIRA_WRITES_OFF = "Changes to Jira are off. Turn them on in Tasks.";
+
+export { CLICKUP_READ_ONLY, clickupReadOnly };
 
 /** The same, for a card whose tracker is known: Jira has its own switch, and
  *  reading the ClickUp one told a Jira card that ClickUp was off. */
@@ -172,7 +176,7 @@ export class CardWrites {
           this.host.onRollback?.(write);
           this.host.onNote({
             ok: false,
-            text: r.error ?? (r.conflict ? "Somebody changed that card while you had it open" : "That did not go through"),
+            text: r.conflict ? (whatMoved(r.error) ?? r.error ?? "Somebody changed that card while you had it open") : (r.error ?? "That did not go through"),
           });
           // A refusal tells us nothing reliable about the stamp: re-read it.
           this.stamps.delete(write.id);

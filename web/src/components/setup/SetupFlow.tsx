@@ -28,27 +28,29 @@ import { ToolsStep } from "./ToolsStep.tsx";
 import { ReposStep, type ReposFrame } from "./ReposStep.tsx";
 import { ProjectFinder } from "./ProjectFinder.tsx";
 import { FirstWorkStep, type FirstWorkFrame } from "./FirstWorkStep.tsx";
-import { addedRoots, skipAction } from "../../lib/setupRepos.ts";
+import { ChecksStep } from "./ChecksStep.tsx";
+import { addedRoots, footerMove } from "../../lib/setupRepos.ts";
 
 export interface SetupStep {
-  id: "agent" | "theme" | "tools" | "repos" | "first";
+  id: "agent" | "theme" | "tools" | "repos" | "first" | "checks";
   title: string;
   sub: string;
 }
 
-/** The five steps, in the order the rail and the reading order draw them. */
+/** The six steps, in the order the rail and the reading order draw them. */
 export const SETUP_STEPS: readonly SetupStep[] = [
   { id: "agent", title: "Your agent", sub: "One CLI to start" },
   { id: "theme", title: "Theme", sub: "How it looks" },
   { id: "tools", title: "Tools", sub: "What this machine has" },
   { id: "repos", title: "Repositories", sub: "Bring your code in" },
   { id: "first", title: "First terminal", sub: "Start working" },
+  { id: "checks", title: "Checks", sub: "Is it all working" },
 ];
 
 /** What the footer's left button says, per step: the mock's own words. */
 export function skipLabel(step: number): string {
   if (step === 0) return "Skip setup";
-  if (step === SETUP_STEPS.length - 1) return "Not now";
+  if (step >= SETUP_STEPS.length - 2) return "Not now";
   return "Skip for now";
 }
 
@@ -75,7 +77,9 @@ export function SetupFlow({ state, onDone }: {
   const [scanTicked, setScanTicked] = useState<string[]>([]);
   /** What is already open, so the Finder adds rather than replaces. */
   const [open, setOpen] = useState<string[]>([]);
-  /** The last step's own frame: its tally and the words on the primary. */
+  /** Step 6 counts the checks still red; Finish never waits on them. */
+  const [checks, setChecks] = useState(0);
+  /** Step 5's own frame: its tally and the words on the primary. */
   const [first, setFirst] = useState<FirstWorkFrame | null>(null);
   /** Continue asks the step for its one write, if it has one. */
   const commit = useRef<(() => Promise<boolean>) | null>(null);
@@ -128,21 +132,28 @@ export function SetupFlow({ state, onDone }: {
     onDone(finished ? "Setup finished" : "Setup skipped", finished);
   };
 
-  const next = async () => {
-    if (commit.current) {
-      const ok = await commit.current();
-      if (!ok) return;
+  /** A commit in the air: Ctrl+Enter twice must not open two terminals. */
+  const going = useRef(false);
+  const last = SETUP_STEPS.length - 1;
+  const blocked = step === 3 ? repos.blocked : step === 4 ? (first?.blocked ?? true) : false;
+
+  const move = async (via: "primary" | "skip") => {
+    const m = footerMove({ via, step, last, blocked, going: going.current });
+    if (m === "none") return;
+    if (m === "finish") { finish(false); return; }
+    if (m === "commit" && commit.current) {
+      going.current = true;
+      try {
+        if (!(await commit.current())) return;
+      } finally { going.current = false; }
     }
     if (step === 0) void api.settingsDoorSet("setup.inProgress", true).catch(() => {});
-    if (step === SETUP_STEPS.length - 1) { finish(true); return; }
-    setStep((n) => Math.min(n + 1, SETUP_STEPS.length - 1));
+    if (step === last && m === "commit") { finish(true); return; }
+    setStep((n) => Math.min(n + 1, last));
   };
-
-  const skip = () => {
-    // `Skip for now` on a middle step leaves the setup open, so a reload resumes it.
-    if (skipAction(step, SETUP_STEPS.length - 1) === "advance") { void next(); return; }
-    finish(false);
-  };
+  const next = () => move("primary");
+  // `Skip for now` on a middle step leaves the setup open, so a reload resumes it.
+  const skip = () => { void move("skip"); };
 
   // Ctrl+Enter presses the step's own primary. Esc is not a skip: with no sheet
   // open it does nothing, which is what today's app already does.
@@ -186,9 +197,10 @@ export function SetupFlow({ state, onDone }: {
       ? <><b>{repos.tally.n}</b> of {repos.tally.of} {repos.tally.of === 1 ? "repository" : "repositories"}</>
       : step === 4 && first?.tally != null
         ? <><b>{first.tally}</b> {first.tally === 1 ? "project" : "projects"} ready</>
-        : <><b>{step + 1}</b> of {SETUP_STEPS.length}</>;
-  const primary = step === 4 && first ? first.primary : "Continue";
-  const blocked = step === 3 ? repos.blocked : step === 4 ? (first?.blocked ?? true) : false;
+        : step === 5
+          ? (checks > 0 ? <><b>{checks}</b> need{checks === 1 ? "s" : ""} you</> : <>All working</>)
+          : <><b>{step + 1}</b> of {SETUP_STEPS.length}</>;
+  const primary = step === 4 && first ? first.primary : step === SETUP_STEPS.length - 1 ? "Finish" : "Continue";
 
   return (
     <div className="setup-shell">
@@ -241,6 +253,7 @@ export function SetupFlow({ state, onDone }: {
             {step === 4 && (
               <FirstWorkStep state={state} agent={agent} onFrame={setFirst} onCommit={(fn) => { commit.current = fn; }} onBack={() => setStep(3)} />
             )}
+            {step === 5 && <ChecksStep picked={agent} onNeeds={setChecks} />}
           </div>
         </div>
         <div className="setup-foot">

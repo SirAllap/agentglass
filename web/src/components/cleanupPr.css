@@ -148,10 +148,14 @@
 .agx-cp { --cd-accent: var(--merged); flex: 1 1 280px; min-width: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; } /* the merge dock's row: it takes what the reason sentence leaves */
 .agx-cp-fl { flex: 1 1 160px; min-width: 0; display: flex; align-items: center; gap: 7px; color: var(--text3); font-size: 11.5px; }
 .agx-cp-fl svg { color: var(--success); flex: none; }
+.agx-cp-fl[data-wait] { flex-basis: 100%; color: var(--text2); } /* the sentence is a line of its own, and the button keeps its width beside it */
+.agx-cp-fl[data-wait] svg { color: var(--merged); }
 .agx-cp-badge { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 7px; border-radius: 5px; font-size: 10.5px; line-height: 1; white-space: nowrap; flex: none; color: var(--tint, var(--text3)); background: color-mix(in srgb, var(--tint, var(--text3)) 11%, transparent); }
 .agx-cp-badge[data-tone="lo"] { --tint: var(--primary); }
 .agx-cp-badge[data-tone="warn"] { --tint: var(--warning); }
 .agx-cp-badge[data-tone="none"] { background: transparent; color: var(--text3); border: 1px dashed var(--border); }
+.agx-cp-badge[data-tone="run"] { --tint: var(--merged); }
+.agx-cp-badge[data-tone="ok"] { --tint: var(--success); }
 .agx-cp-btn { height: 26px; min-width: 224px; justify-content: center; } /* one width in every state: loading, error and ready never move the row; 26 is HIT, the height of every other control in the dock */
 .agx-cp-btn[data-strong] { background: color-mix(in srgb, var(--error) 8%, var(--surface-card)); border-color: color-mix(in srgb, var(--error) 45%, transparent); color: var(--error); }
 

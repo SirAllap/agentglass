@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
-  flightGroups, flightItems, flightNow, goSentence, stateOf, stateSentence, handledLine, hhmm, needsLabel, nextWaiting, rowAction, rowMeta, stationsFor, stationsOf, stripCounts, stripFor,
+  flightGroups, flightItems, flightNow, flyingTail, goSentence, stateOf, stateSentence, handledLine, hhmm, needsLabel, nextWaiting, preflightCount, rowAction, rowMeta, stationsFor, stationsOf, stripCounts, stripFor,
   type FlightItem, type GroupId, type PilotQuestion, type PilotSnapshot, type StateId, type StateTone,
 } from "../src/lib/flightPilot.ts";
 import type { Plan, Run } from "../src/lib/flightPlan.ts";
@@ -43,6 +43,13 @@ describe("stations", () => {
     const landed = item({ plan: plan({ state: "launched" }), landedAt: NOW });
     expect(stationsOf(landed, snap()).every((x) => x.state === "done")).toBe(true);
   });
+  test("a plan closed with Land reads Landed and sits in Landed today, whatever its stored state or linked worker", () => {
+    for (const state of ["ready", "go", "launched"] as const) {
+      const it = item({ plan: plan({ state }), landedAt: NOW - 60_000, facts: { worker: "ended" } });
+      expect(stateOf(it, snap(), NOW).id).toBe("landed");
+      expect(flightGroups([it], NOW, snap()).landed).toHaveLength(1);
+    }
+  });
   test("a text alternative names each station and who did it", () => {
     const label = trackLabel(stationsFor(plan(), run(), { pilot: "copilot", asking: true }));
     expect(label).toBe("Write done by orchestrator, Review done by reviewer, Question waiting on you, Build not yet, Check not yet, Merge not yet");
@@ -66,6 +73,22 @@ describe("the row", () => {
   test("without the engine's facts a row still says what the plan says", () => {
     expect(flightNow(item({ plan: plan({ state: "draft" }), run: null }), snap(), NOW).bold).toBe("Writing the plan");
     expect(flightNow(item({ plan: plan({ state: "launched" }) }), snap(), NOW).bold).toBe("Building");
+  });
+  test("waiting for the orchestrator never says \"0 findings\" / Go when its last Preflight has an open blocker; an open Ask is the person's", () => {
+    const clean = flightNow(item(), snap({ pilot: "autopilot" }), NOW);
+    expect(clean).toMatchObject({ sub: "Preflight is done.", next: "the orchestrator says Go (Autopilot)" });
+    const blocked = flightNow(item({ run: run([{ id: "F1", severity: "blocker", action: null }, { id: "F2", severity: "major", action: "fix" }]) }), snap({ pilot: "autopilot" }), NOW);
+    expect(blocked).toMatchObject({ sub: "1 blocker open.", next: "the orchestrator answers 1 finding" });
+    const asked = flightNow(item({ run: run([{ id: "F1", severity: "major", action: "ask" }]) }), snap({ pilot: "autopilot" }), NOW);
+    expect(asked).toMatchObject({ next: "you answer 1 question" });
+  });
+  test("a failed or declined Preflight never reads as done with 0 findings", () => {
+    const failed = flightNow(item({ run: { ...run(), state: "failed", certificate: null, error: "reviewer crashed: out of memory" } }), snap({ pilot: "autopilot" }), NOW);
+    expect(failed).toMatchObject({ sub: "Preflight failed: reviewer crashed: out of memory.", next: "the orchestrator runs Preflight again" });
+    const declined = flightNow(item({ run: { ...run(), state: "declined", certificate: null, error: null } }), snap({ pilot: "autopilot" }), NOW);
+    expect(declined).toMatchObject({ sub: "Preflight was declined.", next: "the orchestrator runs Preflight again" });
+    const done = flightNow(item({ run: run() }), snap({ pilot: "autopilot" }), NOW);
+    expect(done).toMatchObject({ sub: "Preflight is done.", next: "the orchestrator says Go (Autopilot)" });
   });
   test("the meta line: who started it, or which builder has it; S plans say they skip Preflight", () => {
     expect(rowMeta(item({ plan: plan({ decision: { by: "coordinator:orbit", at: NOW } }) }))).toMatchObject({ who: `started ${hhmm(NOW - 9e5)} · Go by the orchestrator`, project: "acme/orbit", builder: null });
@@ -421,6 +444,17 @@ describe("the four groups and what is counted", () => {
     const list = readFileSync(new URL("../src/components/flightPlan/FlightList.tsx", import.meta.url), "utf8");
     expect(list).not.toContain("flyingLine");
     expect(list).toContain("stripCounts(");
+  });
+  test("the Flying heading says the live count once, and only a Preflight is \"more\"", () => {
+    const reviewing = item({ plan: plan({ id: "pf", state: "ready" }), run: { ...run(), state: "running" } as Run });
+    const checking = item({ plan: plan({ id: "ck", state: "launched" }), facts: { phase: "checking" } });
+    expect(preflightCount([reviewing, checking], NOW, snap({ pilot: "autopilot" }))).toBe(1);
+    expect(flyingTail(0, 2)).toBe("0 builders live · 2 more in Preflight and checking");
+    expect(flyingTail(1, 0)).toBe("1 builder live");
+    const list = readFileSync(new URL("../src/components/flightPlan/FlightList.tsx", import.meta.url), "utf8");
+    expect(list).toContain("flyingTail(live, more)");
+    expect(list).toContain("preflightCount(items, now, snap)");
+    expect(list).not.toContain('id === "fly" ? live');
   });
   test("the strip sentence of every mode says live and ground", () => {
     const c = stripCounts(rows, NOW, snap({ pilot: "autopilot" }));

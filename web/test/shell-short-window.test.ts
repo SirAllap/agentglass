@@ -16,6 +16,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ICON } from "../src/lib/iconSize.ts";
+import { railTrim, VIEW_SLOT } from "../src/lib/settingsNav.ts";
 
 const root = join(import.meta.dir, "..");
 const read = (f: string) => readFileSync(join(root, f), "utf8");
@@ -38,7 +39,16 @@ describe("the shell on a window shorter than the app", () => {
 
 describe("the rail in the same window", () => {
   test("the strip scrolls, so the cluster at the bottom is reachable", () => {
-    expect(RAIL).toContain('className="shrink-0 flex flex-col gap-1 p-2 overflow-y-auto agw-noscrollbar"');
+    expect(RAIL).toContain('className="flex-1 shrink-0 basis-0 flex flex-col gap-1 px-2 pt-2 overflow-y-auto agw-noscrollbar agw-rail-snap"');
+  });
+
+  test("only the top groups scroll, trimmed to whole icons with the shared helper; the bottom cluster is pinned", () => {
+    expect(RAIL).toContain('className="shrink-0 flex flex-col overflow-x-hidden overflow-y-auto agw-noscrollbar"');
+    expect(RAIL).toContain("railTrim(el.clientHeight, VIEW_SLOT, 8)");
+    expect(RAIL).not.toMatch(/function railTrim/);
+    expect(RAIL).toContain('className="shrink-0 flex flex-col gap-1 px-2 pb-2"');
+    expect(VIEW_SLOT).toBe(48);
+    expect((260 - railTrim(260, VIEW_SLOT, 8) - 8) % VIEW_SLOT).toBe(0);
   });
 
   test("no button is ever shorter than the icon it draws", () => {
@@ -56,7 +66,7 @@ describe("the rail in the same window", () => {
     // but never gives height back to a window that is too short.
     expect(RAIL).toContain('className="flex-[1_0_auto] min-h-0 flex flex-col gap-1"');
     expect(RAIL).toContain('className="pt-2 min-h-0 shrink-0 flex flex-col gap-1"');
-    expect(RAIL).toContain('className="shrink-0 flex flex-col gap-1"');
+    expect(RAIL).toContain('className="shrink-0 flex flex-col gap-1 px-2 pb-2"');
   });
 });
 

@@ -49,7 +49,7 @@ type Anchor = React.RefObject<HTMLElement | null>;
 const Check = ({ on }: { on: boolean }) => <span className="grid" style={{ width: 16, color: "var(--primary)" }} aria-hidden>{on ? <DoneIcon size={ICON.xs} /> : null}</span>;
 
 /** Who comes off: nobody, only you, everyone, or named people (the app's one people picker, ticks, stays open). */
-export function UnassignMenu({ anchor, value, people, onPick, onPeople, onClose }: { anchor: Anchor; value: { who: Unassign | "people"; people?: { id: number; name: string }[] }; people?: () => Promise<MapPerson[] | null>; onPick: (who: Unassign) => void; onPeople: (list: { id: number; name: string }[]) => void; onClose: () => void }) {
+export function UnassignMenu({ anchor, value, people, alwaysFilter, onPick, onPeople, onClose }: { anchor: Anchor; value: { who: Unassign | "people"; people?: { id: number; name: string }[] }; people?: () => Promise<MapPerson[] | null>; /** Jira's list is the site's, not a short roster: the filter box is always there. */ alwaysFilter?: boolean; onPick: (who: Unassign) => void; onPeople: (list: { id: number; name: string }[]) => void; onClose: () => void }) {
   const [view, setView] = useState<"choice" | "people">("choice");
   const [list, setList] = useState<MapPerson[] | null | "reading">("reading");
   useEffect(() => {
@@ -63,7 +63,7 @@ export function UnassignMenu({ anchor, value, people, onPick, onPeople, onClose 
     const rows: ListMember[] = list === "reading" || list === null ? [] : list.map((m) => ({ id: m.id, name: m.name, initials: m.name.split(/\s+/).map((w) => w[0] ?? "").join("").slice(0, 2).toUpperCase() }));
     const now = value.who === "people" ? value.people ?? [] : [];
     return (
-      <PeoplePick anchor={anchor} members={rows} busy={list === "reading"} filterOver={12}
+      <PeoplePick anchor={anchor} members={rows} busy={list === "reading"} filterOver={alwaysFilter ? 0 : 12}
         empty={list === null ? "The people could not be read." : "Nobody to pick."}
         isOn={(m) => now.some((x) => x.id === m.id)}
         face={(m) => <Face m={m} />}
@@ -82,7 +82,7 @@ export function UnassignMenu({ anchor, value, people, onPick, onPeople, onClose 
 }
 
 /** The answers to "Assign"; "a person…" goes on to the people, read only when asked for. */
-export function AssignMenu({ anchor, value, people, withNobody, also, onPeople, onPick, onClose }: { anchor: Anchor; value: Assign; /** For a block that asks: the people the question starts with, beside `value.person`. */ also?: { id: number; name: string }[]; /** The picked people changed (the list stays open: a block that asks may start with several). */ onPeople?: (list: { id: number; name: string }[]) => void; /** The picker may start at nobody (only a block that asks when it runs). */ withNobody?: boolean; people?: () => Promise<MapPerson[] | null>; onPick: (a: Assign) => void; onClose: () => void }) {
+export function AssignMenu({ anchor, value, people, withNobody, withReviewer, alwaysFilter, also, onPeople, onPick, onClose }: { anchor: Anchor; value: Assign; /** For a block that asks: the people the question starts with, beside `value.person`. */ also?: { id: number; name: string }[]; /** The picked people changed (the list stays open: a block that asks may start with several). */ onPeople?: (list: { id: number; name: string }[]) => void; /** The picker may start at nobody (only a block that asks when it runs). */ withNobody?: boolean; /** A Jira question may start at the account learned for the pull request's reviewer. */ withReviewer?: boolean; /** Jira's list is the site's, not a short roster: the filter box is always there. */ alwaysFilter?: boolean; people?: () => Promise<MapPerson[] | null>; onPick: (a: Assign) => void; onClose: () => void }) {
   const [view, setView] = useState<"choice" | "people">("choice");
   const [list, setList] = useState<MapPerson[] | null | "reading">("reading");
   useEffect(() => {
@@ -96,7 +96,7 @@ export function AssignMenu({ anchor, value, people, withNobody, also, onPeople, 
   if (view === "people") {
     const rows: ListMember[] | null = list === "reading" || list === null ? null : list.map((m) => ({ id: m.id, name: m.name, initials: m.name.split(/\s+/).map((w) => w[0] ?? "").join("").slice(0, 2).toUpperCase() }));
     return (
-      <PeoplePick anchor={anchor} members={rows ?? []} busy={list === "reading"} filterOver={8}
+      <PeoplePick anchor={anchor} members={rows ?? []} busy={list === "reading"} filterOver={alwaysFilter ? 0 : 8}
         empty={list === null ? "The people could not be read." : "Nobody to pick."}
         isOn={(m) => value.who === "person" && (value.person?.id === m.id || !!also?.some((x) => x.id === m.id))}
         face={(m) => <Face m={m} />}
@@ -111,30 +111,40 @@ export function AssignMenu({ anchor, value, people, withNobody, also, onPeople, 
   return (
     <AnchoredMenu anchor={anchor} align="left" minWidth={200} onClose={onClose}>
       <div className="wfm" style={{ display: "contents" }}>
-        {ASSIGN_WHO.filter((w) => (w !== "none" || withNobody) && (w !== "author" || AUTHOR_IS_MEMBER.clickup) && (w !== "person" || !!people)).map((w) => (
+        {ASSIGN_WHO.filter((w) => (w !== "none" || withNobody) && (w !== "author" || AUTHOR_IS_MEMBER.clickup) && (w !== "person" || !!people) && (w !== "reviewer" || withReviewer)).map((w) => (
           <ListRow key={w} role="menuitem" current={value.who === w} leading={<Check on={value.who === w} />} onClick={() => (w === "person" ? setView("people") : onPick({ who: w }))}>{w === "none" ? "nobody" : ASSIGN_LABEL[w]}</ListRow>))}
       </div>
     </AnchoredMenu>
   );
 }
 
-/** The same block, fixed again: its value stays, the question goes. A fixed assign cannot be "nobody", so that goes to the person pressing. */
+/** The same block, fixed again: its value stays, the question goes. A fixed assign cannot be "nobody" or a learned reviewer, so both go to the person pressing. */
 const withoutAsk = (b: StepBlock): StepBlock => {
   if (b.type === "move") { const { ask: _a, ...rest } = b; return rest; }
-  if (b.type === "assign") { const { ask: _a, also: _o, ...rest } = b; return rest.who === "none" ? { type: "assign", who: "me" } : rest; }
+  if (b.type === "assign") { const { ask: _a, also: _o, ...rest } = b; return rest.who === "none" || rest.who === "reviewer" ? { type: "assign", who: "me" } : rest; }
   if (b.type === "comment" || b.type === "field") { const { ask: _a, ...rest } = b; return rest; }
   if (b.type === "unassign") { const { ask: _a, ...rest } = b; return rest.who === "people" && !rest.people?.length ? { type: "unassign", who: "none" } : rest; }
   return b;
 };
+
+/**
+ * A block just added from the list. A Jira review step usually hands the card to the reviewer, so its new
+ * assign asks and starts at that account; every other step's assign is fixed, to the person pressing it.
+ */
+export const newAssign = (trigger: StepTrigger, tracker?: string): StepBlock =>
+  trigger === "menu" && tracker === "jira" ? { type: "assign", who: "reviewer", ask: true } : { type: "assign", who: "me" };
+
 const hint = (c: ReactNode) => <span className="text-[11px]" style={{ color: "var(--text3)" }}>{c}</span>;
 const GLYPH: Record<string, (p: { size?: number }) => React.ReactElement> = { move: ArrowIcon, unassign: UserMinusIcon, assign: UserPlusIcon, comment: CommentIcon, field: ListGlyph, link: LinkIcon };
 function ListGlyph({ size }: { size?: number }) { return <PlusIcon size={size} />; }
 
 const titleOf = (b: StepBlock["type"], trigger: StepTrigger, n: { item: string; verb: string }): string =>
   b === "move" ? (trigger === "merge" ? "Preselect" : `${n.verb} the ${n.item} to`) : b === "unassign" ? `Take people off the ${n.item}` : b === "comment" ? `Comment on the ${n.item}` : b === "field" ? "Set a field" : b === "link" ? `Link the pull request on the ${n.item}` : "Assign the " + n.item + " to";
-const hintOf = (b: StepBlock["type"], trigger: StepTrigger, n: { item: string }): string =>
+export const hintOf = (b: StepBlock["type"], trigger: StepTrigger, n: { item: string }, tracker?: string): string =>
   b === "move" ? (trigger === "merge" ? "Offered at merge time; you can still change it" : `Where the ${n.item} goes`)
-    : b === "unassign" ? "Who comes off" : b === "comment" ? "One comment, posted when it runs" : b === "field" ? `One of the ${n.item}'s custom fields` : b === "link" ? "Once, as a link on the card" : trigger === "merge" ? "Added if missing, when the merge moves the card" : "Added if missing";
+    : b === "unassign" ? "Who comes off" : b === "comment" ? "One comment, posted when it runs" : b === "field" ? `One of the ${n.item}'s custom fields` : b === "link" ? "Once, as a link on the card"
+      : tracker === "jira" ? "Replaces whoever is assigned: a Jira card holds one person"
+        : trigger === "merge" ? "Added if missing, when the merge moves the card" : "Added if missing";
 
 type Open = { type: StepBlock["type"] | "add" };
 
@@ -299,7 +309,7 @@ export function StepBlocks(p: StepBlocksProps) {
     if (type === "link") { commit([...shown, { type: "link" }]); setUndo(null); setOpen(null); setSaid(`Added “Link the pull request on the ${n.item}” at position ${shown.length + 1}.`); return; }
     if (type === "field") { void addField(); return; }
     if (type === "comment") { commit([...shown, { type: "comment", text: "{pr_url}" }]); setUndo(null); setOpen(null); setSaid(`Added “Comment on the ${n.item}” at position ${shown.length + 1}.`); return; }
-    const b: StepBlock = type === "move" ? { type: "move", statusNames: [] } : type === "unassign" ? { type: "unassign", who: "none" } : { type: "assign", who: "me" };
+    const b: StepBlock = type === "move" ? { type: "move", statusNames: [] } : type === "unassign" ? { type: "unassign", who: "none" } : newAssign(trigger, p.tracker);
     commit([...shown, b]);
     setUndo(null); setOpen(null); setAdded(b.type);
     setSaid(`Added “${titleOf(b.type, trigger, n)}” at position ${shown.length + 1}.`);
@@ -346,7 +356,7 @@ export function StepBlocks(p: StepBlocksProps) {
         <button type="button" data-grip="" className="wfm-grip" disabled={p.frozen} aria-roledescription="drag handle"
           aria-label={`Reorder “${titleOf(b.type, trigger, n)}”. Drag it, or press arrow up and down.`}
           onPointerDown={(e) => startDrag(e, b.type)} onKeyDown={(e) => keyMove(e, i, b)}><GripIcon size={ICON.md} /></button>
-        <span className="wfm-lb"><b id={`${id}-l`} className="text-[13px] inline-flex items-center gap-2"><span className="wfm-gl"><Icon size={ICON.xs} /></span>{titleOf(b.type, trigger, n)}</b>{hint(hintOf(b.type, trigger, n))}{b.type !== "link" && (
+        <span className="wfm-lb"><b id={`${id}-l`} className="text-[13px] inline-flex items-center gap-2"><span className="wfm-gl"><Icon size={ICON.xs} /></span>{titleOf(b.type, trigger, n)}</b>{hint(hintOf(b.type, trigger, n, p.tracker))}{b.type !== "link" && !(b.type === "field" && p.tracker === "jira") && (
             <button type="button" data-ask="" className="wfm-ask" aria-pressed={b.ask === true} disabled={p.frozen}
               title={b.ask ? "It asks when it runs; the value is where the question starts. Press to fix it." : "Fix this value, or ask when it runs: the value becomes where the question starts."}
               onClick={() => setBlock(b.type, b.ask ? withoutAsk(b) : { ...b, ask: true } as StepBlock, '[data-blk="' + b.type + '"] [data-ask]')}>Ask when it runs</button>
@@ -354,7 +364,7 @@ export function StepBlocks(p: StepBlocksProps) {
         <span className="relative">{b.type === "comment" || b.type === "field" || b.type === "link" ? null : valueButton(b, i)}</span>
         <button type="button" data-rmb="" className="wfm-rmx" disabled={p.frozen} aria-label={`Remove block: ${titleOf(b.type, trigger, n)}`} onClick={() => remove(i)}><CrossIcon size={ICON.xs} /></button>
         {b.type === "comment" && <div className="wfm-blk-wide"><CommentEditor block={b} frozen={p.frozen} onChange={(nb) => setBlock("comment", nb, undefined, true)} /></div>}
-        {b.type === "field" && <div className="wfm-blk-wide"><FieldEditor block={b} fields={known} frozen={p.frozen} onChange={(nb) => setBlock("field", nb, undefined, true)} /></div>}
+        {b.type === "field" && <div className="wfm-blk-wide"><FieldEditor block={b} fields={known} frozen={p.frozen} strict={p.tracker === "jira"} onChange={(nb) => setBlock("field", nb, undefined, true)} /></div>}
       </div>
     );
   };
@@ -395,13 +405,13 @@ export function StepBlocks(p: StepBlocksProps) {
         </AnchoredMenu>
       )}
       {cur?.type === "unassign" && (
-        <UnassignMenu anchor={anchorRef} value={cur} people={p.people}
+        <UnassignMenu anchor={anchorRef} value={cur} people={p.people} alwaysFilter={p.tracker === "jira"}
           onPick={(who) => setBlock("unassign", { type: "unassign", who, ...(cur.ask ? { ask: true as const } : null) })}
           onPeople={(list) => setBlock("unassign", { type: "unassign", who: list.length ? "people" : "none", ...(list.length ? { people: list } : null), ...(cur.ask ? { ask: true as const } : null) }, undefined, true)}
           onClose={() => { setOpen(null); focusNext.current = '[data-blk="unassign"] [data-val]'; }} />
       )}
       {cur?.type === "assign" && (
-        <AssignMenu anchor={anchorRef} value={cur} people={p.people} withNobody={cur.ask === true} {...(cur.ask ? { also: cur.also, onPeople: (list: { id: number; name: string }[]) => setBlock("assign", list.length ? { type: "assign", ask: true, who: "person", person: list[0]!, ...(list.length > 1 ? { also: list.slice(1) } : null) } : { type: "assign", ask: true, who: "none" }, undefined, true) } : null)} onPick={(a) => setBlock("assign", a.who === "none" && !cur.ask ? cur : { type: "assign", ...(cur.ask ? { ask: true as const } : null), ...a })}
+        <AssignMenu anchor={anchorRef} value={cur} people={p.people} withNobody={cur.ask === true} withReviewer={cur.ask === true && p.tracker === "jira"} alwaysFilter={p.tracker === "jira"} {...(cur.ask ? { also: cur.also, onPeople: (list: { id: number; name: string }[]) => setBlock("assign", list.length ? { type: "assign", ask: true, who: "person", person: list[0]!, ...(list.length > 1 ? { also: list.slice(1) } : null) } : { type: "assign", ask: true, who: "none" }, undefined, true) } : null)} onPick={(a) => setBlock("assign", a.who === "none" && !cur.ask ? cur : { type: "assign", ...(cur.ask ? { ask: true as const } : null), ...a })}
           onClose={() => { setOpen(null); focusNext.current = '[data-blk="assign"] [data-val]'; }} />
       )}
     </div>

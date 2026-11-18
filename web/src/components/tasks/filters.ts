@@ -153,9 +153,14 @@ function passes<T>(t: T, r: Rule, read: ReadField<T>): boolean {
   if (r.op === "set") return mine.length > 0;
   if (r.op === "unset") return mine.length === 0;
   if (!r.values.length) return true;
-  const has = mine.some((v) => r.values.includes(v));
+  const want = new Set(r.values.map(foldKey));
+  const has = mine.some((v) => want.has(foldKey(v)));
   return r.op === "not" ? !has : has;
 }
+
+/** One spelling of a value for comparing: two projects write "Ready for QA"
+ *  and "ready for qa" for the same status, and a rule must not care which. */
+export const foldKey = (v: string): string => v.trim().toLowerCase();
 
 /** A rule that is doing something. `set`/`unset` need no values; the other two
  *  are still being written until they have some. */

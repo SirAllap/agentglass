@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { DEFAULT_RAIL, MiniRail } from "./MiniApp.tsx";
 import { LanternDemo } from "./LanternPreview.tsx";
-import { DiffDemo } from "./DiffPreview.tsx";
+import { DiffDemo, SESSION_FILES } from "./DiffPreview.tsx";
 import { SettingRow, Toggle } from "../../SettingRow.tsx";
 import { SettingsCard } from "../../SettingsKit.tsx";
 import { Segmented } from "../../workspace/Chrome.tsx";
@@ -10,6 +10,7 @@ import { ThemeIcon } from "../../settingsNavIcons.tsx";
 import { SURFACE_CSS } from "./Frame.tsx";
 import { zoomScale, type RailItem } from "./logic.ts";
 import type { Density } from "./logic.ts";
+import { ICON } from "../../../lib/iconSize.ts";
 
 /** The views a live window can show. All three are the app's own components on invented data; the Dashboard is not one of them. */
 export const LIVE_VIEWS = [
@@ -48,14 +49,14 @@ function SettingsDemo({ zoomPct }: { zoomPct: number }) {
     <div data-view-body="settings" className="agx-settings-page" style={{ padding: "0 0 16px" }}>
       <SettingsPageHeader label="Appearance" group={null} icon={ThemeIcon} what="How the window looks." chips={[]} />
       <div className="agx-settings-col" data-flow="single" style={{ padding: "0 24px", maxWidth: 620 }}>
-        <SettingsCard title="Size and startup" icon={<ThemeIcon size={16} />}>
+        <SettingsCard title="Size and startup" icon={<ThemeIcon size={ICON.md} />}>
           <SettingRow agentExempt label="Display size" hint="How big everything inside the window is."
             below={<Segmented track label="Display size" value={size} onChange={noop}
               options={[90, 100, 110, 125].map((n) => ({ id: String(n), label: `${n} %` }))} />} />
           <Toggle on={false} onClick={noop} label="Fullscreen" hint="Hide the window frame." />
           <Toggle on onClick={noop} label="Start at login" hint="Open agentglass when you log in." />
         </SettingsCard>
-        <SettingsCard title="Density & type" icon={<ThemeIcon size={16} />}>
+        <SettingsCard title="Density & type" icon={<ThemeIcon size={ICON.md} />}>
           <SettingRow agentExempt label="Density" hint="How much air rows and cards get."
             below={<Segmented track label="Density" value="comfortable" onChange={noop}
               options={[{ id: "compact", label: "Compact" }, { id: "comfortable", label: "Comfortable" }, { id: "roomy", label: "Roomy" }]} />} />
@@ -121,7 +122,7 @@ export function LiveWindow({ view, zoomPct, rail, selected, aspect, density, fon
         <div className="flex-1 min-w-0 overflow-hidden" style={{ background: "var(--bg)" }}>
           {view === "settings" && <SettingsDemo zoomPct={zoomPct} />}
           {view === "lantern" && <div data-view-body="lantern" style={{ padding: 16 }}><LanternDemo watch everyMin={5} wakeMin={5} /></div>}
-          {view === "diff" && <div data-view-body="diff" style={{ padding: 16 }}><DiffDemo split wrap={false} /></div>}
+          {view === "diff" && <div data-view-body="diff" style={{ padding: 16 }}><DiffDemo split wrap={false} files={SESSION_FILES} /></div>}
         </div>
       </div>
     </div>

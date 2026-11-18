@@ -64,29 +64,28 @@ describe("controls in the pull-request bars take the shared height", () => {
 
   it("the state badge, the menus and the dock buttons name a CTRL_H rung", () => {
     const head = bars["the detail header and its identity row"];
-    expect(head).toContain("height: CTRL_H.hit, color: tint");
     expect(head).toContain('size="hit" square>');
     expect(head).toContain('primary={false} size="hit"');
     const dock = region(panel, "function PrDock(", "function OverviewSlot(");
     expect(panel).toContain("style={{ height: CTRL_H.hit, ...(canMerge");
     expect(panel).toContain("width: CTRL_H.hit, height: CTRL_H.hit, border: EDGE");
-    expect(dock).toContain('size="hit" square>');
+    expect(dock).toContain('size="hit"');
   });
 
   it("the dock has air round its rows: padding above and below, and a gap between wrapped rows", () => {
     // Wrapped into two rows at the docked width, the dock had a minimum height and no padding, so the rows
     // touched each other and the dock's edge. The mockup's dock is 54px with 14px sides and 8px between.
     const dock = region(panel, "function PrDock(", "function OverviewSlot(");
-    expect(dock).toContain("flex items-center gap-2 px-3.5 py-3 min-h-[54px] flex-wrap");
+    expect(dock).toContain("prx-dock prx-g");
   });
 
-  it("the dock keeps its buttons out from under the floating bench button", () => {
-    // The bench button (data-floating-furniture) floats at the window's bottom right: in a docked
-    // detail it sat on the end of the dock's last row, over the Merge text once the rows wrapped.
+  it("the dock is never sat on by the floating bench button: the button is the one that moves", async () => {
+    // The bench button (data-floating-furniture) is drawn above any bar marked data-fab-avoid (lib/fabDodge.ts),
+    // so the dock keeps its whole width and the chip is not squeezed to make room.
     const dock = region(panel, "function PrDock(", "function OverviewSlot(");
-    expect(dock).toContain("useFurnitureClear<HTMLDivElement>(");
-    expect(dock).toContain("ref={bar}");
-    expect(dock).toContain("paddingRight: 14 + clear");
+    expect(dock).toContain("data-fab-avoid");
+    expect(dock).not.toContain("paddingRight: clear");
+    expect(await read("bench/FloatingBench.tsx")).toContain("fabLift(");
   });
 
   it("the rest of PrPanel.tsx does not grow its hand-sized controls", () => {

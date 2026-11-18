@@ -4,7 +4,7 @@
  * popover sits. Names are invented but shaped like a monorepo's CI.
  */
 import { describe, expect, it } from "bun:test";
-import { checkFamilies, failRuleOf, fmtMs, runChecks, splitCheck, suggestSkips, waitTally, type RunCheck } from "../src/lib/prWatchStore.ts";
+import { checkFamilies, checksPageUrl, failKind, failRuleOf, fmtMs, ignoredFailures, onlyRequiredIgnore, rerunCommand, runChecks, splitCheck, suggestSkips, waitTally, type RunCheck } from "../src/lib/prWatchStore.ts";
 import { placePop, TIGHT_BELOW } from "../src/lib/prWatchPlace.ts";
 import type { PrCheck } from "../../shared/types.ts";
 
@@ -110,5 +110,38 @@ describe("placePop", () => {
     expect(placePop({ top: 20, bottom: 50 }, 440).tight).toBe(true);
     expect(placePop({ top: 20, bottom: 50 }, 50 + 6 + 12 + TIGHT_BELOW).tight).toBe(false);
     expect(placePop({ top: 20, bottom: 50 }, 90).maxHeight).toBe(180);
+  });
+});
+
+describe("only-required preset, flake warning, re-run shortcut", () => {
+  it("preset skips only checks known not required", () => {
+    const r = (name: string, required?: boolean): RunCheck => ({ name, state: "pass", ...(required !== undefined ? { required } : null) });
+    expect(onlyRequiredIgnore([r("build", true), r("perf", false), r("docs"), r("lint", false)])).toEqual(["perf", "lint"]);
+  });
+  it("tells a runner flake from a real finding among ignored red checks", () => {
+    expect(failKind({ title: "fatal: expected 'packfile'" })).toBe("flake");
+    expect(failKind({ title: "error: RPC failed; HTTP 408" })).toBe("flake");
+    expect(failKind({ title: "2 slow queries found" })).toBe("real");
+    expect(failKind({})).toBe("unknown");
+    const all = [chk("perf", { state: "failure", title: "HTTP 408" }), chk("lint", { state: "failure", title: "unused import" }), chk("unit", { state: "failure", title: "HTTP 408" })];
+    expect(ignoredFailures(all, ["perf", "lint"]).map((f) => [f.name, f.kind])).toEqual([["perf", "flake"], ["lint", "real"]]);
+  });
+  it("same-name checks: a real finding is not hidden by a flake run, and HTTP 4080 is no flake", () => {
+    const all = [chk("perf", { state: "failure", title: "HTTP 408" }), chk("perf", { state: "failure", title: "2 slow queries found" })];
+    expect(ignoredFailures(all, ["perf"]).map((f) => [f.name, f.kind])).toEqual([["perf", "real"]]);
+    expect(failKind({ title: "HTTP 4080 rows" })).toBe("real");
+  });
+  it("re-run only builds text or a link, never runs anything", () => {
+    expect(rerunCommand("acme/orbit", "https://github.com/acme/orbit/actions/runs/4242/job/9")).toBe("gh run rerun 4242 --failed -R acme/orbit");
+    expect(rerunCommand("acme/orbit", undefined)).toBeNull();
+    expect(checksPageUrl("acme/orbit", 7)).toBe("https://github.com/acme/orbit/pull/7/checks");
+  });
+});
+
+describe("copy re-run: a clipboard failure is told", () => {
+  it("the menu shows its failure note when the clipboard is missing or refuses", async () => {
+    const src = await Bun.file(new URL("../src/components/PrWatchMenu.tsx", import.meta.url)).text();
+    expect(src).toContain('setErr("could not copy the command")');
+    expect(src).not.toMatch(/writeText\(cmd\)[^\n]*catch\(\(\) => \{\}\)/);
   });
 });

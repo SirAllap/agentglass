@@ -31,9 +31,13 @@ export interface FlightData {
   refreshCfg: () => void;
 }
 
-/** Whether a project's Preflight reviews the plan before Launch (the engine runs it as soon as the plan has text), and its cost cap. */
-export interface Cfg { before: "off" | "auto"; cap: number }
-export const DEFAULT_CFG: Cfg = { before: "off", cap: 0.5 };
+/**
+ * Whether a project's Preflight reviews the plan before Launch (the engine runs it
+ * as soon as the plan has text), its cost cap, and the sizes that are plans at all
+ * (`flightPlan.preflight.sizes`, one value for the machine).
+ */
+export interface Cfg { before: "off" | "auto"; cap: number; sizes: "L" | "ML" }
+export const DEFAULT_CFG: Cfg = { before: "off", cap: 0.5, sizes: "ML" };
 
 export function useFlightPlan(active: boolean, selected: string | null): FlightData {
   const [full, setFull] = useState<{ plan: Plan; run: Run | null } | null>(null);
@@ -96,9 +100,9 @@ export function useFlightPlan(active: boolean, selected: string | null): FlightD
     if (!active || !rootsKey) return;
     let dead = false;
     void Promise.all(rootsKey.split("\n").map(async (r) => {
-      const [b, c] = await Promise.all([api.settingAt("flightPlan.preflight.reviews", r).catch(() => null), api.settingAt("flightPlan.preflight.costCapUsd", r).catch(() => null)]);
+      const [b, c, z] = await Promise.all([api.settingAt("flightPlan.preflight.reviews", r).catch(() => null), api.settingAt("flightPlan.preflight.costCapUsd", r).catch(() => null), api.settingAt("flightPlan.preflight.sizes", r).catch(() => null)]);
       const before = Array.isArray(b?.value) && b.value.includes("plan") ? "auto" : "off";
-      return [r, { before, cap: typeof c?.value === "number" ? c.value : 0.5 } as Cfg] as const;
+      return [r, { before, cap: typeof c?.value === "number" ? c.value : 0.5, sizes: z?.value === "L" ? "L" : "ML" } as Cfg] as const;
     })).then((rows) => { if (!dead && live.current) setCfg(Object.fromEntries(rows)); });
     return () => { dead = true; };
   }, [active, rootsKey, cfgTick]);

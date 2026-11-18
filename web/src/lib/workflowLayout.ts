@@ -164,6 +164,36 @@ export interface Pt { x: number; y: number }
 export interface Wire { id: number; from: Pt; to: Pt; color: string }
 export interface Connector extends Wire { d: string; channel: number }
 
+/** A box as the browser reports it: viewport coordinates, in the pixels the page is zoomed to. */
+export interface Box { left: number; top: number; right: number; bottom: number; width: number; height: number }
+
+/**
+ * How many rect pixels there are per map pixel: the grid's drawn width over its layout width.
+ * The settings column is `zoom`ed on a wide screen and the window's own zoom scales it too,
+ * so the two are the same number only at 100%. `offsetWidth` rounds, so the factor is off by
+ * at most a fraction of a pixel across the whole map.
+ */
+export const mapScale = (grid: Pick<Box, "width">, layoutWidth: number): number =>
+  layoutWidth > 0 && grid.width > 0 ? grid.width / layoutWidth : 1;
+
+export interface Ends { from: Pt; to: Pt }
+
+/**
+ * Where a step's connector starts and ends, in the map's own pixels: at the right edge of the
+ * card, level with its status control, and on the centre of the status's dot, which sits on the
+ * centre of its row. The rects arrive in zoomed pixels and the SVG draws in layout ones, so each
+ * offset is divided by the scale; skipping that puts every line off by the zoom factor.
+ */
+export function wireEnds(r: { grid: Box; card: Box; pick: Box; dot: Box; scale?: number }): Ends {
+  const k = r.scale && r.scale > 0 ? r.scale : 1;
+  const x = (v: number) => (v - r.grid.left) / k;
+  const y = (v: number) => (v - r.grid.top) / k;
+  return {
+    from: { x: x(r.card.right), y: y(r.pick.top + r.pick.height / 2) },
+    to: { x: x(r.dot.left + r.dot.width / 2), y: y(r.dot.top + r.dot.height / 2) },
+  };
+}
+
 /** How far right of the cards the first connector turns, and the gap between neighbours' turns. */
 export const CHANNEL = { lead: 10, step: 7 } as const;
 

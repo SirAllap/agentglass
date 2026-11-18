@@ -67,13 +67,13 @@ describe("web links and files", () => {
   test("a link shows its title and where it goes, and the address is the tooltip", () => {
     const link: CardWebLink = { id: "1", url: "https://docs.acme.example/design/sync", title: "Design note", host: "docs.acme.example" };
     const out = html(React.createElement(WebLinksSection, { links: [link], error: "" }));
-    for (const w of ["Design note", "docs.acme.example", 'title="https://docs.acme.example/design/sync"']) expect(out).toContain(w);
+    for (const w of ["Design note", "docs.acme.example", 'data-tip="{&quot;name&quot;:&quot;https://docs.acme.example/design/sync&quot;,&quot;mono&quot;:true}"']) expect(out).toContain(w);
   });
 });
 
 describe("the Details", () => {
   test("an unfilled one says None, a flag says what it is, the reporter has a face", () => {
-    expect(html(React.createElement(FactValue, { f: { id: "start", label: "Start date", value: "" } }))).toContain("None");
+    expect(html(React.createElement(FactValue, { f: { id: "start", label: "Start date", value: "" } }))).not.toContain("None");
     expect(html(React.createElement(FactValue, { f: { id: "flag", label: "Flagged", value: "Impediment", tone: "flag" } }))).toContain("Impediment");
     const rep = html(React.createElement(FactValue, { f: { id: "reporter", label: "Reporter", value: "Grace Sample", initials: "GS" } }));
     expect(rep).toContain("Grace Sample");

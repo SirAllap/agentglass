@@ -24,15 +24,16 @@ describe("who gets a live checkbox", () => {
     const calls = [...src.matchAll(/<Md body=\{[^}]*\}[^/]*\/>/g)].map((m) => m[0]);
     expect(calls.length, "no Md call sites found — the file shape moved").toBeGreaterThan(5);
     const wired = calls.filter((c) => c.includes("onToggleTask"));
-    expect(wired, "a comment, a review, or a bot's digest is not this reader's body to rewrite")
-      .toHaveLength(1);
-    expect(wired[0]).toContain("d.body");
+    /* The description is drawn twice now: in the Overview story and on its own tab. */
+    expect(wired.length, "the description's two renders are wired").toBe(2);
+    for (const c of wired) expect(c, "a comment, a review, or a bot's digest is not this reader's body to rewrite").toContain("d.body");
+    expect(calls.filter((c) => c.includes("d.body")).length, "every render of d.body is wired, none is left read-only").toBe(wired.length);
   });
 
   test("nothing is passed while a write is already running", () => {
-    const i = src.indexOf("{d.body.trim() ? <Md body={d.body}");
-    expect(i, "the description's own render").toBeGreaterThan(-1);
-    expect(src.slice(i, i + 200)).toContain("onToggleTask={busy ? undefined : onToggleTask}");
+    const renders = [...src.matchAll(/\{d\.body\.trim\(\) \? <Md body=\{d\.body\}/g)].map((m) => src.slice(m.index!, m.index! + 200));
+    expect(renders.length, "the description's own renders").toBe(2);
+    for (const r of renders) expect(r).toContain("onToggleTask={busy ? undefined : onToggleTask}");
   });
 });
 

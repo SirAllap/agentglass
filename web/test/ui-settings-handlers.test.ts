@@ -65,9 +65,15 @@ describe("settings.set from a frame", () => {
 describe("settings.get and settings.list", () => {
   it("answer with the stored value and the exposed list", () => {
     store.set("agentglass-term-size", "17");
-    expect(run(ui("settings.get", { id: "terminal.fontSize" }))).toEqual({ ok: true, applied: true, value: { ok: true, id: "terminal.fontSize", value: 17, display: "17" } });
+    expect(run(ui("settings.get", { id: "terminal.fontSize" }))).toEqual({ ok: true, value: { ok: true, id: "terminal.fontSize", value: 17, display: "17" } });
     const list = run(ui("settings.list")).value as { id: string }[];
     expect(list.some((x) => x.id === "diff.wrap")).toBe(true);
+  });
+
+  it("a read carries no applied; a write still says it was applied", () => {
+    expect(run(ui("settings.get", { id: "diff.wrap" }))).not.toHaveProperty("applied");
+    expect(run(ui("settings.list"))).not.toHaveProperty("applied");
+    expect(run(ui("settings.set", { id: "diff.wrap", value: true }))).toMatchObject({ ok: true, applied: true });
   });
 
   it("a setting that is not exposed is a refusal, not an answer", () => {

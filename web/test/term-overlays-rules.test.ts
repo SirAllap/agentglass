@@ -115,4 +115,8 @@ describe("the restore, close and state overlays", () => {
     expect(n.TermOverlays).toContain('cmd: "restart"');
     expect(n.TermOverlays).toContain('cmd: "restored", how: "resume"');
   });
+  test("putting the banner away is the server's answer, not this renderer's storage", () => {
+    expect(n.TermOverlays).toContain('cmd: "restored", how: "notnow"');
+    expect(n.TermOverlays, "the pill's answer cannot live only in localStorage").not.toContain("agentglass-restore-banner");
+  });
 });
