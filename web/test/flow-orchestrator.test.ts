@@ -72,8 +72,8 @@ describe("the orchestrator's card", () => {
     expect(m.today).toBe("—");
     expect(m.last).toBe("—");
     expect(card()).toContain("—");
-    const withCounts = orchestratorCardModel(flow, data({ counts: { builder: { run: 2, wait: 0, cost: 1.25 } } }));
-    expect(withCounts.today).toBe("$1.25");
+    const withSpend = orchestratorCardModel(flow, data({ todaySpend: 1.25 }));
+    expect(withSpend.today).toBe("$1.25");
   });
 
   test("the plan used is the chair's own reading, keyed the way the page keys it", () => {
@@ -215,6 +215,14 @@ describe("the card is the worker card's family", () => {
     const counts = { builder: { run: 1, wait: 0, cost: 3.4 } };
     const builder = flow.roster.find((r) => r.id === "builder")!;
     expect(workerCardModel(flow, builder, counts).cost).toBe("$3.40");
-    expect(orchestratorCardModel(flow, data({ counts })).today).toBe("$3.40");
+    expect(orchestratorCardModel(flow, data({ todaySpend: 3.4 })).today).toBe("$3.40");
+  });
+
+  test("today's total is the stored day's spend, never the rows' cost, which leaves with the row", () => {
+    // A restart empties the board: the same $3.40 has to survive it, and the rows must not be able to answer in its place.
+    const counts = { builder: { run: 1, wait: 0, cost: 3.4 } };
+    expect(orchestratorCardModel(flow, data({ counts })).today).toBe("—");
+    expect(orchestratorCardModel(flow, data({ counts, todaySpend: 3.4 })).today).toBe("$3.40");
+    expect(orchestratorCardModel(flow, data({ todaySpend: null })).todayTip).toBe("No cost has been read");
   });
 });

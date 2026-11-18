@@ -7,7 +7,7 @@ describe("read-only assignee button", () => {
   it("says why it is disabled", () => {
     const i = src.indexOf("<button ref={whoBtn} disabled={!writable}");
     expect(i).not.toBe(-1);
-    expect(src.slice(i, i + 500)).toContain("title={writable ? undefined :");
+    expect(src.slice(i, i + 500)).toContain("data-tip={writable ? undefined :");
   });
 
   it("sits in a row that carries the lock and asks to turn changes on", () => {

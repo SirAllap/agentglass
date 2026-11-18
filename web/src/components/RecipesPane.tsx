@@ -12,23 +12,25 @@
  * console path a typed command takes. That separation is the whole reason a
  * parameter box is safe to have.
  */
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { api } from "../lib/api.ts";
 import { retryLoad } from "../lib/retryLoad.ts";
 import type { Recipe, RecipeParam, GitRepoRef } from "../../../shared/types.ts";
 import { consoleRoot, runInConsole } from "./TerminalPanel.tsx";
-import { Field, SettingsCard, SettingsForm, helpIdFor } from "./SettingsKit.tsx";
+import { FormInput } from "./settings/shell/FormInput.tsx";
+import { Section } from "./settings/shell/Section.tsx";
+import { SettingRow } from "./settings/shell/SettingRow.tsx";
+import { DangerAction, GroupActions } from "./settings/save/index.ts";
 import { Select } from "./Select.tsx";
 import { Switch } from "./SettingRow.tsx";
 import { MAX_COMMAND_PINS, RECIPE, togglePin, usePinMap } from "./CommandBar.tsx";
-import { EditorFoot, EditorPanel, ListBar, ListEditorSplit, ListPanel, NewButton, NothingSelected, differs } from "./SettingsListEditor.tsx";
-import { CommandIcon } from "./settingsNavIcons.tsx";
-import { useReportHead, useReportSaving } from "./SettingsPageState.tsx";
+import { differs } from "./SettingsListEditor.tsx";
+import { useReportSaving } from "./SettingsPageState.tsx";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { IconLabel, PlusIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { CloseIcon } from "./CloseButton.tsx";
-import { Button, INPUT, INPUT_STYLE, EDGE, Segmented } from "./workspace/Chrome.tsx";
+import { Button, INPUT, INPUT_STYLE, EDGE, LINE, Segmented } from "./workspace/Chrome.tsx";
 import { LaunchModeBadge, LaunchModeSelect } from "./LaunchMode.tsx";
 
 /** Same test as the server's (recipes.ts withLaunchFlags): a step whose first word is `claude`. */
@@ -50,12 +52,10 @@ export function RecipesPane({ open }: { open: boolean }) {
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [q, setQ] = useState("");
   const [narrow, setNarrow] = useState<"all" | "pinned" | "repo">("all");
-  const firstShown = useRef(false);
   const pins = usePinMap();
   /* A pin belongs to a repository's command bar: a command kept for one repo is pinned there, an everywhere one in the repo the console is on. */
   const pinRoot = (r: Recipe) => (r.scope === "repo" && r.repo ? r.repo : consoleRoot());
   const isPinned = (r: Recipe) => !!r.id && (pins[pinRoot(r)] ?? []).includes(`${RECIPE}${r.id}`);
-  useReportHead("recipes", { action: { label: "New recipe" } }, () => setEditing(blank()));
 
   const load = useCallback(async () => {
     try { const l = (await api.recipes()).recipes; setList(l); return l; } catch { setList([]); return []; }
@@ -65,9 +65,6 @@ export function RecipesPane({ open }: { open: boolean }) {
     void load();
     api.gitRepos().then(({ repos: r }) => setRepos(r)).catch(() => {});
   }, [open, load]);
-
-  /* The first command is open when the page is: an editor with nothing in it, beside a list, reads as broken. */
-  useEffect(() => { if (list?.length && !editing && !firstShown.current) { firstShown.current = true; setEditing(list[0]!); } }, [list, editing]);
 
   const save = async (r: Recipe) => {
     setBusy(true);
@@ -82,7 +79,7 @@ export function RecipesPane({ open }: { open: boolean }) {
   };
   const drop = async (r: Recipe) => {
     await api.recipeRemove(r.id).catch(() => {});
-    setNote({ ok: true, text: `${r.name} removed — nothing else was touched` });
+    setNote({ ok: true, text: `${r.name} removed. Nothing else was touched.` });
     setEditing(null);
     setRunning(null);
     await load();
@@ -92,66 +89,60 @@ export function RecipesPane({ open }: { open: boolean }) {
   const ql = q.trim().toLowerCase();
   const match = (r: Recipe) => (!ql || `${r.name} ${r.desc} ${r.steps.join(" ")}`.toLowerCase().includes(ql))
     && (narrow === "all" || (narrow === "pinned" ? isPinned(r) : r.scope === "repo"));
-  /* Everywhere first, then one section per repository the saved ones name. */
-  const repoRoots = [...new Set((list ?? []).filter((r) => r.scope !== "global").map((r) => r.repo ?? ""))];
   const repoName = (root: string) => repos.find((x) => x.root === root)?.name || root.split("/").pop() || "repository";
-  const entry = (r: Recipe) => ({
-    id: r.id, title: r.name,
-    tags: [...(isPinned(r) ? ["pinned"] : []), ...(r.boot ? ["at start"] : [])],
-    badge: startsClaude(r) ? <LaunchModeBadge mode={r.permissionMode} /> : undefined,
-    sub: <span className="t-mono">{r.steps.find((l) => l.trim()) ?? r.desc}</span>,
-  });
-  const sections = [
-    { id: "global", title: "Everywhere", onAdd: () => setEditing(blank()), addLabel: "New recipe, everywhere",
-      entries: (list ?? []).filter((r) => r.scope === "global" && match(r)).map(entry) },
-    ...repoRoots.map((root) => ({
-      id: root, title: `${repoName(root)} only`,
-      onAdd: () => setEditing({ ...blank(), scope: "repo" as const, repo: root }), addLabel: `New recipe in ${repoName(root)}`,
-      entries: (list ?? []).filter((r) => r.scope !== "global" && (r.repo ?? "") === root && match(r)).map(entry),
-    })),
-  ];
+  const shown = (list ?? []).filter(match);
 
-  /* A list beside the editor: the commands on the left, the one open on the right. Run… moved
-     into the editor's head, where the one you are looking at is; its form is a card under the
-     split, so the list never moves to make room for it. */
   return (
     <>
-      <ListBar<"all" | "pinned" | "repo"> q={q} onQ={setQ} placeholder={`Filter ${list?.length ?? 0} commands`} label="Filter commands"
-        filters={[{ id: "all", label: `All ${list?.length ?? 0}` }, { id: "pinned", label: `Pinned ${(list ?? []).filter(isPinned).length}` },
-          { id: "repo", label: `This repo ${(list ?? []).filter((r) => r.scope === "repo").length}` }]}
-        filter={narrow} onFilter={setNarrow} />
-      {note && (
-        <div role={note.ok ? "status" : "alert"} className="agx-le-note text-[12px] pb-3"
-          style={{ color: note.ok ? "var(--success-ink)" : "var(--error-ink)" }}>
-          {note.text}
-        </div>
+      <Section id="commands" title="Commands" intro="Things you type often, kept with the parts that change asked for when you run them.">
+        {list === null && <SettingRow kind="fact" label="Reading your recipes" value="…" />}
+        {list?.length === 0 && (
+          <SettingRow kind="control" label="No commands yet" help="Save one you have typed three times this week."
+            control={<Button onClick={() => setEditing(blank())}>New recipe</Button>} />
+        )}
+        {(list?.length ?? 0) > 6 && (
+          <SettingRow kind="control" label="Filter commands" help={`Search ${list!.length} commands by name or step.`}
+            control={<>
+              <FormInput aria-label="Filter commands" placeholder="Search commands" value={q} onChange={(e) => setQ(e.target.value)} className={INPUT} style={INPUT_STYLE} />
+              <Segmented<"all" | "pinned" | "repo"> label="Show" value={narrow} onChange={setNarrow}
+                options={[{ id: "all", label: `All ${list!.length}` }, { id: "pinned", label: `Pinned ${list!.filter(isPinned).length}` }, { id: "repo", label: `One repo ${list!.filter((r) => r.scope === "repo").length}` }]} />
+            </>} />
+        )}
+        {list && list.length > 0 && shown.length === 0 && <SettingRow kind="fact" label="Nothing matches" value="" />}
+        {shown.map((r) => (
+          <div key={r.id} data-recipe-id={r.id}>
+            <SettingRow kind="control" label={r.name}
+              help={`${r.scope === "repo" && r.repo ? `${repoName(r.repo)} only. ` : ""}${isPinned(r) ? "Pinned. " : ""}${r.boot ? "Runs at start. " : ""}${r.steps.some((l) => l.trim()) ? "" : r.desc}`.trim().slice(0, 120) || undefined}
+              code={r.steps.find((l) => l.trim())?.slice(0, 120)}
+              control={<>
+                <Button onClick={() => { setEditing(r); setRunning(null); }}>Edit</Button>
+                <Button onClick={() => { setRunning(r); }}><IconLabel icon={<PlayGlyph />}>Run now</IconLabel></Button>
+                <DangerAction label="Delete" onConfirm={() => drop(r)} />
+              </>} />
+          </div>
+        ))}
+        {list && list.length > 0 && !editing && (
+          <SettingRow kind="control" label="Write a new command" help="It joins the list and the command bar menu."
+            control={<Button onClick={() => setEditing(blank())}>New recipe</Button>} />
+        )}
+        {note && (
+          <div role={note.ok ? "status" : "alert"} className="px-3 py-2 text-[12px]" style={{ color: note.ok ? "var(--success-ink)" : "var(--error-ink)" }}>{note.text}</div>
+        )}
+      </Section>
+      {editing && (
+        <RecipeEditor r={editing} saved={saved} repos={repos} busy={busy} pinned={isPinned(editing)} pinRoot={pinRoot(editing)} onChange={setEditing} onSave={save}
+          onCancel={() => setEditing(saved ?? null)} />
       )}
-      <ListEditorSplit
-        list={<ListPanel sections={sections} selected={editing?.id || null}
-          onSelect={(id) => { const r = list?.find((x) => x.id === id); if (r) { setEditing(r); setRunning(null); } }}
-          nothing={!list ? "Reading your recipes…" : "Nothing matches."}
-          blank={list?.length === 0 ? {
-            icon: <CommandIcon size={ICON.xl} />, title: "No commands yet",
-            text: "A command is a thing you have typed three times this week, kept with the parts that change asked for when you run it.",
-            action: <NewButton onClick={() => setEditing(blank())}>New recipe</NewButton>,
-          } : undefined} />}
-        editor={editing
-          ? <Editor r={editing} saved={saved} repos={repos} busy={busy} pinned={isPinned(editing)} pinRoot={pinRoot(editing)} onChange={setEditing} onSave={save} onDrop={drop}
-              onRun={editing.id ? () => setRunning(editing) : undefined}
-              onCancel={() => setEditing(saved ?? null)} />
-          : <NothingSelected noun="recipe" label="Command" onNew={() => setEditing(blank())} />} />
       {running && <RunForm r={running} repos={repos} onClose={() => setRunning(null)} onNote={setNote} />}
     </>
   );
 }
 
-/** A yes/no inside a form: its words on the left, the house switch on the right, the whole row one target. */
-function SwitchField({ label, help, on, disabled, onToggle }: { label: string; help: string; on: boolean; disabled?: boolean; onToggle: () => void }) {
+/** A yes/no as a shell row: the house switch on the right. */
+function SwitchRow({ label, help, on, disabled, onToggle }: { label: string; help: string; on: boolean; disabled?: boolean; onToggle: () => void }) {
   return (
-    <button type="button" role="switch" aria-checked={on} disabled={disabled} onClick={onToggle} className="agx-le-sw">
-      <span><b>{label}</b><span>{help}</span></span>
-      <Switch on={on} />
-    </button>
+    <SettingRow kind="control" label={label} help={help}
+      control={<button type="button" role="switch" aria-checked={on} aria-label={label} disabled={disabled} onClick={onToggle}><Switch on={on} /></button>} />
   );
 }
 
@@ -160,143 +151,84 @@ const PlayGlyph = () => <svg width="12" height="12" viewBox="0 0 10 10" aria-hid
 /** One stacked field's control: the kit's input height and edge. */
 const FIELD = `w-full ${INPUT}`;
 
-/**
- * The editor, a card of its own under the list: one form of stacked labelled
- * fields, one primary Save, and Delete up in the card's header where a Save
- * press cannot land on it.
- */
-function Editor({ r, saved, repos, busy, pinned, pinRoot, onChange, onSave, onDrop, onRun, onCancel }: {
+/** The editor: a section of rows (one per field) and one primary Save. Delete lives on the list row. */
+function RecipeEditor({ r, saved, repos, busy, pinned, pinRoot, onChange, onSave, onCancel }: {
   r: Recipe; saved?: Recipe; repos: GitRepoRef[]; busy: boolean; pinned: boolean; pinRoot: string;
-  onChange: (r: Recipe) => void; onSave: (r: Recipe) => void; onDrop: (r: Recipe) => void; onRun?: () => void; onCancel: () => void;
+  onChange: (r: Recipe) => void; onSave: (r: Recipe) => void; onCancel: () => void;
 }) {
   const uid = useId();
   const f = (k: string) => `${uid}-${k}`;
   const set = (patch: Partial<Recipe>) => onChange({ ...r, ...patch });
   const setParam = (i: number, patch: Partial<RecipeParam>) =>
     set({ params: (r.params ?? []).map((x, j) => j === i ? { ...x, ...patch } : x) });
-  /** Boot and the two things that would need asking are mutually exclusive —
-   *  the server refuses saving the combination, so the editor says so up
-   *  front rather than letting the save be the first to find out. */
+  /** Boot and the two things that would need asking are mutually exclusive:
+   *  the server refuses saving the combination, so the editor says so up front. */
   const cannotBoot = !!(r.params?.length) || !!r.confirm;
   const pinsFull = (usePinMap()[pinRoot] ?? []).length >= MAX_COMMAND_PINS;
+  const wide = { minWidth: 260 };
   return (
-    <EditorPanel label="Command" title={r.name || "New recipe"}
-      chips={r.id ? (pinned ? [{ tone: "ok", text: "Pinned" }] : undefined) : [{ tone: "info", text: "Draft" }]}
-      actions={r.id ? <>
-        {onRun && <Button onClick={onRun}><IconLabel icon={<PlayGlyph />}>Run now</IconLabel></Button>}
-        <Button tone="danger" onClick={() => onDrop(r)}>Delete</Button>
-      </> : undefined}>
-          <SettingsForm label={r.id ? "Edit recipe" : "New recipe"} onSubmit={() => onSave(r)}>
-            <div className="agx-le-body">
-            <Field label="Name" htmlFor={f("name")} help="How you will call it.">
-              <input id={f("name")} value={r.name} onChange={(e) => set({ name: e.target.value })}
-                aria-describedby={helpIdFor(f("name"))} className={FIELD} style={INPUT_STYLE} />
-            </Field>
-            <Field label="What it does" htmlFor={f("desc")}>
-              {/* Two lines, not one: a sentence about what a command does is
-                  longer than the 480px a form field gets, and an input would
-                  cut it off at the edge. */}
-              <textarea id={f("desc")} value={r.desc} onChange={(e) => set({ desc: e.target.value })} rows={2}
-                className="w-full text-[12px] px-2.5 py-2 rounded-lg outline-none bg-[var(--surface-inset)] text-[var(--text)]"
-                style={{ ...INPUT_STYLE, resize: "vertical" }} />
-            </Field>
-
-            {/* One step per line. A textarea rather than a list of rows: these
-                are lines of shell, and people write them the way they write
-                shell. */}
-            <Field label="Steps" htmlFor={f("steps")} help={<>One per line. {"{{name}}"} marks a parameter.</>}>
-              <textarea id={f("steps")} value={r.steps.join("\n")} onChange={(e) => set({ steps: e.target.value.split("\n") })}
-                aria-describedby={helpIdFor(f("steps"))}
-                rows={Math.max(3, r.steps.length + 1)} spellCheck={false}
-                className="w-full text-[12px] px-2.5 py-2 rounded-lg outline-none font-mono bg-[var(--surface-inset)] text-[var(--text)]"
-                style={{ ...INPUT_STYLE, resize: "vertical" }} />
-            </Field>
-
-            {/* Only for a command that starts Claude: the server adds the flags
-                to a step whose first word is `claude`, and to nothing else. */}
-            {startsClaude(r) && (
-              <Field label="Permission mode" htmlFor={f("mode")} help="For a step that starts claude: how it asks before a tool runs.">
-                <LaunchModeSelect value={r.permissionMode}
-                  onChange={(m) => set({ permissionMode: m })} />
-              </Field>
-            )}
-
-            <Field label="Where it applies" htmlFor={f("scope")}>
-              <div id={f("scope")}>
-                <Segmented<Recipe["scope"]> track label="Where it applies" value={r.scope}
-                  options={[{ id: "global", label: "Everywhere" }, { id: "repo", label: "One repository" }]}
-                  onChange={(scope) => set({ scope, repo: scope === "global" ? undefined : (r.repo || repos[0]?.root) })} />
-              </div>
-            </Field>
-            {r.scope === "repo" && (
-              <Field label="Repository" htmlFor={f("repo")}>
-                <div id={f("repo")}>
-                  <Select value={r.repo ?? ""} title="Repository" onChange={(v) => set({ repo: v })}
-                    options={repos.map((x) => ({ value: x.root, label: x.name || x.root }))} />
-                </div>
-              </Field>
-            )}
-
-            {/* The "run inside tmux" box was here, promising "survives closing
-                the app". It kept that promise on the MACHINE's tmux, by typing
-                a bare `tmux new-session` into the shell. The console runs on
-                the engine now and every recipe outlives the app already, so
-                the box had nothing left to offer. The stored flag is left
-                alone rather than migrated away — an old recipe carrying it is
-                not wrong, it is just describing something that is now true of
-                all of them. */}
-            <SwitchField label="Pinned" on={pinned} disabled={!r.id || (!pinned && (pinsFull))}
-              help={!r.id ? "Save it first, then pin it." : `Pinned commands sit in the command bar (${MAX_COMMAND_PINS} at most per repository).`}
-              onToggle={() => { togglePin(pinRoot, `${RECIPE}${r.id}`); }} />
-            <SwitchField label="Always ask first" on={!!r.confirm} disabled={!!r.boot}
-              help={r.boot ? "A command that runs at start fires with nobody to ask." : "Shows what will run and waits for you, every time."}
-              onToggle={() => set({ confirm: !r.confirm })} />
-            {/* A boot recipe runs the moment the app opens, with nobody to fill
-                a box or click anything. The server refuses saving one that has
-                parameters, asks first, or reads as destructive — these two
-                switches just keep the editor from leading somewhere the save
-                would refuse. */}
-            <SwitchField label="Run when the app starts" on={!!r.boot} disabled={cannotBoot}
-              help={cannotBoot ? "Remove the parameters or the ask-first to run it at start." : "In the docked console, on every open."}
-              onToggle={() => set(!r.boot ? { boot: true, confirm: false } : { boot: false })} />
-
-            {/* Parameters. Kept next to the steps that use them, because the
-                only way to get a `{{key}}` right is to see both at once. */}
-            <div className="flex flex-col gap-2">
-              <span className="agx-field-l">Parameters</span>
-              {!!r.params?.length && (
-                <div className="agx-ptable" role="table" aria-label="Parameters">
-                  <div className="agx-ptable-h" role="row"><span>Name</span><span>Type</span><span>Choices</span><span>Flag</span><span /></div>
-                  {r.params.map((p, i) => (
-                    <div key={i} className="agx-ptable-r" role="row">
-                      <input aria-label={`Parameter ${i + 1} name`} value={p.key} onChange={(e) => setParam(i, { key: e.target.value })}
-                        className={`t-mono ${FIELD}`} style={INPUT_STYLE} />
-                      <Select value={p.type} title={`Parameter ${i + 1} type`} onChange={(v) => setParam(i, { type: v as RecipeParam["type"] })}
-                        options={PARAM_TYPES.map((t) => ({ value: t, label: t }))} />
-                      <input aria-label={`Parameter ${i + 1} choices, separated by commas`} disabled={p.type !== "choice"} placeholder={p.type === "choice" ? "one, two, three" : "—"}
-                        value={(p.options ?? []).join(", ")}
-                        onChange={(e) => setParam(i, { options: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })}
-                        className={FIELD} style={INPUT_STYLE} />
-                      <input aria-label={`Parameter ${i + 1} flag`} disabled={p.type !== "flag"} placeholder={p.type === "flag" ? "--rebuild-fe" : "—"}
-                        value={p.type === "flag" ? p.value ?? "" : ""} onChange={(e) => setParam(i, { value: e.target.value })}
-                        className={`t-mono ${FIELD}`} style={INPUT_STYLE} />
-                      <button type="button" className="agx-ptable-x" aria-label={`Remove parameter ${i + 1}`} title={`Remove parameter ${i + 1}`}
-                        onClick={() => set({ params: (r.params ?? []).filter((_, j) => j !== i) })}><CloseIcon size={ICON.xs} /></button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <div>
-                <Button onClick={() => set({ boot: false, params: [...(r.params ?? []), { key: "", label: "", type: "text" }] })}>
-                  <IconLabel icon={<PlusIcon size={ICON.xs} />}>Add parameter</IconLabel>
-                </Button>
-              </div>
+    <Section id="commands-edit" title={r.id ? `Edit ${r.name || "recipe"}` : "New recipe"}>
+      <SettingRow kind="control" label="Name" help="How you will call it."
+        control={<FormInput id={f("name")} aria-label="Name" value={r.name} onChange={(e) => set({ name: e.target.value })} className={FIELD} style={{ ...INPUT_STYLE, ...wide }} />} />
+      <SettingRow kind="control" label="What it does" help="One or two lines."
+        control={<textarea id={f("desc")} aria-label="What it does" value={r.desc} onChange={(e) => set({ desc: e.target.value })} rows={2}
+          className="w-full text-[12px] px-2.5 py-2 rounded-lg outline-none bg-[var(--surface-inset)] text-[var(--text)]" style={{ ...INPUT_STYLE, ...wide, resize: "vertical" }} />} />
+      <SettingRow kind="control" label="Steps" help="One per line. {{name}} marks a parameter."
+        control={<textarea id={f("steps")} aria-label="Steps" value={r.steps.join("\n")} onChange={(e) => set({ steps: e.target.value.split("\n") })}
+          rows={Math.max(3, r.steps.length + 1)} spellCheck={false}
+          className="w-full text-[12px] px-2.5 py-2 rounded-lg outline-none font-mono bg-[var(--surface-inset)] text-[var(--text)]" style={{ ...INPUT_STYLE, ...wide, resize: "vertical" }} />} />
+      {startsClaude(r) && (
+        <SettingRow kind="control" label="Permission mode" help="How a step that starts claude asks before a tool runs."
+          control={<LaunchModeSelect value={r.permissionMode} onChange={(m) => set({ permissionMode: m })} />} />
+      )}
+      <SettingRow kind="control" label="Where it applies" help="Everywhere, or one repository only."
+        control={<Segmented<Recipe["scope"]> track label="Where it applies" value={r.scope}
+          options={[{ id: "global", label: "Everywhere" }, { id: "repo", label: "One repository" }]}
+          onChange={(scope) => set({ scope, repo: scope === "global" ? undefined : (r.repo || repos[0]?.root) })} />} />
+      {r.scope === "repo" && (
+        <SettingRow kind="control" label="Repository" help="The one this command belongs to."
+          control={<Select value={r.repo ?? ""} title="Repository" onChange={(v) => set({ repo: v })}
+            options={repos.map((x) => ({ value: x.root, label: x.name || x.root }))} />} />
+      )}
+      <SwitchRow label="Pinned" on={pinned} disabled={!r.id || (!pinned && pinsFull)}
+        help={!r.id ? "Save it first, then pin it." : `Sits in the command bar, ${MAX_COMMAND_PINS} at most per repository.`}
+        onToggle={() => { togglePin(pinRoot, `${RECIPE}${r.id}`); }} />
+      <SwitchRow label="Always ask first" on={!!r.confirm} disabled={!!r.boot}
+        help={r.boot ? "A command that runs at start has nobody to ask." : "Shows what will run and waits for you."}
+        onToggle={() => set({ confirm: !r.confirm })} />
+      <SwitchRow label="Run when the app starts" on={!!r.boot} disabled={cannotBoot}
+        help={cannotBoot ? "Remove the parameters or ask-first to run it at start." : "Runs in the docked console on every open."}
+        onToggle={() => set(!r.boot ? { boot: true, confirm: false } : { boot: false })} />
+      <SettingRow kind="control" label="Parameters" help="Values asked for when you run it. Keep them next to the steps."
+        control={<Button onClick={() => set({ boot: false, params: [...(r.params ?? []), { key: "", label: "", type: "text" }] })}>
+          <IconLabel icon={<PlusIcon size={ICON.xs} />}>Add parameter</IconLabel>
+        </Button>} />
+      {!!r.params?.length && (
+        <div className="px-3 pb-2.5 agx-ptable" role="table" aria-label="Parameters">
+          <div className="agx-ptable-h" role="row"><span>Name</span><span>Type</span><span>Choices</span><span>Flag</span><span /></div>
+          {r.params.map((p, i) => (
+            <div key={i} className="agx-ptable-r" role="row">
+              <FormInput aria-label={`Parameter ${i + 1} name`} value={p.key} onChange={(e) => setParam(i, { key: e.target.value })}
+                className={`t-mono ${FIELD}`} style={INPUT_STYLE} />
+              <Select value={p.type} title={`Parameter ${i + 1} type`} onChange={(v) => setParam(i, { type: v as RecipeParam["type"] })}
+                options={PARAM_TYPES.map((t) => ({ value: t, label: t }))} />
+              <FormInput aria-label={`Parameter ${i + 1} choices, separated by commas`} disabled={p.type !== "choice"} placeholder={p.type === "choice" ? "one, two, three" : "—"}
+                value={(p.options ?? []).join(", ")}
+                onChange={(e) => setParam(i, { options: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })}
+                className={FIELD} style={INPUT_STYLE} />
+              <FormInput aria-label={`Parameter ${i + 1} flag`} disabled={p.type !== "flag"} placeholder={p.type === "flag" ? "--rebuild-fe" : "—"}
+                value={p.type === "flag" ? p.value ?? "" : ""} onChange={(e) => setParam(i, { value: e.target.value })}
+                className={`t-mono ${FIELD}`} style={INPUT_STYLE} />
+              <button type="button" className="agx-ptable-x" aria-label={`Remove parameter ${i + 1}`} title={`Remove parameter ${i + 1}`}
+                onClick={() => set({ params: (r.params ?? []).filter((_, j) => j !== i) })}><CloseIcon size={ICON.xs} /></button>
             </div>
-
-            </div>
-            <EditorFoot dirty={!r.id || differs(r, saved)} canSave noun="recipe" onCancel={onCancel} busy={busy} />
-          </SettingsForm>
-    </EditorPanel>
+          ))}
+        </div>
+      )}
+      <div className="px-3 py-2.5" style={{ borderTop: LINE }}>
+        <GroupActions primary="Save recipe" dirty={!r.id || differs(r, saved)} busy={busy} onPrimary={() => onSave(r)} onCancel={onCancel} />
+      </div>
+    </Section>
   );
 }
 
@@ -470,7 +402,7 @@ export function RunDialog({ r, repos, onClose, onNote, onRunStep, targetInTmux }
           <span className="text-[9.5px] uppercase tracking-[0.14em]" style={{ color: "var(--text4)" }}>{p.label || p.key}</span>
           {p.type === "flag" ? (
             <label className="flex items-center gap-1.5 text-[11px]" style={{ color: "var(--text2)" }}>
-              <input type="checkbox" checked={values[p.key] === "1"} onChange={(e) => setValues((v) => ({ ...v, [p.key]: e.target.checked ? "1" : "0" }))} />
+              <FormInput type="checkbox" checked={values[p.key] === "1"} onChange={(e) => setValues((v) => ({ ...v, [p.key]: e.target.checked ? "1" : "0" }))} />
               {(p.value || `--${p.key}`).replace(/^!/, "")}
             </label>
           ) : p.type === "choice" ? (
@@ -484,7 +416,7 @@ export function RunDialog({ r, repos, onClose, onNote, onRunStep, targetInTmux }
               onPick={(r) => setValues((v) => ({ ...v, [p.key]: r }))}
               placeholder="—" triggerMaxWidth={220} />
           ) : (
-            <input value={values[p.key] ?? ""} onChange={(e) => setValues((v) => ({ ...v, [p.key]: e.target.value }))}
+            <FormInput value={values[p.key] ?? ""} onChange={(e) => setValues((v) => ({ ...v, [p.key]: e.target.value }))}
               className={INPUT} style={INPUT_STYLE} spellCheck={false} />
           )}
         </label>
@@ -524,12 +456,7 @@ export function RunDialog({ r, repos, onClose, onNote, onRunStep, targetInTmux }
   );
 }
 
-/**
- * The same run, as a card of its own in Settings: the values as stacked
- * labelled fields, the lines that will run under them, one primary Run. The
- * command bar keeps its small dialog; both read the same hook, so what is
- * previewed is what is sent in either place.
- */
+/** The same run, as a section of its own in Settings: the values as rows, the lines that will run, one primary Run. The command bar keeps its small dialog; both read the same hook. */
 function RunForm({ r, repos, onClose, onNote }: {
   r: Recipe; repos: GitRepoRef[]; onClose: () => void; onNote: (n: { ok: boolean; text: string }) => void;
 }) {
@@ -538,69 +465,40 @@ function RunForm({ r, repos, onClose, onNote }: {
   const set = (k: string, v: string) => setValues((cur) => ({ ...cur, [k]: v }));
   const blocked = !preview || !!preview.missing.length || inTmux;
   return (
-    <SettingsCard title={`Run ${r.name}`}>
-      <div className="agx-settings-row">
-        <div className="agx-row-below">
-          <SettingsForm label={`Run ${r.name}`} onSubmit={go}>
-            {(r.params ?? []).map((p) => {
-              const id = `${uid}-${p.key}`;
-              const label = p.label || p.key;
-              if (p.type === "flag") {
-                return (
-                  <label key={p.key} className="flex items-center gap-2 text-[12px]" style={{ color: "var(--text2)" }}>
-                    <input type="checkbox" checked={values[p.key] === "1"} onChange={(e) => set(p.key, e.target.checked ? "1" : "0")} />
-                    {(p.value || `--${p.key}`).replace(/^!/, "")}
-                  </label>
-                );
-              }
-              return (
-                <Field key={p.key} label={label} htmlFor={id}>
-                  {p.type === "choice" ? (
-                    <select id={id} value={values[p.key] ?? ""} onChange={(e) => set(p.key, e.target.value)}
-                      className={`w-full ${INPUT}`} style={INPUT_STYLE}>
-                      <option value="">—</option>
-                      {(p.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
-                    </select>
-                  ) : p.type === "repo" || p.type === "worktree" ? (
-                    <div id={id}>
-                      <CheckoutPicker repos={repos} value={values[p.key] ?? ""}
-                        onPick={(v) => set(p.key, v)} placeholder="—" triggerMaxWidth={320} />
-                    </div>
-                  ) : (
-                    <input id={id} value={values[p.key] ?? ""} onChange={(e) => set(p.key, e.target.value)}
-                      className={`w-full ${INPUT}`} style={INPUT_STYLE} spellCheck={false} />
-                  )}
-                </Field>
-              );
-            })}
-
-            <div className="flex flex-col gap-1.5">
-              <span className="agx-field-l">Will run</span>
-              <pre className="text-[12px] font-mono px-2.5 py-2 rounded-lg overflow-x-auto whitespace-pre m-0"
-                style={{ background: "var(--surface-inset)", color: "var(--text2)" }}>{preview?.steps.join("\n") || "…"}</pre>
-            </div>
-
-            {preview?.confirm && (
-              <div role="alert" className="text-[12px]" style={{ color: "var(--warning-ink)" }}>
-                This one is not easily undone. Read the lines above before you run it.
-              </div>
-            )}
-            {!!preview?.missing.length && (
-              <div className="agx-field-h">Still needs: {preview.missing.join(", ")}</div>
-            )}
-            {inTmux && (
-              <div role="alert" className="text-[12px]" style={{ color: "var(--warning-ink)" }}>
-                The console is inside tmux, so this would type into the pane's program, not a prompt.
-              </div>
-            )}
-
-            <div className="agx-sform-actions">
-              <Button type="submit" tone="primary" disabled={blocked}>{preview?.confirm ? "Run it anyway" : "Run"}</Button>
-              <Button onClick={onClose}>Cancel</Button>
-            </div>
-          </SettingsForm>
-        </div>
+    <Section id="commands-run" title={`Run ${r.name}`}>
+      {(r.params ?? []).map((p) => {
+        const id = `${uid}-${p.key}`;
+        const label = p.label || p.key;
+        if (p.type === "flag") {
+          return (
+            <SettingRow key={p.key} kind="control" label={label} help={(p.value || `--${p.key}`).replace(/^!/, "")}
+              control={<FormInput type="checkbox" aria-label={label} checked={values[p.key] === "1"} onChange={(e) => set(p.key, e.target.checked ? "1" : "0")} />} />
+          );
+        }
+        return (
+          <SettingRow key={p.key} kind="control" label={label}
+            control={p.type === "choice" ? (
+              <select id={id} aria-label={label} value={values[p.key] ?? ""} onChange={(e) => set(p.key, e.target.value)} className={INPUT} style={INPUT_STYLE}>
+                <option value="">—</option>
+                {(p.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
+              </select>
+            ) : p.type === "repo" || p.type === "worktree" ? (
+              <div id={id}><CheckoutPicker repos={repos} value={values[p.key] ?? ""} onPick={(v) => set(p.key, v)} placeholder="—" triggerMaxWidth={320} /></div>
+            ) : (
+              <FormInput id={id} aria-label={label} value={values[p.key] ?? ""} onChange={(e) => set(p.key, e.target.value)} className={INPUT} style={INPUT_STYLE} spellCheck={false} />
+            )} />
+        );
+      })}
+      <SettingRow kind="control" label="Will run" help="Exactly what is sent, already filled in."
+        control={<pre className="text-[12px] font-mono px-2.5 py-2 rounded-lg overflow-x-auto whitespace-pre m-0"
+          style={{ background: "var(--surface-inset)", color: "var(--text2)", maxWidth: 360 }}>{preview?.steps.join("\n") || "…"}</pre>} />
+      {preview?.confirm && <div role="alert" className="px-3 py-2 text-[12px]" style={{ color: "var(--warning-ink)" }}>This one is not easily undone. Read the lines above before you run it.</div>}
+      {!!preview?.missing.length && <div className="px-3 py-2 text-[12px]" style={{ color: "var(--text2)" }}>Still needs: {preview.missing.join(", ")}</div>}
+      {inTmux && <div role="alert" className="px-3 py-2 text-[12px]" style={{ color: "var(--warning-ink)" }}>The console is inside tmux, so this would type into the pane's program, not a prompt.</div>}
+      <div className="px-3 py-2.5 flex gap-2" style={{ borderTop: LINE }}>
+        <Button tone="primary" disabled={blocked} onClick={go}>{preview?.confirm ? "Run it anyway" : "Run"}</Button>
+        <Button onClick={onClose}>Cancel</Button>
       </div>
-    </SettingsCard>
+    </Section>
   );
 }

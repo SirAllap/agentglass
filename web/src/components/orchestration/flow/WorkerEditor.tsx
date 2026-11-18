@@ -16,12 +16,12 @@
  * person's step here, and a role that is not on the path cannot be required.
  */
 import { useEffect, useRef, useState } from "react";
-import { FLOW_ICONS, FLOW_HUES, FLOW_PROMPT_MAX, roleById, type Flow, type FlowRole } from "../../../../../shared/flow.ts";
+import { FLOW_ICONS, FLOW_HUES, FLOW_PROMPT_MAX, FLOW_FIRST_COMMAND_MAX, roleById, type Flow, type FlowRole } from "../../../../../shared/flow.ts";
 import { FLOW_ROUNDS_MAX } from "../../../../../shared/flow.ts";
 import { DEFAULT_REVIEW_ROUNDS, REVIEW_ROUNDS_MAX } from "../../../../../shared/reviewSettings.ts";
 import { templateFlow } from "../../../../../shared/flowTemplates.ts";
-import { NEVER_LIFTABLE } from "../../../../../shared/workerRoles.ts";
-import type { Chain } from "../../../../../shared/orchestration.ts";
+import { FIXED_COMMANDS, workerRole } from "../../../../../shared/workerRoles.ts";
+import { ROLE_IDS, type Chain } from "../../../../../shared/orchestration.ts";
 import { ChainList } from "./ChainEditor.tsx";
 import { BlockRules } from "./BlockRules.tsx";
 import { ModelInput } from "./ModelInput.tsx";
@@ -51,13 +51,20 @@ function Info({ text }: { text: string }) {
  * survive); the list is what the lines make, and the flow's validator answers a
  * prefix no role may ever be granted.
  */
+/** What a role's extra commands can lift (server/src/agents/envelope.ts LIFTS, allowWithin): anything else is dropped when the flow starts. */
+const LIFTABLE = ["git commit", "curl", "wget", "docker"];
+
 function AllowBox({ allow, onChange }: { allow: string[]; onChange: (a: string[]) => void }) {
   const [text, setText] = useState(allow.join("\n"));
+  const dropped = allow.filter((c) => !LIFTABLE.includes(c));
   useEffect(() => { if (denyLines(text).join("\n") !== allow.join("\n")) setText(allow.join("\n")); }, [allow]);
   return (
+    <>
     <textarea id="fe-wed-allow" value={text} rows={2} spellCheck={false} aria-label="Commands this role may run, one prefix per line"
       placeholder="e.g. docker compose up" className="fe-in fe-wedallow"
       onChange={(e) => { setText(e.target.value); onChange(denyLines(e.target.value)); }} />
+    {dropped.length > 0 && <p role="note" className="fe-wedquiet" data-allow-dropped>Not a lift, so it does nothing: {dropped.join(", ")}. Only git commit, curl, wget and docker are lifted, and only where the most allowed has them on.</p>}
+    </>
   );
 }
 
@@ -306,24 +313,41 @@ export function WorkerEditor(p: {
                 : ownChain
                   ? (
                     <>
-                      <div><div className="fe-lab">Engine</div>
-                        <div className="fe-eng">
-                          {ENGINE_CHOICES.map((e) => (
-                            <button key={e.id} type="button" aria-pressed={first?.engine === e.id} onClick={() => setEngine(e.id)}>
-                              <b>{engineName(e.id)}</b><small>{ENGINE_PLAN[e.id]}</small>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
                       <div className="fe-field">
-                        <ModelInput choice={first ?? null} label={`Model for ${draft.name || "this role"}`} disabled={!first}
-                          note={`${(ENGINE_CHOICES.find((e) => e.id === first?.engine)?.models ?? []).length} offered · its own default if you pick none`}
-                          wide onCommit={(c) => setModel(c.model)} />
+                        <label htmlFor="fe-wed-base">Works like</label>
+                        <span className="fe-selwrap">
+                          <select id="fe-wed-base" value={draft.basePolicyRole} onChange={(e) => set({ basePolicyRole: e.target.value as WorkerDraft["basePolicyRole"] })}>
+                            <option value="">Its own chain, chosen below</option>
+                            {ROLE_IDS.map((r) => <option key={r} value={r}>{workerRole(r)!.title}</option>)}
+                          </select>
+                          <FlowIcon name="chev" size={12} />
+                        </span>
+                        <small>{draft.basePolicyRole
+                          ? `${workerRole(draft.basePolicyRole)!.what} browser: ${draft.basePolicyRole === "scout" ? "no" : "yes"}. Saves on its chain, model and envelope instead of its own.`
+                          : "No base role: no browser, no base walls."}</small>
                       </div>
-                      <div className="fe-fbsec">
-                        <span className="fe-lab">If it cannot start, try next <small>in this order · drag to reorder</small></span>
-                        <ChainList chain={draft.chain} onChange={(chain: Chain) => set({ chain })} />
-                      </div>
+                      {draft.basePolicyRole ? null : (
+                        <>
+                          <div><div className="fe-lab">Engine</div>
+                            <div className="fe-eng">
+                              {ENGINE_CHOICES.map((e) => (
+                                <button key={e.id} type="button" aria-pressed={first?.engine === e.id} onClick={() => setEngine(e.id)}>
+                                  <b>{engineName(e.id)}</b><small>{ENGINE_PLAN[e.id]}</small>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="fe-field">
+                            <ModelInput choice={first ?? null} label={`Model for ${draft.name || "this role"}`} disabled={!first}
+                              note={`${(ENGINE_CHOICES.find((e) => e.id === first?.engine)?.models ?? []).length} offered · its own default if you pick none`}
+                              wide onCommit={(c) => setModel(c.model)} />
+                          </div>
+                          <div className="fe-fbsec">
+                            <span className="fe-lab">If it cannot start, try next <small>in this order · drag to reorder</small></span>
+                            <ChainList chain={draft.chain} onChange={(chain: Chain) => set({ chain })} />
+                          </div>
+                        </>
+                      )}
                     </>
                   )
                   : <p className="fe-wedquiet">{shortChain(draft.chain)}</p>)}
@@ -353,6 +377,11 @@ export function WorkerEditor(p: {
                   <span>the turn starts with this</span>
                   <span className="fe-sp" />
                   <span>{draft.prompt.length} / {FLOW_PROMPT_MAX} · kept for {p.project}</span>
+                </div>
+                <div>
+                  <div className="fe-lab">First command <small>optional · sent as the turn's own first line, so {engineName(first?.engine ?? "")} runs it itself. Example: /jira-fix-card {"{card}"}</small></div>
+                  <input className={`${INPUT} fe-in`} id="fe-wed-firstcommand" value={draft.firstCommand} maxLength={FLOW_FIRST_COMMAND_MAX} spellCheck={false}
+                    placeholder="/jira-fix-card {card}" onChange={(e) => set({ firstCommand: e.target.value })} />
                 </div>
                 {!isNew && (
                   <div className="fe-rolemask">
@@ -433,6 +462,17 @@ export function WorkerEditor(p: {
                   <div className="fe-d"><b>Reads only</b><small>It can look at the diff and files, never change them.</small></div>
                   <Switch on={draft.readsOnly} label="Reads only" onChange={(on) => set({ readsOnly: on })} />
                 </div>
+                {role?.policyRole && workerRole(role.policyRole)?.readOnly && (
+                  <p className="fe-wedquiet">
+                    {role.policyRole === "scout"
+                      ? <>Its kind (Scout) forces read-only here, whatever this switch says, unless Settings ▸ Orchestration ▸ Worker planner write is on for this project and this switch is off.</>
+                      : <>Its kind ({workerRole(role.policyRole)!.title}) forces read-only here, whatever this switch says: no project setting lifts it.</>}
+                  </p>
+                )}
+                <div className="fe-row2">
+                  <div className="fe-d"><b>May start subagents (Agent tool)</b><small>Lets a team skill spawn its own reviewer subagents. A subagent inherits this role's own sandbox and envelope, nothing wider. Off by default; turning it on waits for your one-click approval when an agent saves this change.</small></div>
+                  <Switch on={draft.mayStartSubagents} label="May start subagents" onChange={(on) => set({ mayStartSubagents: on })} />
+                </div>
                 <div className="fe-tools">
                   {TOOL_IDS.map((t) => {
                     const on = draft.tools.includes(t);
@@ -447,7 +487,7 @@ export function WorkerEditor(p: {
                 <div className="fe-xcmd">
                   <div className="fe-xhead"><b>Extra commands this role may run</b></div>
                   <AllowBox allow={draft.allow} onChange={(allow) => set({ allow })} />
-                  <div className="fe-xlock"><FlowIcon name="lock" size={12} /><span>Never allowed for any worker:</span>{NEVER_LIFTABLE.map((c) => <code key={c}>{c}</code>)}</div>
+                  <div className="fe-xlock"><FlowIcon name="lock" size={12} /><span>A worker runs what its seat runs. Refused to every worker, because the seat must not run them either:</span>{FIXED_COMMANDS.map((c) => <code key={c}>{c}</code>)}</div>
                 </div>
               </>)}
 

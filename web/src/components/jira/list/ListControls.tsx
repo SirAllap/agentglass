@@ -91,6 +91,13 @@ export const FunnelIcon = ({ size = ICON.sm }: { size?: number }) => (
   </svg>
 );
 
+/** Three lines of falling length: the Display button's glyph. */
+export const DisplayIcon = ({ size = ICON.sm }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth={1.4} strokeLinecap="round" aria-hidden>
+    <path d="M2 3.5h10M2 7h10M2 10.5h6" />
+  </svg>
+);
+
 /** A small caption in the chips row ("Group", "Then"). */
 export const Eyebrow = ({ children }: { children: ReactNode }) => (
   <span className="text-[10.5px] uppercase shrink-0" style={{ letterSpacing: ".04em", color: "var(--text4)" }}>{children}</span>

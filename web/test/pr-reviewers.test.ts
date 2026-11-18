@@ -361,8 +361,8 @@ describe("the Overview and the board agree", () => {
     expect(fn).toContain("onGoReview(e.nodeId, e.url!)");
     expect(fn).toContain("onGoReview(e.replaced!.nodeId, e.replaced!.url!)");
     expect(fn).toContain('<Button size="compact" tone="quiet"');
-    expect(fn).toContain(">ASKED AGAIN</Badge>");
-    expect(fn).toContain("{String(REVIEW_ROUND[e.state].word).toUpperCase()}</Badge>");
+    expect(fn).toContain(">Asked again</span>");
+    expect(fn).toContain("{REVIEW_ROUND[e.state].word}</span>");
   });
 
   test("the review history is a flat section on the rows around it, and its rows wrap in a side panel", () => {
@@ -370,7 +370,7 @@ describe("the Overview and the board agree", () => {
     // A boxed, inset panel among full-width rows read as stuck on.
     expect(fn).not.toContain("var(--surface-inset)");
     expect(fn).not.toContain("rounded-lg");
-    expect(fn).toContain("borderBottom: LINE");
+    expect(fn).not.toContain("borderBottom: LINE");
     // A grid of fixed columns broke to one word per line at the panel's width.
     expect(fn).toContain("flex-wrap");
     expect(fn).not.toContain("gridTemplateColumns");

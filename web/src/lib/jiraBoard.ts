@@ -49,13 +49,16 @@ export function statusesOfCards(tasks: readonly ProviderTask[]): ListStatus[] {
 export function boardOf(r: JiraViewRead): ViewTasksResponse {
   return {
     tasks: r.tasks,
-    statuses: r.statuses ?? statusesOfCards(r.tasks),
+    /* No list of our own from the cards: the order a person sees comes from the workflow or the one stored for the view. */
+    statuses: r.statuses ?? [],
     fields: [],
     // Where it sits, as the breadcrumb over the board reads it: the project, then the board. The built-in view has none.
     ...(r.view && !r.view.builtin ? { place: { ...(r.view.folderName ? { folder: r.view.folderName } : {}), list: r.view.name } } : {}),
     ...(r.view ? { view: r.view } : {}),
+    ...(r.statusBoard ? { columnsFrom: r.statusBoard } : {}),
     ...(r.ok ? {} : { error: r.error || "Jira did not answer", ...(r.throttled ? { throttled: true } : {}), ...(r.unauthorised ? { unauthorised: true } : {}) }),
     ...(r.truncated ? { truncated: true } : {}),
+    ...(r.backlogCut ? { backlogCut: true } : {}),
     at: r.at,
   };
 }
@@ -129,6 +132,8 @@ export const JIRA_BOARD: BoardSource = {
   boardContext: (viewId) => api.jiraBoardContext(viewId),
   boardAreas: (viewId) => api.jiraBoardAreas(viewId),
   rank: (key, ask) => api.jiraRank(key, ask),
+  moveToSprint: (sprint, keys) => api.jiraSprintMove(sprint, keys),
+  moveToBacklog: (keys) => api.jiraBacklogMove(keys),
   list: async () => NOT_HERE,
   listViews: async () => ({ ok: true, views: [], links: [] }),
   setWrites: (on) => api.jiraWrites(on),

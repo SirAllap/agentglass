@@ -36,7 +36,7 @@ export interface PaneCells { left: number; top: number; right: number; bottom: n
  * `top` is the pane's bottom edge, not the bar's top: the caller draws upwards
  * from it, which is the direction the bar comes from.
  */
-export function paneFoot(o: { screen: Rect; slot: Rect; cols: number; rows: number; pane: PaneCells | null; edge?: number }): { left: number; top: number; width: number } {
+export function paneFoot(o: { screen: Rect; slot: Rect; cols: number; rows: number; pane: PaneCells | null; edge?: number }): { left: number; top: number; width: number; atRight: boolean } {
   const cellW = o.cols > 0 ? o.screen.width / o.cols : 0;
   const cellH = o.rows > 0 ? o.screen.height / o.rows : 0;
   const dx = o.screen.left - o.slot.left;
@@ -64,5 +64,23 @@ export function paneFoot(o: { screen: Rect; slot: Rect; cols: number; rows: numb
     left: Math.round(Math.max(left, 0)),
     top: Math.round(Math.min(Math.max(foot, 0), o.slot.height)),
     width: Math.round(Math.min(width, o.slot.width)),
+    /* The bench button sits in the slot's bottom-right corner, so only the pane
+       whose foot touches BOTH the right edge and the slot bottom makes room.
+       xterm leaves up to one cell of slack right of its grid, plus the slot's
+       padding (dx), so the tolerance grows with the font. */
+    atRight: touchesRightEdge({ left, width }, o.slot.width, Math.max(16, cellW + dx)) && Math.min(Math.max(foot, 0), o.slot.height) >= o.slot.height - Math.max(16, cellH + dy),
   };
+}
+
+/** Does a pane's foot reach the container's right edge? Only that pane sits under the bench button.
+ *  `tol` forgives the part-cell gap xterm leaves at the right of its grid. */
+export function touchesRightEdge(foot: { left: number; width: number }, containerW: number, tol = 16): boolean {
+  return foot.left + foot.width >= containerW - tol;
+}
+
+/** Is this pane the one in the terminal's bottom-right corner, where the bench button sits?
+ *  Pure cell arithmetic on tmux's inclusive cells, so it needs no measuring and holds on the first paint.
+ *  No pane (one pane, zoomed, no tmux) means the whole terminal, which is the corner. */
+export function paneAtCorner(pane: PaneCells | null, cols: number, rows: number): boolean {
+  return !pane || (pane.right + 1 >= cols && pane.bottom + 1 >= rows);
 }

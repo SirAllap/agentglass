@@ -27,7 +27,7 @@ function Item({ children, onClick, tone, disabled, right }: { children: ReactNod
   );
 }
 
-export function PrViewsBar({ api, counts, live, setLive, sort, hotkeys, everyone }: {
+export function PrViewsBar({ api, counts, live, setLive, sort, hotkeys, everyone, reviewedByMe }: {
   api: PrViewsApi;
   /** PRs each view would show on this board, by view id. */
   counts: Map<string, number>;
@@ -37,6 +37,8 @@ export function PrViewsBar({ api, counts, live, setLive, sort, hotkeys, everyone
   hotkeys: boolean;
   /** Per repository: whether the lanes take in every open PR, not only yours and the ones you were asked to review. */
   everyone?: { on: boolean; toggle: (on: boolean) => void };
+  /** Start the search for what the viewer has already reviewed; absent, no chip is drawn. */
+  reviewedByMe?: () => void;
 }) {
   const { views, active } = api;
   const dirty = !!active && viewDirty(live, active.filter);
@@ -146,6 +148,12 @@ export function PrViewsBar({ api, counts, live, setLive, sort, hotkeys, everyone
             ? "Showing every open pull request in this repository. Turn off to show only yours and the ones you were asked to review."
             : "Show every open pull request in this repository in the lanes, not only yours and the ones you were asked to review."}>
           <PfIcon name="eye" size={ICON.sm} />Show everyone's PRs
+        </Button>
+      )}
+      {/* Not a view: a search the row starts, and it is about whose work is on the board, like the switch above. */}
+      {reviewedByMe && (
+        <Button size="hit" onClick={reviewedByMe} title="Every pull request you have already reviewed, in this repository">
+          <PfIcon name="check" size={ICON.sm} />Reviewed by me
         </Button>
       )}
       {/* Not inside the chips: it owns the views that do not fit, the sort and the options, so it reads as a control of the row. */}

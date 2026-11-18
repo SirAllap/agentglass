@@ -11,10 +11,13 @@ import { laneFromHash, laneIsEphemeral, laneProfileFromHash } from "./lib/lane.t
 import { adoptServer } from "./lib/api.ts";
 import { ticketFromUrl, clearTicketFromUrl } from "./lib/pairing.ts";
 import { followServerChanges } from "./lib/desktop.ts";
+import { installLinkRoute } from "./lib/otherLinks.ts";
 import { applyTheme, initialTheme, watchThemeStorage, watchSystemTheme, watchDesktopPalette } from "./lib/themes.ts";
 import { restoreScale } from "./lib/uiScale.ts";
 import { watchLook } from "./lib/lookPrefs.ts";
+import { watchHangs } from "./lib/hangWatch.ts";
 import "./index.css";
+import "./jiraMock.css";
 import "./fonts.ts"; // bundled monospace faces — see fonts.ts
 
 // Restoring browser state paints this document only. Machine-wide theme output
@@ -32,6 +35,9 @@ watchDesktopPalette();
 // reflows into it, which is far less jarring than blocking the first paint.
 restoreScale();
 watchLook();
+// The renderer's half of the hang watchdog: long tasks over 500 ms into the
+// shell's window.log. Nothing is installed in a browser tab, and no timer runs.
+watchHangs();
 
 /*
  * There is one application now.
@@ -58,6 +64,7 @@ watchLook();
 // revoked. Adopt the new origin/token in place rather than reloading the app.
 followServerChanges();
 
+installLinkRoute(); // the shell hands its link escapes here; see otherLinks.ts
 const root = ReactDOM.createRoot(document.getElementById("root")!);
 
 /** Tells the launch cover React has committed. An effect here runs after every

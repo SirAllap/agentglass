@@ -85,7 +85,8 @@ test("agentglass's own switch round-trips, persists and tells its listeners", ()
   expect(sysNotify.appNotify()).toBe(false);
   // A preference, not a session mood: it is read from storage on every call, so
   // this is what a fresh page would see.
-  expect(cell.get("agentglass.appNotify")).toBe("0");
+  // Stored as the per-app rule now ("agentglass news: Bell only").
+  expect(JSON.parse(cell.get("agentglass.notes.appRules")!)).toEqual({ agentglass: "bell" });
 
   sysNotify.setAppNotify(true);
   expect(sysNotify.appNotify()).toBe(true);

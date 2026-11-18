@@ -19,11 +19,11 @@ const all = code(Object.values(text).join("\n"));
 
 describe("the view in Settings > Agents > Polaris", () => {
   test("it is mounted once, on the Polaris page, with that page's scope", async () => {
-    const page = await Bun.file(new URL("../src/components/polaris/PolarisPane.tsx", import.meta.url)).text();
+    const page = await Bun.file(new URL("../src/components/settings/pages/PolarisPage.tsx", import.meta.url)).text();
     expect(page.match(/<PolarisView /g)?.length).toBe(1);
-    expect(page).toContain("<PolarisView root={root} />");
+    expect(page).toContain("<PolarisView root={sc.root} />");
     const modal = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url)).text();
-    expect(modal).toContain('{show("polaris") && <PolarisPane />}');
+    expect(modal).toContain('show("polaris") && <PolarisPage />');
     expect(pane).not.toContain("<PolarisView");
     expect(pane).not.toContain("<PolarisCard");
   });
@@ -39,7 +39,7 @@ describe("the view in Settings > Agents > Polaris", () => {
 describe("what the Polaris pieces may call", () => {
   test("the only write to the world beyond settings is a click: act, beacon send, edit, discard, settings save", () => {
     const calls = [...all.matchAll(/\bapi\.([a-z]\w*)\(/g)].map((m) => m[1]);
-    expect(new Set(calls)).toEqual(new Set(["polarisSettings", "polarisSettingsSave", "polarisItems", "polarisAct", "polarisBeaconSend", "polarisBeaconEdit", "polarisBeaconDiscard", "workerRoles", "prLocalHead", "projects"]));
+    expect(new Set(calls)).toEqual(new Set(["polarisSettings", "polarisSettingsSave", "polarisItems", "polarisGithub", "polarisAct", "polarisBeaconSend", "polarisBeaconEdit", "polarisBeaconDiscard", "workerRoles", "prLocalHead"]));
   });
   test("no call pattern for merge, comment, label, review or card move", () => {
     expect(all).not.toMatch(/pr merge["'`]|\/comments|\/labels|\/reviews|moveCard|cardMove/);

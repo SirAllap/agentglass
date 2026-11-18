@@ -20,7 +20,9 @@ import { openPr, openPrs, prRefFromUrl } from "../../lib/openPrs.ts";
 import { prAddress } from "../../../../shared/taskref.ts";
 import { Author } from "./Author.tsx";
 import { tipAttr } from "../../lib/tip.ts";
-import { mergedInk } from "../../lib/cardPrPick.ts";
+import { mergedInk, type CardPr } from "../../lib/cardPrPick.ts";
+import { cardPrsOf } from "../../lib/cardPrStore.ts";
+import { prRows, withKnownOwn, type PrRow } from "../../lib/jiraPrRows.ts";
 import { PullRequestIcon } from "../../lib/glyphIcons.tsx";
 import { EDGE, INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
 import { HIT, ICON } from "../../lib/iconSize.ts";
@@ -42,8 +44,8 @@ export function openLinked(url: string, number: number): void {
 }
 
 /** The ring a pull request wears: open is green, merged purple, closed red, and a draft or a mention the quiet grey. */
-function ringOf(l: JiraLink): { c: string; ink: string; word: string } {
-  const st = l.dev?.state ?? "";
+function ringOf(l: JiraLink, row?: PrRow): { c: string; ink: string; word: string } {
+  const st = row ? row.state.toUpperCase() : (l.dev?.state ?? "");
   if (st === "MERGED") return { c: "var(--merged)", ink: mergedInk(), word: "MERGED" };
   if (st === "CLOSED") return { c: "var(--error)", ink: "var(--error-ink)", word: "CLOSED" };
   if (st === "OPEN") return { c: "var(--success)", ink: "var(--success-ink)", word: "OPEN" };
@@ -51,8 +53,8 @@ function ringOf(l: JiraLink): { c: string; ink: string; word: string } {
 }
 
 /** One pull request as a tile: a facet-cut card whose ring is its state, who wrote it, where it goes, who approved. The tile is the one control: it opens the pull request here. */
-export function PrTile({ l }: { l: JiraLink }) {
-  const r = ringOf(l);
+export function PrTile({ l, row, onLink }: { l: JiraLink; row?: PrRow; onLink?: (url: string) => void }) {
+  const r = ringOf(l, row);
   const d = l.dev;
   const parts = d ? [approvalsOf(d)].filter((x): x is string => !!x) : [];
   return (
@@ -62,33 +64,43 @@ export function PrTile({ l }: { l: JiraLink }) {
       </span>
       <button type="button" onClick={() => openLinked(l.url, l.number)} data-tip={tipAttr({ name: `#${l.number}`, mono: true, text: "Open this pull request." })}
         aria-label={`Open pull request #${l.number}`} className="agx-btn flex-1 min-w-0 text-left flex flex-col" style={{ gap: 4 }}>
-        <span className="truncate" style={{ fontFamily: "var(--font-prose)", fontSize: 13, fontWeight: 600, lineHeight: 1.35, color: "var(--text)" }}>{l.dev?.title || l.title || l.url}</span>
+        <span className="truncate" style={{ fontFamily: "var(--font-prose)", fontSize: 13, fontWeight: 600, lineHeight: 1.35, color: "var(--text)" }}>{row ? row.label : l.dev?.title || l.title || l.url}</span>
         <span className="flex items-center min-w-0" style={{ gap: 8, fontSize: 10.5, color: "var(--text3)" }}>
-          <span className="tabular-nums shrink-0" style={{ color: r.ink }}>#{l.number}{r.word && ` ${r.word}`}</span>
+          {row ? (row.state && <span className="shrink-0 rounded-full px-1.5" style={{ color: r.ink, background: `color-mix(in srgb, ${r.c} 14%, transparent)` }}>{row.state}</span>)
+            : <span className="tabular-nums shrink-0" style={{ color: r.ink }}>#{l.number}{r.word && ` ${r.word}`}</span>}
           {d?.from && d.into && <span className="truncate min-w-0">{d.from} → {d.into}</span>}
           {d?.author && <span className="inline-flex shrink-0" aria-label={`by ${d.author}`}><Author who={d.author} size={20} /></span>}
           {parts.map((x) => <span key={x} className="shrink-0">{x}</span>)}
         </span>
-        {l.where && <span style={{ fontSize: 10, color: "var(--text4)" }}>{WHERE_LABEL[l.where]}</span>}
+        {row ? <span style={{ fontSize: 10, color: "var(--text4)" }}>{row.relation}</span>
+          : l.where && <span style={{ fontSize: 10, color: "var(--text4)" }}>{WHERE_LABEL[l.where]}</span>}
       </button>
+      {row?.canLink && onLink && (
+        <button type="button" onClick={() => onLink(l.url)} aria-label={`Link pull request #${l.number} on the card`} className="agx-btn text-[10.5px] px-2.5 rounded-lg shrink-0" style={{ border: EDGE, color: "var(--text2)", minHeight: HIT }}>Link</button>
+      )}
     </div>
   );
 }
 
 /** The rows and the box, from what is already known; the data and the writing live in `JiraCardPrs`. */
-export function JiraPrsView({ links, error, writable, said, busy, draft, onDraft, onLink, quiet }: {
+export function JiraPrsView({ links, error, writable, said, busy, draft, onDraft, onLink, quiet, known, onLinkUrl }: {
   links: JiraLink[] | null; error: string; writable: boolean; said: string; busy: boolean;
   draft: string; onDraft: (v: string) => void; onLink: () => void;
   /** The pane already says writes are off; this section then draws no box and no second sentence. */
   quiet?: boolean;
+  /** Pull requests already read elsewhere (the board's), lending a title and a state to a row that has a number only. */
+  known?: CardPr[];
+  /** One click on a mention's "Link"; absent when linking is off. */
+  onLinkUrl?: (url: string) => void;
 }) {
+  const rows = links ? prRows(links, known) : [];
   return (
     <div className="flex flex-col min-w-0" style={{ gap: 8 }} aria-label="Pull requests">
       <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>Pull requests</div>
       {links === null && <div className="text-[10.5px]" style={{ color: "var(--text4)" }}>Reading the card's links…</div>}
       {links !== null && error && <div className="text-[10.5px]" role="status" style={{ color: "var(--warning-ink)" }}>{error}</div>}
       {links !== null && !error && !links.length && <div className="text-[10.5px]" style={{ color: "var(--text4)" }}>No pull request is linked on the card.</div>}
-      {links?.map((l) => <PrTile key={l.url} l={l} />)}
+      {rows.map((row) => <PrTile key={row.url} l={links!.find((x) => x.url === row.url)!} row={row} onLink={writable ? onLinkUrl : undefined} />)}
       {writable ? (
         <form className="flex items-center min-w-0" style={{ gap: 8 }} onSubmit={(e) => { e.preventDefault(); if (!busy) onLink(); }}>
           <input value={draft} onChange={(e) => onDraft(e.target.value)} placeholder="Paste a pull request address"
@@ -106,8 +118,10 @@ export function JiraPrsView({ links, error, writable, said, busy, draft, onDraft
   );
 }
 
-export function JiraCardPrs({ query, writable, quiet, mentions, dev }: {
+export function JiraCardPrs({ query, writable, quiet, mentions, dev, repo }: {
   query: string; writable: boolean; quiet?: boolean;
+  /** The repo the card is seen from, when it is seen from a pull request: its account reads and writes the links. */
+  repo?: string;
   /** What the site's development tool holds for the card, read by the pane (lib/jiraDev.ts); null or absent draws nothing extra. */
   dev?: CardDev | null;
   /** Addresses in the card's own words, from the detail read the pane already made (never a request of this section's own). */
@@ -121,19 +135,20 @@ export function JiraCardPrs({ query, writable, quiet, mentions, dev }: {
   useEffect(() => {
     let on = true;
     setV(null); setSaid(""); setDraft("");
-    void readJiraLinks(query).then((r) => { if (on) setV(r); });
+    void readJiraLinks(query, repo).then((r) => { if (on) setV(r); });
     return () => { on = false; };
-  }, [query]);
-  const link = async () => {
-    const a = prAddress(draft);
+  }, [query, repo]);
+  const link = async (address = draft) => {
+    const a = prAddress(address);
     if (!a) { setSaid("!That is not a pull request address."); return; }
     setBusy(true);
-    const r = await api.jiraLink(query, a.url).catch(() => null);
+    const r = await api.jiraLink(query, a.url, "", repo).catch(() => null);
     setBusy(false);
     if (!r?.ok) { setSaid(`!${r?.error || "Could not reach the server"}`); return; }
-    setV(addJiraLink(query, { url: a.url, number: a.number, title: `${a.slug}#${a.number}`, resolved: false }));
-    setDraft("");
+    setV(addJiraLink(query, { url: a.url, number: a.number, title: `${a.slug}#${a.number}`, resolved: false }, repo));
+    if (address === draft) setDraft("");
     setSaid(r.linked ? "Linked on the card." : "Already linked on the card.");
   };
-  return <JiraPrsView links={v ? withDev(withMentions(v.links, mentions ?? []), dev?.prs ?? []) : null} error={v?.error ?? ""} writable={writable} said={said} busy={busy} draft={draft} onDraft={setDraft} onLink={() => void link()} quiet={quiet} />;
+  const known = cardPrsOf("", query, "", "", "jira")?.prs;
+  return <JiraPrsView links={v ? withKnownOwn(withDev(withMentions(v.links, mentions ?? []), dev?.prs ?? []), known) : null} error={v?.error ?? ""} writable={writable} said={said} busy={busy} draft={draft} onDraft={setDraft} onLink={() => void link()} onLinkUrl={(u) => void link(u)} quiet={quiet} known={known} />;
 }

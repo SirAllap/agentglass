@@ -1,4 +1,5 @@
-import { lazy, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { openNoteLink } from "./lib/linkRouter.ts";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps } from "react";
 import type { WatchEvent, SessionRollup } from "../../shared/types.ts";
 import { useLive } from "./lib/useLive.ts";
 import { useLaneManager } from "./lib/laneManager.ts";
@@ -7,7 +8,8 @@ import type { SystemNote } from "./lib/sysNotify.ts";
 import { setAlertGoto } from "./lib/sysNotify.ts";
 import { setPaneJump } from "./lib/paneJump.ts";
 import { useStats } from "./lib/useStats.ts";
-import { deriveAgents, deriveAlerts, alertKind, buildTitles, buildRollups, providersSeen } from "./lib/derive.ts";
+import { deriveAgentsBase, settleAgents, deriveAlerts, alertKind, buildTitles, buildRollups, providersSeen } from "./lib/derive.ts";
+import { makeAgentsDeriver } from "./lib/liveFlush.ts";
 import { notifies } from "../../shared/notifyPrefs.ts";
 import { getNotifyPrefs, subscribeNotifyPrefs } from "./lib/notifyPrefsStore.ts";
 import { publishFleet } from "./lib/demoBridge.ts";
@@ -18,6 +20,7 @@ import { usePoll } from "./lib/usePoll.ts";
 import { refusalFinal, useCoverHold } from "./lib/cover.ts";
 import { initialTheme, applyTheme, THEMES } from "./lib/themes.ts";
 import { subscribeControl } from "./lib/controlBus.ts";
+import { noteActiveView } from "./lib/hangWatch.ts";
 import { routeControl, offers, attachIdleApply } from "./lib/agentOffers.ts";
 import { focusKindOf, noteInput, sinceInputMs } from "./lib/quietPresent.ts";
 import { controlReplyLater, type UiCtx } from "./lib/uiActions.ts";
@@ -32,7 +35,7 @@ import { currentScale } from "./lib/uiScale.ts";
 import { zoomAtPointer, type ZoomResult } from "./lib/zoomTarget.ts";
 import { zoomTaken } from "./lib/zoomOwner.ts";
 import { toggleFullscreen, followDeepLinks, HAS_BROWSER } from "./lib/desktop.ts";
-import { requestBrowserNav } from "./lib/browserNav.ts";
+import { requestBrowserNav, subscribeBrowserNav, browserNav } from "./lib/browserNav.ts";
 import { useAlertSound } from "./lib/useSound.ts";
 import { TopBar } from "./components/TopBar.tsx";
 /*
@@ -50,6 +53,32 @@ import { TopBar } from "./components/TopBar.tsx";
  */
 const StarboardView = lazy(() => import("./components/StarboardView.tsx").then((m) => ({ default: m.StarboardView })));
 import { LazyPanel } from "./components/LazyPanel.tsx";
+import { feed, noFeed } from "./lib/dashFeed.ts";
+import { sameOrBothNull, sameRows, sameStrings, useKept } from "./lib/keptValue.ts";
+
+/** Everything the Starboard is given except whether it is on screen, which the shell decides. */
+type DashProps = Omit<ComponentProps<typeof import("./components/StarboardView.tsx").StarboardView>, "active">;
+const dashFeed = feed<DashProps>();
+
+/**
+ * The Starboard, reading its own data. See lib/dashFeed.ts for why it does not
+ * arrive through the workspace shell any more.
+ *
+ * Off screen it listens to nothing: it keeps what it last drew and is brought
+ * up to date the moment it is shown, because the subscription changing makes
+ * React read the store again.
+ */
+function DashHost({ active }: { active: boolean }) {
+  const props = useSyncExternalStore(active ? dashFeed.subscribe : noFeed, dashFeed.get, dashFeed.get);
+  if (!props) return null;
+  return (
+    <LazyPanel label="Starboard">
+      <StarboardView active={active} {...props} />
+    </LazyPanel>
+  );
+}
+/** One function for the life of the page: a fresh one per render is what made the shell re-render. */
+const renderDash = (active: boolean) => <DashHost active={active} />;
 import { EventModal } from "./components/EventModal.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
 import { HelpLegend } from "./components/HelpLegend.tsx";
@@ -65,21 +94,38 @@ import DbNoticeBanner from "./components/DbNoticeBanner.tsx";
 import { chordFromEvent, viewForChord, appActionForChord } from "./lib/keybindings.ts";
 import { focusedPaneRoot, openFocusedPaneDoor, type PaneDoor } from "./components/TerminalPanel.tsx";
 import { runStripChord } from "./lib/termStripHost.ts";
-import { FilePalette } from "./components/FilePalette.tsx";
+/* The Finder, the same way and for the same reason as Settings above: 1,372
+   lines and the machine finder under it, mounted closed on every start. Its
+   effects while closed only saved its own last root and place. */
+const FilePalette = lazy(() => import("./components/FilePalette.tsx").then((m) => ({ default: m.FilePalette })));
 import { onFinderAt, openFinderAt, type FinderTarget } from "./lib/finderTarget.ts";
 import { WindowSwitcher } from "./components/terminal/WindowSwitcher.tsx";
 import { FloatingBench } from "./components/bench/FloatingBench.tsx";
-import { benchTakesBoard, toggleBench, showFile } from "./lib/benchStore.ts";
+import { benchOpensWishedBoard, benchTakesBoard, toggleBench, showFile, wantBenchNext } from "./lib/benchStore.ts";
 import { newJob, openBenchJob } from "./lib/benchJobs.ts";
 import type { BoardKind } from "./lib/boardHost.ts";
 import { PeekFile, isRenderable, type Peek } from "./components/PeekFile.tsx";
 import { clearPeek, peekRequest, subscribePeek } from "./lib/openPeek.ts";
-import { onCloseSettings, onOpenSettings, openSettings } from "./lib/openSettings.ts";
+import { onCloseSettings, onOpenSettings, openSettings, OPEN_PROJECT_EVENT } from "./lib/openSettings.ts";
 import { runBootRecipes } from "./components/RecipesPane.tsx";
-import { onOpenPrs, onOpenPr } from "./lib/openPrs.ts";
+import { onOpenPrs, onOpenPr, openPr } from "./lib/openPrs.ts";
 import { onOpenCard, openCard } from "./lib/openCard.ts";
 import { onOpenIssue } from "./lib/openIssue.ts";
-import { SettingsModal } from "./components/SettingsModal.tsx";
+/*
+ * Settings arrives the first time it is opened. It is the largest single file
+ * the window has (5,671 lines, and every settings page under it) and it was
+ * in the first bundle to be mounted closed, on every start, for a dialog most
+ * sessions never open. Nothing else imports it, and it registers nothing when
+ * it loads: the settings themselves live in lib/, where agents and the rest
+ * of the app read and change them whether or not this dialog ever existed.
+ *
+ * Ceiling: the first open waits for one local file. It draws nothing until
+ * then (the same bare Suspense the side pane uses), and a chunk that cannot
+ * be read lands in the boundary around it instead of taking the window down.
+ */
+const SettingsModal = lazy(() => import("./components/SettingsModal.tsx").then((m) => ({ default: m.SettingsModal })));
+import { openedOnce } from "./lib/openedOnce.ts";
+import { ViewBoundary } from "./components/workspace/ViewBoundary.tsx";
 import { MachinePanel, type MachineTab } from "./components/MachinePanel.tsx";
 import { ZoomToast } from "./components/ZoomToast.tsx";
 import { TipHost } from "./components/TipHost.tsx";
@@ -94,12 +140,13 @@ import { AskedBanners } from "./components/AskedBanners.tsx";
 import { WhatsNew } from "./components/WhatsNew.tsx";
 import { SessionModal } from "./components/SessionModal.tsx";
 import { ProjectsModal } from "./components/projects/ProjectsModal.tsx";
+import { ProjectCard, type ModalPane } from "./components/projects/ProjectCard.tsx";
 import { PICKER_ANSWERED_KEY } from "./lib/projectPick.ts";
 import { factsOf, showSetup } from "./lib/setupGate.ts";
 import { readSetupState } from "./lib/setupState.ts";
 import { notePickedAgent } from "./lib/newWindow.ts";
 import { SetupFlow } from "./components/setup/SetupFlow.tsx";
-import { SetupOffer, Tutorial } from "./components/setup/Tutorial.tsx";
+import { SetupOffer, Tutorial, setupOfferNow } from "./components/setup/Tutorial.tsx";
 import { openTutorial } from "./lib/setupTutorial.ts";
 import type { SetupState } from "../../shared/types.ts";
 import { NeedsPopover, type NeedsItem } from "./components/NeedsPopover.tsx";
@@ -112,6 +159,8 @@ import { requestPluginInstall } from "./lib/installPlugin.ts";
 import { subscribeGates, listGates } from "./lib/gateStore.ts";
 import { startMarksSync, syncMarks } from "./lib/marksSync.ts";
 import { EDGE } from "./components/workspace/Chrome.tsx";
+import { jiraViewActiveNow, openJiraJump, paletteChordOpens } from "./lib/jiraQueryPalette.ts";
+import { useNow } from "./lib/visibleInterval.ts";
 
 /** What the pointer is over. Ctrl+F searches the view under the pointer first:
  *  with the bench floating over another view, the one you are looking at is
@@ -144,6 +193,8 @@ const keepIfSame = <T,>(set: (v: T) => void) => {
  *  is open before they come in anyway. Answered in well under a second when
  *  the server is up; a desktop window can open before its server is. */
 const PICK_WAIT_MS = 3000;
+/** The roll-up is a backstop: a new session is pushed on the live stream and read at once (see liveSessionCount). */
+const SESSIONS_POLL_MS = 120_000;
 
 export default function App() {
   const [windowMs, setWindowMs] = useState(3_600_000);
@@ -230,6 +281,14 @@ export default function App() {
   }, []);
   useEffect(() => onShowFlightPlan(() => goView("flightPlan")), [goView]);
 
+  // A terminal link set to open in the agentglass browser view: the request
+  // says so, and this brings the browser on screen for the view to serve it.
+  const wantBrowser = useSyncExternalStore(subscribeBrowserNav, browserNav, browserNav);
+  const browserServed = useRef(0);
+  useEffect(() => {
+    if (wantBrowser?.goto === "view" && wantBrowser.n !== browserServed.current) { browserServed.current = wantBrowser.n; goView("browser"); }
+  }, [wantBrowser, goView]);
+
   // A worktree jump from the Terminal chrome switches to the view it targets;
   // the git / file-changes panel reads the scope or filter from the same store.
   // goView, not a bare setWsView, so a view hidden from the rail comes back
@@ -249,6 +308,8 @@ export default function App() {
     if (!isVisibleView(wsView) && visible[0]) setWsView(visible[0]);
   }, [rail, wsView]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsSeen = useRef(openedOnce());
+  const finderSeen = useRef(openedOnce());
   // A pane a panel elsewhere asked us to land on — see lib/openSettings.ts.
   // A request, not two strings: `n` changes on every call, so the same
   // openSettings fired twice while the modal is open is still a new value
@@ -267,7 +328,7 @@ export default function App() {
   useEffect(() => onCloseSettings(() => { setSettingsOpen(false); setSettingsJump(null); }), []);
   /* A board goes where the person is reading boards: the bench, when it is open
      on one; the view otherwise. See benchTakesBoard. */
-  const toBoard = useCallback((kind: BoardKind) => { if (!benchTakesBoard(kind)) goView(kind); }, [goView]);
+  const toBoard = useCallback((kind: BoardKind) => { if (!benchOpensWishedBoard(kind) && !benchTakesBoard(kind)) goView(kind); }, [goView]);
   useEffect(() => onOpenPrs((j) => { setPrJump(j); toBoard("pr"); }), [toBoard]);
   /* The other half: a sender that knows exactly which pull request it means
      gets the panel's jump, which selects and opens, instead of a search. */
@@ -282,7 +343,7 @@ export default function App() {
     requestPluginInstall(link.url);
     openSettings("plugins");
   }), []);
-  useEffect(() => onOpenCard((j) => { setCardJump(j); toBoard("tasks"); }), [toBoard]);
+  useEffect(() => onOpenCard((j) => { setCardJump(j); if (j.view) goView("tasks"); else toBoard("tasks"); }), [toBoard, goView]);
   useEffect(() => onOpenIssue((j) => { setIssueJump(j); toBoard("tasks"); }), [toBoard]);
   /** Which machine tab is open, or none. One piece of state for both surfaces:
    *  Starboard header and the workspace rail open the same panel, and a
@@ -291,7 +352,17 @@ export default function App() {
   /** Every door that opens the machine lands on Resources when it asks for
    *  `ports`, the icon that no longer exists. The panel's own Ports tab still
    *  switches with `setMachine`, which is navigation inside the open view. */
-  const openMachine = (tab: MachineTab) => setMachine(canonMachineTab(tab));
+  const openMachine = useCallback((tab: MachineTab) => setMachine(canonMachineTab(tab)), []);
+  /* Held, for the workspace shell: it is skipped while its props are the same,
+     and an arrow written in the JSX is a new prop on every socket flush. */
+  const openProject = useCallback(() => setProjectOpen(true), []);
+  useEffect(() => {
+    const open = () => setProjectOpen(true);
+    window.addEventListener(OPEN_PROJECT_EVENT, open);
+    return () => window.removeEventListener(OPEN_PROJECT_EVENT, open);
+  }, []);
+  const openSkills = useCallback(() => setSkillsOpen(true), []);
+  const openSettingsModal = useCallback(() => setSettingsOpen(true), []);
   const [sessionView, setSessionView] = useState<{ id: string; app: string } | null>(null);
   const [sound, setSound] = useState(false);
   // Mirrors the window's zoom for the settings row to read. The scale itself
@@ -316,6 +387,10 @@ export default function App() {
   useCoverHold("project", !IS_DEMO && !projectsAnswered);
 
   const [projectOpen, setProjectOpen] = useState(false);
+  // Clone / new / add-a-folder need a form; everything else is the card under the button.
+  const [modalPane, setModalPane] = useState<ModalPane | null>(null);
+  useEffect(() => { if (!projectOpen) setModalPane(null); }, [projectOpen]);
+  const card = projectOpen && !modalPane && workspaces.length > 0 && !cloneRequest();
   /**
    * The first run's question is still open: nothing is scoped, and nobody has
    * answered the picker yet. The views wait behind it rather than fill
@@ -346,8 +421,8 @@ export default function App() {
   const [setupNote, setSetupNote] = useState<string | null>(null);
   /** The cards already read, so the finish toast counts what is left. */
   const [tutorialSeen, setTutorialSeen] = useState("");
-  /** How many cards the finish offer names; null hides it. */
-  const [offerLeft, setOfferLeft] = useState<number | null>(null);
+  /** The finish toast that offers the tour; it hides itself when nothing is left. */
+  const [offerShown, setOfferShown] = useState(false);
   useCoverHold("setup", !IS_DEMO && setupScreen.mode === "pending");
 
   // A live snapshot of "is any panel/overlay open", read by the global key
@@ -379,6 +454,9 @@ export default function App() {
   wsViewRef.current = wsView;
   // An agent's view switch leaves a "back to where you were" chip (lib/agentBack.ts).
   useEffect(() => { back.noteView(wsView); }, [wsView]);
+  // And the hang watchdog needs the same fact at the moment a long task ends.
+  // One assignment per switch: no subscription, no poll — see lib/hangWatch.ts.
+  useEffect(() => { noteActiveView(wsView); }, [wsView]);
   // The catalog is the one panel that can open *over* the workspace, from the
   // rail. Escape has to be able to tell the two apart, or one keystroke closes
   // both and you lose the shell you were looking at to read a description.
@@ -412,7 +490,8 @@ export default function App() {
   //
   // Only for a modal, and never merely because Starboard is not the view
   // on screen: the fleet spine reads them in every view.
-  const { events, conn, lastEvent, openTools } = useLive(anyPanelOpen);
+  // Slower while the Starboard is not the view on screen: see SLOW_FLUSH_MS in lib/liveFlush.ts.
+  const { events, conn, lastEvent, openTools } = useLive(anyPanelOpen, !dashActive);
   // Read marks shared with the other devices on this server. Started here and
   // not in useLive, which a lane host also runs and which has no badges to
   // keep; the socket's own open asks again on every reconnect.
@@ -539,18 +618,22 @@ export default function App() {
   useEffect(() => {
     if (!paletteOpen) return;
     const take = keepIfSame(setOpts);
-    api.filterOptions().then(take).catch(() => {});
+    let alive = true, timer: ReturnType<typeof setTimeout> | undefined;
+    // `partial`: the server's first fill is still running; ask again until it is whole.
+    const load = () => api.filterOptions().then((o) => {
+      if (!alive) return;
+      take(o);
+      if (o.partial) timer = setTimeout(load, 2000);
+    }).catch(() => {});
+    load();
+    return () => { alive = false; if (timer) clearTimeout(timer); };
   }, [paletteOpen]);
 
   // Statuses are functions of the clock, not only of the buffer: a session
   // mid-build emits nothing for minutes, and without a tick its card would
   // freeze on whatever was derived at the last event — never demoting to
   // idle, never advancing the "running Bash · 4m" duration.
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 10_000);
-    return () => clearInterval(id);
-  }, []);
+  const tick = useNow(true, 10_000);
 
   // Every session's provider, from the FULL buffer (so the list is stable and
   // never collapses when one provider is selected).
@@ -569,13 +652,18 @@ export default function App() {
   useEffect(() => { void loadSessions(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   /* Only while the window is looked at (89 KB per call with 200 rows, ungated
      before: 2 a minute for a window nobody had focused). */
-  usePoll(true, () => { void loadSessions(); }, 30_000);
+  usePoll(true, () => { void loadSessions(); }, SESSIONS_POLL_MS);
   const titles = useMemo(() => buildTitles(sessions), [sessions]);
   // Same rows, second question: the buffer the cards sum over is a capped
   // window, so cost/tokens/tools come from the session roll-up where there is
   // one. See buildRollups.
   const rollups = useMemo(() => buildRollups(sessions), [sessions]);
-  const agentsAll = useMemo(() => deriveAgents(events, openTools, titles, rollups), [events, openTools, titles, rollups, tick]);
+  // The heavy fold is memoized on the inputs; the tick only re-settles the clock-dependent
+  // verdicts (idle, stalled, ages) over the agents, never over the events.
+  const agentsDeriver = useMemo(() => makeAgentsDeriver(deriveAgentsBase), []);
+  const agentsBase = agentsDeriver(events, openTools, titles, rollups);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const agentsAll = useMemo(() => settleAgents(agentsBase), [agentsBase, tick]);
   // Kept identical across renders while its *contents* are. `agentsAll` is
   // rebuilt on every socket flush and every tick, so a plain useMemo handed out
   // a new Map several times a second — and everything downstream that depends
@@ -603,6 +691,12 @@ export default function App() {
     providerRef.current = map;
     return map;
   }, [agentsAll, sessions]);
+  // A session the live stream shows and the roll-up does not hold: read the roll-up now, not at the next 2 min beat.
+  const unnamedLive = useMemo(() => {
+    const known = new Set(sessions.map((s) => s.session_id));
+    return agentsAll.reduce((n, a) => n + (known.has(a.session_id) ? 0 : 1), 0);
+  }, [agentsAll, sessions]);
+  useEffect(() => { if (unnamedLive > 0) void loadSessions(); }, [unnamedLive]); // eslint-disable-line react-hooks/exhaustive-deps
   // "unknown" (sessions whose model never resolved) is kept as a real bucket so
   // it can be filtered to and the per-provider views reconcile with the total,
   // but sorted to the end so it never leads the list. Header renders it as
@@ -615,13 +709,14 @@ export default function App() {
     () => (filter.provider ? events.filter((e) => sessionProvider.get(e.session_id) === filter.provider) : events),
     [events, filter.provider, sessionProvider]
   );
-  const agents = useMemo(
-    () =>
-      filter.provider
-        ? deriveAgents(visibleEvents, openTools.filter((s) => sessionProvider.get(s.session_id) === filter.provider), titles, rollups)
-        : agentsAll,
-    [filter.provider, visibleEvents, agentsAll, openTools, sessionProvider, titles]
+  const filteredBase = useMemo(
+    () => filter.provider
+      ? deriveAgentsBase(visibleEvents, openTools.filter((s) => sessionProvider.get(s.session_id) === filter.provider), titles, rollups)
+      : null,
+    [filter.provider, visibleEvents, openTools, sessionProvider, titles, rollups]
   );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const agents = useMemo(() => (filteredBase ? settleAgents(filteredBase) : agentsAll), [filteredBase, agentsAll, tick]);
   const alerts = useMemo(() => deriveAlerts(agents), [agents]);
   const notifyPrefs = useSyncExternalStore(subscribeNotifyPrefs, getNotifyPrefs, getNotifyPrefs);
   /**
@@ -734,6 +829,16 @@ export default function App() {
 
   /** The Approve buttons live on Starboard's "What needs you" — the one
    *  place in the app that can actually let a held tool call through. */
+  /* What the top bar is handed, kept while its content is the same. `chipNeeds` and the list are rebuilt
+     whenever `agents` is, which is every flush of the live socket, and almost never differ from the last
+     ones; the project list is a new array on every poll. The bar is compared by identity (see TopBar). */
+  const barNeeds = useKept(chipNeeds, sameOrBothNull);
+  const barNeedsList = useKept(needsListAll, sameRows);
+  const barWorkspaces = useKept(workspaces, sameStrings);
+  const openPalette = useCallback(() => setPaletteOpen(true), []);
+  const openFiles = useCallback(() => setFilesOpen(true), []);
+  const goTerminal = useCallback(() => goView("term"), [goView]);
+  const goLantern = useCallback(() => goView("agents"), [goView]);
   const approveOnDash = useCallback(() => { goView("dash"); }, [goView]);
   const switchProject = useCallback((root: string) => {
     void api.setWorkspace(root).then((r) => { if (r.ok) { setWorkspace(r.workspace); setWorkspaces(r.workspace ? [r.workspace] : []); } }).catch(() => {});
@@ -821,10 +926,11 @@ export default function App() {
   // Keyboard shortcuts: ⌘K / Ctrl-K palette, ? help, single-letter panels, Esc closes
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // ⌘K / Ctrl-K palette — always available, even inside a field or panel.
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      // ⌘K / Ctrl-K palette: always available outside the Jira view, even inside a field; there a terminal or field keeps it.
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k" && paletteChordOpens(jiraViewActiveNow(), document.activeElement as HTMLElement | null)) {
         e.preventDefault();
-        setPaletteOpen((o) => !o);
+        // Inside the Jira view the chord opens the Jira palette; it falls back to the app's own when none is mounted.
+        if (!(jiraViewActiveNow() && openJiraJump())) setPaletteOpen((o) => !o);
         return;
       }
 
@@ -1202,6 +1308,24 @@ export default function App() {
     return visibleEvents.filter((e) => e.timestamp >= cutoff).length;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleEvents, lastEvent?.id]);
+  const openLantern = useCallback(() => goView("agents"), [goView]);
+  /* Left for the Starboard to pick up (lib/dashFeed.ts). After every render,
+     with no dependency list: the feed itself compares the fields and tells
+     nobody when none of them changed. */
+  useEffect(() => {
+    dashFeed.publish({
+      refreshing: statsPending,
+      visibleEvents, agents, alerts, stats,
+      sessionProvider, providers,
+      windowMs, onWindow: setWindowMs,
+      filter, onFilter: setFilter, onClearFilter: clearFilters,
+      retentionDays: stats?.retention_days,
+      startedAt, epm,
+      onSelectEvent: setSelected,
+      onSelectSession: setSessionView,
+      onOpenLantern: openLantern,
+    });
+  });
 
   /*
    * Where a notification wanted to send you.
@@ -1213,12 +1337,21 @@ export default function App() {
    * nothing opens Source control unscoped rather than nothing at all: the
    * notification was still right that there is something to do there.
    */
-  const goFromNote = useCallback(async (g: NonNullable<SystemNote["goto"]>) => {
+  const goFromNote = useCallback(async (g: NonNullable<SystemNote["goto"]>, where?: "bench" | "view") => {
+    // On the bench: the very path a terminal link takes with the setting on —
+    // ask for the bench, then the ordinary open. No checkout to put a bench
+    // beside falls through to the view on its own (see benchOpensWishedBoard).
+    if (where === "bench" && (g.kind === "pr" || g.kind === "card")) {
+      wantBenchNext();
+      if (g.kind === "pr") openPr(g.repo, g.number); else openCard(g.id, g.label, g.tracker);
+      return;
+    }
     if (g.kind === "pr") { requestPrJump(g.repo, g.number); goView("pr"); return; }
     // The card the notification is about, in Tasks — the same errand the pull
     // request masthead sends, so it lands on the board that holds it when there
     // is one and under Looked up when there is not.
-    if (g.kind === "card") { openCard(g.id, g.label, g.tracker); return; }
+    // "view" is the menu's "Open in Tasks": the view itself, as the PR's goView("pr") above, not a bench showing a board.
+    if (g.kind === "card") { openCard(g.id, g.label, g.tracker, { view: where === "view" }); return; }
     /*
      * The pane the agent is in — resolved here rather than carried whole.
      *
@@ -1230,6 +1363,8 @@ export default function App() {
      */
     // Both of these already had a way in and simply were not being handed one.
     if (g.kind === "settings") { openSettings(g.pane as never); return; }
+    // A web page: the agentglass browser, or its own view for a Jira issue or a PR.
+    if (g.kind === "web") { openNoteLink(g.url); return; }
     // A document: the Finder, on that file.
     if (g.kind === "file") {
       openFinderAt(g.path.startsWith("/") ? g.path : `${g.root.replace(/\/+$/, "")}/${g.path}`, "file");
@@ -1272,19 +1407,25 @@ export default function App() {
 
   // Settings is drawn over both the workspace and the first run: the port
   // strip's Remote row is inside the wizard, and it has to land somewhere.
-  const settingsModal = (
-    <SettingsModal
-      open={settingsOpen}
-      jump={settingsJump}
-      onClose={() => { setSettingsOpen(false); setSettingsJump(null); }}
-      sound={sound}
-      onSound={() => setSound((s) => !s)}
-      scale={scale}
-      onZoom={zoom}
-      theme={theme}
-      onTheme={setTheme}
-    />
-  );
+  // Mounted from its first open on, and kept: see the note on the lazy import.
+  const settingsWanted = settingsSeen.current(settingsOpen);
+  const settingsModal = settingsWanted ? (
+    <ViewBoundary label="Settings">
+      <Suspense fallback={null}>
+        <SettingsModal
+          open={settingsOpen}
+          jump={settingsJump}
+          onClose={() => { setSettingsOpen(false); setSettingsJump(null); }}
+          sound={sound}
+          onSound={() => setSound((s) => !s)}
+          scale={scale}
+          onZoom={zoom}
+          theme={theme}
+          onTheme={setTheme}
+        />
+      </Suspense>
+    </ViewBoundary>
+  ) : null;
 
   // The first run draws instead of the workspace — and instead of the title
   // bar, which the mock does not have: it is a full-window wizard.
@@ -1294,9 +1435,9 @@ export default function App() {
         <SetupFlow state={setupScreen.state} onDone={(note, finished) => {
           setSetupScreen({ mode: "hidden" });
           if (finished) {
-            const left = 5 - tutorialSeen.split(",").filter(Boolean).length;
-            setOfferLeft(left > 0 ? left : null);
-            setSetupNote(left > 0 ? null : note);
+            const left = setupOfferNow(tutorialSeen) != null;
+            setOfferShown(left);
+            setSetupNote(left ? null : note);
           } else {
             setSetupNote(note);
           }
@@ -1319,36 +1460,38 @@ export default function App() {
       {/* Above everything, because when it shows, nothing below it is real. */}
       <ServerBanner />
       {setupNote && <div className="setup-toast" role="status">{setupNote}</div>}
-      {offerLeft != null && (
-        <SetupOffer left={offerLeft} onShow={() => { setOfferLeft(null); openTutorial(); }} onDismiss={() => setOfferLeft(null)} />
+      {offerShown && (
+        <SetupOffer seen={tutorialSeen} onShow={() => { setOfferShown(false); openTutorial(); }} onDismiss={() => setOfferShown(false)} />
       )}
-      <Tutorial seen={tutorialSeen} onSeen={setTutorialSeen} />
+      <Tutorial seen={tutorialSeen} onSeen={setTutorialSeen} view={wsView} onView={goView} />
       <GitMissingBanner />
       <DbNoticeBanner />
 
       <TopBar
         workspace={workspace}
-        workspaces={workspaces}
-        onOpenProject={() => setProjectOpen(true)}
-        onOpenPalette={() => setPaletteOpen(true)}
+        workspaces={barWorkspaces}
+        onOpenProject={openProject}
+        onOpenPalette={openPalette}
         // On Starboard the readings step back: the screen below is already
         // saying all of it, and a strip repeating it is what made the old notch
         // feel like decoration.
         quiet={dashActive}
         // Whose plan the meters show.
         filterProvider={filter.provider}
-        needs={chipNeeds}
-        needsList={needsListAll}
+        needs={barNeeds}
+        needsList={barNeedsList}
         onNeedApprove={approveOnDash}
         onNeedProject={switchProject}
-        onNeedTerminal={() => goView("term")}
+        onNeedTerminal={goTerminal}
         // A notification that knows what it is about. The panel may be open
         // over any view and the PR panel may not be mounted at all, so the
         // request is left in a slot and the view switched — the same shape the
         // issues panel uses to start a terminal it cannot reach.
-        onOpenFiles={() => setFilesOpen(true)}
+        onOpenFiles={openFiles}
         onNoteGoto={goFromNote}
-        onOpenLantern={() => goView("agents")}
+        onOpenLantern={goLantern}
+        // The ten-second clock: what moves the bar's "read 8m ago" labels now that the socket does not.
+        tick={tick}
       />
 
       {!awaitingPick && <Workspace
@@ -1364,28 +1507,14 @@ export default function App() {
         // other of those buttons. goView brings the hidden view back first,
         // which is the only honest answer to "open it".
         view={wsView} onView={goView}
-        onOpenProject={() => setProjectOpen(true)}
-        onSkills={() => setSkillsOpen(true)}
-        onSettings={() => setSettingsOpen(true)}
+        onOpenProject={openProject}
+        onSkills={openSkills}
+        onSettings={openSettingsModal}
         onMachine={openMachine}
-        dashboard={(active) => (
-          <LazyPanel label="Starboard">
-          <StarboardView
-            refreshing={statsPending}
-            active={active}
-            visibleEvents={visibleEvents}
-            agents={agents} alerts={alerts} stats={stats}
-            sessionProvider={sessionProvider} providers={providers}
-            windowMs={windowMs} onWindow={setWindowMs}
-            filter={filter} onFilter={setFilter} onClearFilter={clearFilters}
-            retentionDays={stats?.retention_days}
-            startedAt={startedAt} epm={epm}
-            onSelectEvent={setSelected}
-            onSelectSession={setSessionView}
-            onOpenLantern={() => goView("agents")}
-          />
-          </LazyPanel>
-        )}
+        dashboard={renderDash}
+        // The ten-second clock, and the only thing here that changes without anybody
+        // acting: the view on screen is re-drawn on it, as it always was.
+        tick={tick}
       />}
 
       <EventModal event={selected} onClose={() => setSelected(null)} />
@@ -1426,56 +1555,62 @@ export default function App() {
       {/* The finder, from anywhere. Mounted at the shell rather than in a view
           so the chord reaches it from the dashboard, a terminal or a diff — and
           so the document it raises outlives the palette that found it. */}
-      <FilePalette
-        open={filesOpen}
-        onClose={() => setFilesOpen(false)}
-        target={finderTarget}
-        onBench={(o) => {
-          if (o.tab === "file") { showFile(o.root, o.path, { title: o.title }); return; }
-          /* A recipe is a new terminal each time it is picked, so its job is
-             unique — the shared helper is still what seats it. */
-          void openBenchJob({ job: newJob("recipe"), root: o.root, create: async () => ({ ok: true, root: o.root, tab: { kind: "term", title: o.title, type: o.type } }) });
-        }}
-        onOpenFile={async (root, rel, branch, ref) => {
-          /*
-           * On this checkout, the division the bench exists for.
-           *
-           * Prose is READ — a spec, a status report, a note — and the viewer is
-           * where reading happens: rendered markdown, a reading width, find
-           * inside the document. Code is CHANGED, and that belongs on the
-           * bench, where the file stays open in a tmux session with your undo
-           * and your jumplist after you have been to the terminal and back.
-           *
-           * Both faces still reach the other: the viewer has a "To the bench"
-           * button, and a bench tab is one `:e` away from anything else.
-           */
-          if (!ref) {
-            const abs = `${root}/${rel}`;
-            if (isRenderable(rel)) { setPeek({ root, path: abs, label: rel, edit: true, branch }); return; }
-            showFile(root, abs, { title: rel.split("/").pop() });
-            return;
-          }
-          // On another branch, and worth rendering — a document, read as one.
-          if (isRenderable(rel)) { setPeek({ root, path: `${root}/${rel}`, label: rel, edit: false, branch, ref }); return; }
-          /*
-           * On another branch, and code. It used to open in the document viewer,
-           * which renders markdown — so a .py arrived with its lines collapsed
-           * into paragraphs, its `**` bold and its backticks as chips. Code goes
-           * to the editor, which is what READABLE said all along.
-           *
-           * The editor needs a path, and this file is not on disk here: the
-           * working tree's copy is a different file wearing the right name. So
-           * the ref's copy is written out first, exactly as a pull request's is.
-           */
-          setOpening(`${rel} on ${ref}`);
-          try {
-            const r = await api.filesTemp(root, rel, ref);
-            if (!r.ok || !r.file) { setOpenErr(r.error ?? "Could not read that file on that branch"); return; }
-            setPeek({ root, path: r.file, label: `${rel} · ${ref} · read-only` });
-          } finally { setOpening(null); }
-        }}
-        onOpenBrowser={HAS_BROWSER ? (url) => { requestBrowserNav(url); goView("browser"); } : undefined}
-      />
+      {finderSeen.current(filesOpen) && (
+        <ViewBoundary label="Finder">
+          <Suspense fallback={null}>
+          <FilePalette
+            open={filesOpen}
+            onClose={() => setFilesOpen(false)}
+            target={finderTarget}
+            onBench={(o) => {
+              if (o.tab === "file") { showFile(o.root, o.path, { title: o.title }); return; }
+              /* A recipe is a new terminal each time it is picked, so its job is
+                 unique — the shared helper is still what seats it. */
+              void openBenchJob({ job: newJob("recipe"), root: o.root, create: async () => ({ ok: true, root: o.root, tab: { kind: "term", title: o.title, type: o.type } }) });
+            }}
+            onOpenFile={async (root, rel, branch, ref) => {
+              /*
+               * On this checkout, the division the bench exists for.
+               *
+               * Prose is READ — a spec, a status report, a note — and the viewer is
+               * where reading happens: rendered markdown, a reading width, find
+               * inside the document. Code is CHANGED, and that belongs on the
+               * bench, where the file stays open in a tmux session with your undo
+               * and your jumplist after you have been to the terminal and back.
+               *
+               * Both faces still reach the other: the viewer has a "To the bench"
+               * button, and a bench tab is one `:e` away from anything else.
+               */
+              if (!ref) {
+                const abs = `${root}/${rel}`;
+                if (isRenderable(rel)) { setPeek({ root, path: abs, label: rel, edit: true, branch }); return; }
+                showFile(root, abs, { title: rel.split("/").pop() });
+                return;
+              }
+              // On another branch, and worth rendering — a document, read as one.
+              if (isRenderable(rel)) { setPeek({ root, path: `${root}/${rel}`, label: rel, edit: false, branch, ref }); return; }
+              /*
+               * On another branch, and code. It used to open in the document viewer,
+               * which renders markdown — so a .py arrived with its lines collapsed
+               * into paragraphs, its `**` bold and its backticks as chips. Code goes
+               * to the editor, which is what READABLE said all along.
+               *
+               * The editor needs a path, and this file is not on disk here: the
+               * working tree's copy is a different file wearing the right name. So
+               * the ref's copy is written out first, exactly as a pull request's is.
+               */
+              setOpening(`${rel} on ${ref}`);
+              try {
+                const r = await api.filesTemp(root, rel, ref);
+                if (!r.ok || !r.file) { setOpenErr(r.error ?? "Could not read that file on that branch"); return; }
+                setPeek({ root, path: r.file, label: `${rel} · ${ref} · read-only` });
+              } finally { setOpening(null); }
+            }}
+            onOpenBrowser={HAS_BROWSER ? (url) => { requestBrowserNav(url); goView("browser"); } : undefined}
+          />
+          </Suspense>
+        </ViewBoundary>
+      )}
       {/* The two share the screen rather than stack: the palette stays open on
           purpose, so the document starts below its measured bottom edge — 10px
           of top margin plus a 12px gap. */}
@@ -1547,7 +1682,8 @@ export default function App() {
         onZoom={zoom}
       />
       <HelpLegend open={helpOpen} onClose={() => setHelpOpen(false)} />
-      <ProjectsModal open={projectOpen} workspaces={workspaces} known={workspace !== undefined} onClose={() => { setProjectOpen(false); setAwaitingPick(false); }} />
+      {card && <ProjectCard workspaces={workspaces} known={workspace !== undefined} onClose={() => { setProjectOpen(false); setAwaitingPick(false); }} onModal={setModalPane} />}
+      <ProjectsModal open={projectOpen} workspaces={workspaces} known={workspace !== undefined} hidden={card} startPane={modalPane} onClose={() => { setProjectOpen(false); setAwaitingPick(false); }} />
     </div>
   );
 }

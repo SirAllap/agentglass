@@ -42,12 +42,15 @@ function Face({ p }: { p: TaskPerson }) {
  * `focusable` is for a head that is not already a tab stop: a row's own faces must not add one. The stack carries a
  * tip with every name, and a click is the host's own, so it never swallows one.
  */
-export function PeopleFaces({ people, focusable = false }: { people: readonly TaskPerson[]; focusable?: boolean }) {
-  if (!people.length) return null;
+export function PeopleFaces({ people, focusable = false, onPick }: { people: readonly TaskPerson[]; focusable?: boolean; /** The stack is a button: its click raises the Assign popover (the board card). */ onPick?: (el: HTMLElement) => void }) {
+  if (!people.length) return onPick ? (
+    <button type="button" className="agx-jl-face agx-jl-face-none" aria-label="Assign" aria-haspopup="menu" data-tip={tipAttr("Unassigned: click to assign")}
+      onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); onPick(e.currentTarget); }}>--</button>
+  ) : null;
   const names = people.map((p) => p.name).join(", ");
   const rest = people.length - SHOWN_FACES;
   return (
-    <span className="agx-jl-stack" data-focus={focusable ? "" : undefined} tabIndex={focusable ? 0 : undefined}
+    <span className="agx-jl-stack" data-pick={onPick ? "" : undefined} onPointerDown={onPick ? (e) => e.stopPropagation() : undefined} onClick={onPick ? (e) => { e.stopPropagation(); onPick(e.currentTarget); } : undefined} data-focus={focusable ? "" : undefined} tabIndex={focusable ? 0 : undefined}
       role={focusable ? "img" : undefined} aria-label={focusable ? `People: ${names}` : undefined}
       data-tip={tipAttr({ name: "People", text: names })}>
       {people.slice(0, SHOWN_FACES).map((p, i) => <Face key={p.key ?? p.id ?? `${p.name}${i}`} p={p} />)}

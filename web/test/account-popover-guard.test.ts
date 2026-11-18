@@ -28,10 +28,10 @@ describe("the popover's layer", () => {
     expect(panel).toContain("<Portal z={LAYER.usage}>");
   });
 
-  it("sits above the picture and under the waiting-on-you panel, where the literal was", () => {
-    expect(LAYER.usage).toBe(10050);
+  it("sits above the picture and the note cards, under the Settings dialogs", () => {
     expect(LAYER.usage).toBeGreaterThan(LAYER.paletteImage);
-    expect(LAYER.usage).toBeLessThan(LAYER.needs);
+    expect(LAYER.usage).toBeGreaterThan(LAYER.noteToasts);
+    expect(LAYER.usage).toBeLessThan(LAYER.settingsDialog);
   });
 });
 

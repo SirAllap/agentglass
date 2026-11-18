@@ -9,7 +9,7 @@
  * names the new things.
  */
 import { PILOTS, type Pilot, type PilotState, type StopReason } from "../../../shared/types.ts";
-import { costText, findingsOf, groupOf, openCount, projectName, usd, when, written, type Plan, type Run } from "./flightPlan.ts";
+import { costText, findingsOf, groupOf, isLinked, isOpen, openCount, projectName, usd, when, written, type Plan, type Run } from "./flightPlan.ts";
 
 export { PILOTS };
 export type { Pilot, PilotState, StopReason };
@@ -109,6 +109,8 @@ export interface PilotSettings {
   permissions: "default" | "auto" | "bypassPermissions";
   /** Where a builder worktree is cut from: the local trunk, or origin/<trunk>. */
   builderBase: "local" | "remote";
+  /** Bytes a plan-named file with no cited line is sent whole up to, before only its head goes (with a notice naming the cut). 0 = no cap: always whole. */
+  fileCapBytes: number;
 }
 
 /* ---------------------------------------------------------------- decisions */
@@ -170,7 +172,7 @@ function personSaysGo(it: FlightItem, s: ModeFacts | null | undefined): boolean 
   if (effectivePilot(s) !== "autopilot") return true;
   return !!it.stopReason || !!s!.held || !!s!.budgetReached;
 }
-const isGoCard = (it: FlightItem, s: ModeFacts | null | undefined): boolean => groupOf(it.plan, it.run) === "awaiting" && personSaysGo(it, s);
+const isGoCard = (it: FlightItem, s: ModeFacts | null | undefined): boolean => groupOf(it.plan, it.run) === "awaiting" && !isLinked(it.plan.state, it.facts?.worker) && personSaysGo(it, s);
 
 export const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
 
@@ -280,8 +282,10 @@ export function stateOf(it: FlightItem, s: ModeFacts | null | undefined, now: nu
      worker runs it is Building; once it ended the checks are next, and Ready to land when its steps are done. */
   const steps = stepsOf(plan, it.facts);
   const done = steps !== null && steps.k >= steps.n;
-  if (it.facts?.worker === "working") return badge("building", steps ? `${steps.k} of ${steps.n} steps` : null);
-  if (it.facts?.worker === "ended") return done ? badge("ready") : badge("checking");
+  /* A launched plan follows the worker its Launch started; a draft has no builder to follow. */
+  const linked = isLinked(plan.state, it.facts?.worker) || plan.state === "launched";
+  if (linked && it.facts?.worker === "working") return badge("building", steps ? `${steps.k} of ${steps.n} steps` : null);
+  if (linked && it.facts?.worker === "ended") return done ? badge("ready") : badge("checking");
   if (plan.state === "draft" || plan.state === "no-go") return badge("writing");
   if (plan.state === "ready" && run?.state === "running") return badge("preflight", `round ${Math.max(1, plan.reviewRounds)}`);
   if (plan.state === "ready") return badge("orchestrator");
@@ -313,6 +317,11 @@ export function flightGroups(items: FlightItem[], now: number, s?: ModeFacts | n
   return g;
 }
 
+/** Plans a Preflight is reading right now: a plan the orchestrator is checking is not one of them. */
+export function preflightCount(items: FlightItem[], now: number, s?: ModeFacts | null): number {
+  return flightGroups(items, now, s).flying.filter((it) => stateOf(it, s, now).id === "preflight").length;
+}
+
 /* ------------------------------------------------------------------ stations */
 
 export interface StationFacts {
@@ -324,14 +333,18 @@ export interface StationFacts {
   asking?: boolean;
   /** How far the builder got once launched; a launched plan with none is still building. */
   phase?: "building" | "checking" | "landed";
+  /** The plan's linked worker, when one builds it already: the plan is past Go without a Go of its own. */
+  worker?: "working" | "ended";
 }
 
 /** The six stations of a flight with the actor of each and the one that is current. */
 export function stationsFor(plan: Plan, run: Run | null, f: StationFacts): Station[] {
   const manual = f.pilot === "manual" || f.seated === false;
   const goActor: Actor = manual || f.pilot !== "autopilot" || f.stopReason || f.asking ? "person" : "coordinator";
-  const decided = plan.state === "go" || plan.state === "no-go" || plan.state === "launched";
-  const launched = plan.state === "launched";
+  /* A worker linked to a plan not yet launched is building it: Go is behind it, though nobody said Go. */
+  const linked = isLinked(plan.state, f.worker);
+  const decided = plan.state === "go" || plan.state === "no-go" || plan.state === "launched" || linked;
+  const launched = plan.state === "launched" || linked;
   const phase = f.phase ?? (launched ? "building" : null);
   const reviewState: StationState | "pending" = plan.size === "S" || run?.state === "declined" ? "skipped" : run?.state === "done" ? "done" : "pending";
   const base: Record<StationId, StationState | "pending"> = {
@@ -472,7 +485,19 @@ export function flightNow(it: FlightItem, s: ModeFacts | null | undefined, now: 
     case "writing": return row(plan.state === "no-go" ? "Sent back to the author" : "Writing the plan", plan.state === "no-go" ? "The author is rewriting it after the No-go." : "The author is writing it.", "the author finishes the draft");
     case "queued": return row("Queued", "Go is said; it waits for a free slot.", "nobody, it starts by itself when a slot frees");
     case "preflight": return row("Preflight reading", plan.reviewRounds > 1 ? "Looking again after the fix, with no context." : "A reviewer with no context is reading the plan.", "the reviewer, with no context");
-    case "orchestrator": return row(effectivePilot(s) === "autopilot" ? "Waiting for the orchestrator" : "Ready", "Preflight is done.", "the orchestrator says Go (Autopilot)");
+    case "orchestrator": {
+      if (run && run.state === "failed") {
+        const err = run.error ?? "it errored";
+        return row("Waiting for the orchestrator", `Preflight failed: ${err.length > 80 ? `${err.slice(0, 79).replace(/\s+\S*$/, "")}…` : err}.`, "the orchestrator runs Preflight again");
+      }
+      if (run && run.state === "declined") return row("Waiting for the orchestrator", "Preflight was declined.", "the orchestrator runs Preflight again");
+      const openFindings = findingsOf(run).filter(isOpen);
+      const asked = openFindings.filter((f) => f.action === "ask").length;
+      const blockers = openFindings.filter((f) => f.severity === "blocker").length;
+      const sub = openFindings.length === 0 ? "Preflight is done." : blockers ? `${plural(blockers, "blocker")} open${openFindings.length > blockers ? `, ${openFindings.length - blockers} more` : ""}.` : `${plural(openFindings.length, "finding")} still open.`;
+      const next = asked ? `you answer ${plural(asked, "question")}` : openFindings.length ? `the orchestrator answers ${plural(openFindings.length, "finding")}` : "the orchestrator says Go (Autopilot)";
+      return row(effectivePilot(s) === "autopilot" ? "Waiting for the orchestrator" : "Ready", sub, next);
+    }
     case "checking": return row("Orchestrator checking", rep ? `Builder done · ${rep.line}` : "The builder is done.", "the orchestrator runs the checks");
     case "ready": return row("Checked, waiting to merge", "The builder is done and the checks are green.", effectivePilot(s) === "manual" ? "you merge it into main" : "the orchestrator merges it into main");
     case "held": return row(s?.held ? "Held" : "Budget reached", s?.held ? "Go is said; no builder starts while the hold lasts." : "Go is said; nothing starts until the budget comes back.", s?.held ? "you lift the hold" : `nobody, it resumes when the budget does${s?.budgetUntil ? ` at ${hhmm(s.budgetUntil)}` : ""}`);
@@ -527,6 +552,10 @@ export function stripCounts(items: FlightItem[], now: number, s?: ModeFacts | nu
   };
 }
 
+/** "0 builders live · 2 more in Preflight and checking": the Flying heading's tail, with the live count said once. */
+export const flyingTail = (live: number, preflight: number): string =>
+  `${plural(live, "builder")} live${preflight ? ` · ${preflight} more in Preflight and checking` : ""}`;
+
 /** Plans waiting on the person, first the ones with a question: the order "Open next" walks. */
 export const nextWaiting = (items: FlightItem[], now: number, s?: ModeFacts | null): FlightItem | null =>
   flightGroups(items, now, s).waiting.sort((a, b) => unanswered(b) - unanswered(a))[0] ?? null;
@@ -538,7 +567,7 @@ export const nextWaiting = (items: FlightItem[], now: number, s?: ModeFacts | nu
 export function stationsOf(it: FlightItem, s: Pick<PilotSnapshot, "pilot" | "seat"> & Partial<ModeFacts>, now = Date.now()): Station[] {
   const st = stateOf(it, { held: false, budgetReached: null, ...s }, now).id;
   const phase = it.facts?.phase ?? (it.landedAt != null ? "landed" : st === "checking" || st === "ready" || st === "refused" ? "checking" : undefined);
-  const out = stationsFor(it.plan, it.run, { pilot: s.pilot, seated: s.seat !== null, stopReason: it.stopReason ?? null, asking: unanswered(it) > 0, ...(phase ? { phase } : {}) });
+  const out = stationsFor(it.plan, it.run, { pilot: s.pilot, seated: s.seat !== null, stopReason: it.stopReason ?? null, asking: unanswered(it) > 0, ...(phase ? { phase } : {}), ...(it.facts?.worker ? { worker: it.facts.worker } : {}) });
   const mark = (id: StationId, state: StationState): void => { const x = out.find((y) => y.id === id); if (x) x.state = state; };
   if (st === "paused") mark("build", "parked");
   else if (st === "stopped") mark("build", "dead");

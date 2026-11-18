@@ -208,13 +208,40 @@ export function tabLabel(t: BrowserTab): string {
  * now. The replacement also showed as a white card in the container of the
  * tab just closed, which read as a page that would not close.
  */
-export function closeTab(tabs: BrowserTab[], id: string): { tabs: BrowserTab[]; activeId: string } {
+export function closeTab(
+  tabs: BrowserTab[], id: string,
+  o?: { agent?: (t: BrowserTab) => boolean },
+): { tabs: BrowserTab[]; activeId: string } {
   const i = tabs.findIndex((t) => t.id === id);
   if (i < 0) return { tabs, activeId: tabs[0]?.id ?? "" };
   const rest = tabs.filter((t) => t.id !== id);
   if (!rest.length) return { tabs: [], activeId: "" };
-  const next = rest[Math.min(i, rest.length - 1)]!;
-  return { tabs: rest, activeId: next.id };
+  /*
+   * THE NEIGHBOUR IS NEVER AN AGENT'S TAB.
+   *
+   * The person closed the last of their own pages and the neighbour in the
+   * list was a worker's; it went in front, the space followed it, and the
+   * person's pane read "agent:<name> · You are here". With none of the
+   * person's own left, nothing is in front: an empty Default, not somebody
+   * else's work.
+   */
+  const ok = o?.agent ? (t: BrowserTab) => !o.agent!(t) : () => true;
+  const at = Math.min(i, rest.length - 1);
+  const next = [...rest.slice(at), ...rest.slice(0, at).reverse()].find(ok);
+  return { tabs: rest, activeId: next?.id ?? "" };
+}
+
+/**
+ * The tab the pane draws. The one in front, else the first of the space on
+ * screen, else the first of the person's own — never an agent's tab picked
+ * only because it happened to be first in the list.
+ */
+export function paneTab(
+  tabs: readonly BrowserTab[], activeId: string, space: string, agent: (t: BrowserTab) => boolean,
+): BrowserTab | undefined {
+  return tabs.find((t) => t.id === activeId)
+    ?? tabs.find((t) => (t.profile || "") === space)
+    ?? tabs.find((t) => !agent(t));
 }
 
 /**

@@ -6,7 +6,7 @@
  */
 import type { MapBlock as StepBlock, HandoffUnassign } from "../../../shared/providers.ts";
 import { blockRefusal, type StepTrigger } from "../../../shared/stepBlocks.ts";
-import type { StepKind } from "./workflowMap.ts";
+import type { StepKind, Nouns } from "./workflowMap.ts";
 import { assignWords } from "./stepAssign.ts";
 import { pickSentence } from "./askAtRun.ts";
 
@@ -19,6 +19,10 @@ export const blockNeedsValue = (trigger: StepTrigger, b: StepBlock): boolean =>
 
 /** A step with nothing in it does nothing; the merge dialog's choice is still drawn, with nothing preselected. */
 export const stepIsEmpty = (trigger: StepTrigger, blocks: readonly StepBlock[]): boolean => trigger !== "merge" && blocks.length === 0;
+
+/** The one-click a Jira review step shows while it says nothing about who is on the card: an assign that asks, starting at the reviewer. Null otherwise. */
+export const suggestedAssign = (k: StepKind, blocks: readonly StepBlock[], n: Pick<Nouns, "reviewButton">): StepBlock | null =>
+  k === "menu" && n.reviewButton === true && !blocks.some((b) => b.type === "assign" || b.type === "unassign") ? { type: "assign", who: "reviewer", ask: true } : null;
 
 export const UNASSIGN_WORDS: Record<HandoffUnassign, string> = { none: "leave the assignees alone", me: "take only you off", all: "take everyone off" };
 

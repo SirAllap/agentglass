@@ -3,8 +3,10 @@
 import { useMemo, useState } from "react";
 import type { PrSummary } from "../../../shared/types.ts";
 import { emptyLanes, type FilterOp, type FilterRule, type LaneFilter } from "../../../shared/prFilter.ts";
-import type { FieldSpec, ReadField } from "./tasks/filters.ts";
+import type { FieldSpec } from "./tasks/filters.ts";
+import type { ReadField } from "../../../shared/prFilterEval.ts";
 import { evalLanes } from "../lib/prFilterEval.ts";
+import { foldFieldValue } from "../../../shared/prFilterFields.ts";
 import { suggestCards } from "../lib/prFilterSyntax.ts";
 import { addRule } from "../lib/prFilterTree.ts";
 import { editorFields, opsFor, opWord, takesValue, type LaneName } from "../lib/prFilterView.ts";
@@ -30,31 +32,57 @@ export function ruleAlone(lane: LaneName, rule: FilterRule): LaneFilter {
   return addRule(emptyLanes(), lane, rule);
 }
 
+/**
+ * The rows this one rule takes off, by the same reader the board applies it
+ * with. A reader that answers null (a second pass that has not landed, a field
+ * this build does not know) leaves the row alone, so the preview cannot name a
+ * row that Apply keeps.
+ */
+export function rulePreview(rows: PrSummary[], lane: LaneName, rule: FilterRule, read: ReadField<PrSummary>): PrSummary[] {
+  const res = evalLanes(rows, ruleAlone(lane, rule), read);
+  return rows.filter((p) => res.culprit.has(p));
+}
+
 function Highlight({ text, needle }: { text: string; needle: string }) {
   const i = needle ? text.toLowerCase().indexOf(needle.toLowerCase()) : -1;
   if (i < 0) return <>{text}</>;
   return <>{text.slice(0, i)}<mark style={{ background: "color-mix(in srgb, var(--warning) 28%, transparent)", color: "inherit", borderRadius: 3 }}>{text.slice(i, i + needle.length)}</mark>{text.slice(i + needle.length)}</>;
 }
 
+/** How many rows carry each value, keyed by the same fold the options and the
+ *  rule engine use, so "Ready for QA" and "ready for qa" are one entry. */
+export function valueCounts(rows: PrSummary[], read: ReadField<PrSummary>, key: string): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const p of rows) for (const v of new Set((read(p, key) ?? []).map((x) => foldFieldValue(key, x)))) m.set(v, (m.get(v) ?? 0) + 1);
+  return m;
+}
+
+/** An option is on when any saved value folds to it: a rule saved as "ready for qa" still shows "READY FOR QA" ticked. */
+export function valueOn(field: string, value: readonly string[], option: string): boolean {
+  const f = foldFieldValue(field, option);
+  return value.some((x) => foldFieldValue(field, x) === f);
+}
+/** Ticking adds the option; unticking removes every spelling of it, so no second spelling is left behind. */
+export function toggleValue(field: string, value: readonly string[], option: string): string[] {
+  const f = foldFieldValue(field, option);
+  return valueOn(field, value, option) ? value.filter((x) => foldFieldValue(field, x) !== f) : [...value, option];
+}
+
 /** A checkbox list of a field's values, each with how many PRs carry it. */
 export function ValueList({ field, value, onChange, rows, read, max = 168 }: {
   field: FieldSpec; value: string[]; onChange: (v: string[]) => void; rows: PrSummary[]; read: ReadField<PrSummary>; max?: number;
 }) {
-  const counts = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const p of rows) for (const v of new Set(read(p, field.key))) m.set(v, (m.get(v) ?? 0) + 1);
-    return m;
-  }, [rows, read, field.key]);
+  const counts = useMemo(() => valueCounts(rows, read, field.key), [rows, read, field.key]);
   return (
     <div className="overflow-y-auto agx-scroll" style={{ maxHeight: max }}>
       {field.options.map((o) => {
-        const on = value.includes(o.value);
+        const on = valueOn(field.key, value, o.value);
         return (
           <label key={o.value} className="flex items-center gap-2 px-1.5 py-1 rounded cursor-pointer agx-hover text-[12px]" style={{ color: "var(--text2)" }}>
             <input type="checkbox" checked={on} className="accent-[var(--primary)]"
-              onChange={() => onChange(on ? value.filter((x) => x !== o.value) : [...value, o.value])} />
+              onChange={() => onChange(toggleValue(field.key, value, o.value))} />
             <span className="truncate">{o.label}</span>
-            <span className="ml-auto text-[10.5px] tabular-nums" style={{ color: "var(--text4)" }}>{counts.get(o.value) ?? 0}</span>
+            <span className="ml-auto text-[10.5px] tabular-nums" style={{ color: "var(--text4)" }}>{counts.get(foldFieldValue(field.key, o.value)) ?? 0}</span>
           </label>
         );
       })}
@@ -78,11 +106,7 @@ export function RuleEditor({ anchor, initial, isNew, fields, rows, read, onCommi
   const all = useMemo(() => editorFields(fields, initial.rule.field), [fields, initial.rule.field]);
   const spec = all.find((f) => f.key === rule.field) ?? all[0]!;
   const problem = ruleProblem(rule);
-  const taken = useMemo(() => {
-    if (problem) return [];
-    const res = evalLanes(rows, ruleAlone(lane, rule), read);
-    return rows.filter((p) => res.culprit.has(p));
-  }, [rows, read, lane, rule, problem]);
+  const taken = useMemo(() => (problem ? [] : rulePreview(rows, lane, rule, read)), [rows, read, lane, rule, problem]);
   const typed = rule.values.join(", ");
   const freeValue = spec.options.length === 0 && takesValue(rule.op) && rule.field !== "conflict";
   const needle = rule.field === "text" && rule.op === "contains" ? (rule.values[0] ?? "") : "";

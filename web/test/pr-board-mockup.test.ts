@@ -70,11 +70,11 @@ describe("the docked detail's width bands are the mockup's 860 and 760", () => {
     expect(detailBand(0)).toBe("wide");
     expect(detailBand(NaN)).toBe("wide");
   });
-  test("the panel measures the body and folds the sidebar into a Details fold", async () => {
+  test("the panel measures the body; the sidebar is the Overview's rail (PrRail), laid out by container queries", async () => {
     const panel = await src("components/PrPanel.tsx");
     expect(panel).toContain("setBand(detailBand(el.clientWidth))");
-    expect(panel).toContain("fold={band !== \"wide\"}");
-    expect(panel).toContain("data-side-fold");
+    expect(panel).toContain("rail={<PrSidebar");
+    expect(panel).not.toContain("data-side-fold");
     expect(panel).not.toMatch(/container-type/);
     const css = await src("index.css");
     expect(css).toContain('#pr-tab-body[data-band="narrow"] .agx-tree3 { width: 170px; }');

@@ -5,6 +5,7 @@
  * only draw what these return.
  */
 import { describe, expect, test } from "bun:test";
+import { modalSource } from "./settingsSource.ts";
 import { readFileSync } from "node:fs";
 import {
   DEFAULT_SHUT, NAV_GROUPS, NO_FACTS, buildNav, connectionsNeeding, withNeeds, withProblems, currentToc, groupSearch, headerChips, highlightParts, jumpTarget,
@@ -15,6 +16,7 @@ import {
 const PAGES = [
   { id: "prefs", label: "Window & startup", group: "General", kw: "" },
   { id: "terminal", label: "Terminal", group: "Workspace", kw: "terminal" },
+  { id: "browser", label: "Browser", group: "", kw: "" },
   { id: "tmux", label: "Pane engine (tmux)", group: "Workspace", kw: "" },
   { id: "hooks", label: "Agents", group: "Agents", kw: "" },
   { id: "plugins", label: "Plugins", group: "Library", kw: "" },
@@ -111,6 +113,12 @@ describe("the marks come from real facts, and only those", () => {
     expect(m.notifications).toEqual({ state: "on" });
     expect(m.lantern).toBeUndefined();
     expect(m.hooks).toBeUndefined();
+  });
+
+  test("remote access off wins over paired phones: never a green 'N paired' while the page says off", () => {
+    expect(navMarks(facts({ remoteOn: false, remotePaired: 2, remoteLiveCount: 0 })).remote).toEqual({ state: "off", title: "Remote access is off" });
+    expect(navMarks(facts({ remoteOn: true, remotePaired: 2, remoteLiveCount: 1 })).remote).toEqual({ state: "on", title: "2 paired · 1 live" });
+    expect(navMarks(facts({ remoteOn: null, remotePaired: 0 })).remote).toEqual({ state: "off" });
   });
 
   test("ClickUp has a mark only while connected (its page is only there then)", () => {
@@ -246,19 +254,23 @@ describe("On this page", () => {
       { title: "Gate", tone: "warn" },
       { title: "Worker roles", tone: null },
       { title: "Lost", tone: "checking" },
+      { title: "Danger zone", tone: "err" },
+      { title: "Tail", tone: null },
       { title: "", tone: "ok" },
     ]);
-    expect(t.map((x) => [x.label, x.dot])).toEqual([["Claude Code hooks", "ok"], ["Gate", "warn"], ["Worker roles", null], ["Lost", null]]);
+    expect(t.map((x) => [x.label, x.dot])).toEqual([["Claude Code hooks", "ok"], ["Gate", "warn"], ["Worker roles", null], ["Lost", null], ["Danger zone", "err"], ["Tail", null]]);
     expect(t[0]!.id).toBe("c-claude-code-hooks");
   });
 
   test("two cards with one title get distinct anchors", () => {
-    const t = tocItems([{ title: "Rules", tone: null }, { title: "Rules", tone: null }]);
-    expect(new Set(t.map((x) => x.id)).size).toBe(2);
+    const t = tocItems([{ title: "Rules", tone: null }, { title: "Rules", tone: null }, ...["A", "B", "C", "D"].map((title) => ({ title, tone: null }))]);
+    expect(new Set(t.map((x) => x.id)).size).toBe(6);
   });
 
-  test("fewer than two titled cards is no index at all", () => {
+  test("five titled cards or fewer is no index at all: the chip bar is for a page long enough to get lost in", () => {
     expect(tocItems([{ title: "Only", tone: null }])).toEqual([]);
+    expect(tocItems(["A", "B", "C", "D", "E"].map((title) => ({ title, tone: null })))).toEqual([]);
+    expect(tocItems(["A", "B", "C", "D", "E", "F"].map((title) => ({ title, tone: null }))).length).toBe(6);
     expect(tocItems([])).toEqual([]);
   });
 
@@ -278,7 +290,7 @@ describe("On this page", () => {
 describe("the components wire these decisions and nothing else", () => {
   const read = (f: string) => readFileSync(new URL(`../src/components/${f}`, import.meta.url).pathname, "utf8");
   const nav = read("SettingsNav.tsx");
-  const modal = read("SettingsModal.tsx");
+  const modal = modalSource();
 
   test("every page button carries its pane id and says which page is current", () => {
     expect(nav).toContain("data-settings-page={p.id}");
@@ -304,7 +316,7 @@ describe("the components wire these decisions and nothing else", () => {
 
   test("Enter lands through the same path a deep link uses, and flashes the row", () => {
     expect(modal).toContain("onLand={landOnResult}");
-    expect(modal).toMatch(/const landOnResult = useCallback\(\(r: \{ pane: string; row: string \}\) => \{\s*setPane\(r\.pane as Pane\);\s*setQ\(""\);\s*if \(r\.row\) setFlashRow\(r\.row\);/);
+    expect(modal).toMatch(/const landOnResult = useCallback\(\(r: \{ pane: string; row: string \}\) => \{\s*setPane\(r\.pane as Pane\);\s*setQ\(""\);\s*if \(r\.row\) setPendingJump\(\{ page: resolvePane\(r\.pane\), row: r\.row \}\);/);
   });
 });
 
@@ -314,6 +326,10 @@ describe("the Plugins page's mark", () => {
     expect(navMarks(facts({ pluginsRunning: 2, pluginsNeed: 0 })).plugins).toMatchObject({ state: "on", count: 2 });
     expect(navMarks(facts({ pluginsRunning: 0, pluginsNeed: 0 })).plugins).toBeUndefined();
     expect(navMarks(NO_FACTS).plugins).toBeUndefined();
+  });
+  test("the Needs-you tally's own words win over the approval sentence", () => {
+    expect(navMarks(facts({ pluginsRunning: 1, pluginsNeed: 2, pluginsNeedTitle: "1 stopped · 1 update" })).plugins)
+      .toMatchObject({ state: "needs", count: 2, title: "1 stopped · 1 update" });
   });
   test("the header says how many run", () => {
     expect(headerChips("plugins", { state: "on", count: 2 })).toEqual([{ tone: "ok", text: "2 running" }]);

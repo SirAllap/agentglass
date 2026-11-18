@@ -17,14 +17,21 @@ export interface ViewPrefs {
   /** Most recently pinned first. */
   pinned: string[];
   hidden: string[];
+  /** The card dock's width, dragged by hand; null (or missing, on prefs saved before this field) means the computed default. */
+  width: number | null;
 }
 
-export const NO_PREFS: ViewPrefs = { pinned: [], hidden: [] };
+export const NO_PREFS: ViewPrefs = { pinned: [], hidden: [], width: null };
 
 // ---- pure rules ----
 
 export const togglePin = (p: ViewPrefs, id: string): ViewPrefs =>
   ({ ...p, pinned: p.pinned.includes(id) ? p.pinned.filter((x) => x !== id) : [id, ...p.pinned] });
+
+/** The dock width this view remembers, or null for whichever card opened it to size itself. */
+export const widthOf = (p: ViewPrefs): number | null => p.width ?? null;
+
+export const setWidth = (p: ViewPrefs, width: number | null): ViewPrefs => (widthOf(p) === width ? p : { ...p, width });
 
 export const hideCard = (p: ViewPrefs, id: string): ViewPrefs =>
   p.hidden.includes(id) ? p : { ...p, hidden: [...p.hidden, id], pinned: p.pinned.filter((x) => x !== id) };
@@ -50,9 +57,12 @@ export function arrangeLane(lane: JiraLane, p: ViewPrefs): JiraLane {
 
 export const arrangeLanes = (lanes: readonly JiraLane[], p: ViewPrefs): JiraLane[] => lanes.map((l) => arrangeLane(l, p));
 
-/** The model the lanes draw from: hidden cards gone, each lane arranged. The footer and the chips keep the real counts. */
-export function withPrefs<M extends { cards: ProviderTask[]; lanes: JiraLane[] }>(model: M, p: ViewPrefs): M {
-  return p === NO_PREFS ? model : { ...model, cards: visibleCards(model.cards, p), lanes: arrangeLanes(model.lanes, p) };
+/** The model the lanes draw from: hidden cards gone, each lane arranged. `counts.total` stays the real total. */
+export function withPrefs<M extends { cards: ProviderTask[]; lanes: JiraLane[]; counts: { shown: number } }>(model: M, p: ViewPrefs): M {
+  if (p === NO_PREFS) return model;
+  const cards = visibleCards(model.cards, p);
+  /* `shown` is what the lanes draw: a card hidden here is counted in the line's "hidden", not as shown (measured: 3 hidden of 355 still read "355 of 355"). */
+  return { ...model, cards, lanes: arrangeLanes(model.lanes, p), counts: { ...model.counts, shown: cards.length } };
 }
 
 // ---- the stores ----

@@ -16,7 +16,7 @@ const mod = await import("../src/lib/api.ts");
 
 const { askConflict, checkingConflict, conflictsFrom, forgetConflicts, reopenConflicts, learn, withConflict, onConflict } =
   await import("../src/lib/prConflictStore.ts");
-const { fileInLane, stakeFrom } = await import("../src/lib/prLanes.ts");
+const { fileInLane, stakeFrom } = await import("../../shared/prLanes.ts");
 import type { PrSummary } from "../../shared/types.ts";
 import { readFileSync } from "node:fs";
 import { globalStubs } from "./stubGlobal.ts";

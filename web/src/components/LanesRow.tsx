@@ -22,11 +22,13 @@ export function lanesLabel(rows: readonly LaneRow[]): string | null {
  * there is nothing to reveal: a lane has no window the person could look at.
  * Absent when there are none, so a person who never uses lanes never sees it.
  */
-export function LanesRow() {
+export function LanesRow({ active = true }: { active?: boolean }) {
   const [rows, setRows] = useState<LaneRow[]>([]);
   const read = () => { void api.browserLanes().then((r) => setRows(r.lanes ?? []), () => { /* the server is restarting */ }); };
-  useEffect(read, []);
-  usePoll(true, read, 10_000);
+  useEffect(() => { if (active) read(); }, [active]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The Browser view stays mounted behind the others: the read stops with it, and the
+  // effect above reads once on the way back so the line is current when seen.
+  usePoll(active, read, 10_000);
   const label = lanesLabel(rows);
   if (!label) return null;
   return (

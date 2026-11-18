@@ -192,9 +192,9 @@ describe("open in browser", () => {
     for (const n of ["main.ts", "notes.md", "Makefile", "htmlnotes", "x.html.bak"]) expect(canOpenInBrowser(n)).toBe(false);
   });
 
-  test("the address carries the path as one encoded value", () => {
-    expect(pageUrl("http://127.0.0.1:4000", "/home/u/a b&c/sheet.html"))
-      .toBe("http://127.0.0.1:4000/preview/page?path=%2Fhome%2Fu%2Fa%20b%26c%2Fsheet.html");
+  test("the address is the engine's origin and the link it signed, untouched", () => {
+    expect(pageUrl("http://127.0.0.1:4000", "/preview/page?path=%2Fhome%2Fu%2Fa+b%26c%2Fsheet.html&ticket=ab12"))
+      .toBe("http://127.0.0.1:4000/preview/page?path=%2Fhome%2Fu%2Fa+b%26c%2Fsheet.html&ticket=ab12");
   });
 });
 

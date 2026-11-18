@@ -17,7 +17,7 @@ export function RevealButton({ path, what, label = "Open in Files", block }: { p
         onClick={() => { setErr(null); void api.previewReveal(path).then((r) => { if (!r.ok) setErr(r.error ?? "could not open"); }).catch(() => setErr("could not open")); }}
         className={`${block ? "flex w-full" : "inline-flex"} items-center gap-1.5 px-2 rounded-md text-[11px] shrink-0`}
         style={{ minHeight: block ? HIT + 6 : HIT, color: "var(--text2)", border: EDGE }}
-        title={what === "folder" ? "Show this folder in the system file manager" : "Show this file's folder in the system file manager"}>
+        data-tip={what === "folder" ? "Show this folder in the system file manager" : "Show this file's folder in the system file manager"}>
         <FolderIcon size={ICON.sm} />{label}
       </button>
       {err && <span className="text-[10.5px]" style={{ color: "var(--warning-ink)" }}>{err}</span>}

@@ -56,7 +56,8 @@ describe("every way into the picker still ends in the one picker", () => {
 
   test("an already-asked row names where they stand under the login, as the tag beside it does", () => {
     const held = picker.slice(picker.indexOf("if (r.held) {"), picker.indexOf("const on = r.picked;"));
-    expect(held).toContain("{r.sub && <small");
+    expect(held).toContain("sub={r.sub}");
+    expect(held).toContain("<PersonLine");
     expect(held).not.toContain("!tag && r.sub");
   });
   test("a team is sent as org/team and never put on the optimistic reviewer list as a person", () => {
@@ -150,7 +151,7 @@ describe("the picker's rows never shrink when the dialog hits its height", () =>
   });
   test("its own cap is 880, above the 857px a hand-over takes with the card half and a link box open", () => {
     expect(picker).toContain("const PP_MAX_H = 880;");
-    expect(picker).toContain("maxHeight: `min(${PP_MAX_H}px, calc(100vh - ${top + 12}px))`");
+    expect(picker).toContain("maxHeight: `min(${PP_MAX_H}px, ${place.maxHeight}px)`");
   });
   test("and the summary with Cancel and Done stays on the dialog's bottom edge while it scrolls", () => {
     expect(picker).toMatch(/data-pp-footer className="sticky [^"]*"[^>]*>\{footer\}<\/div>/);

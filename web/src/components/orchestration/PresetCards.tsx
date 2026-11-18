@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
-import { Button, INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
+import { Button } from "../workspace/Chrome.tsx";
 import { CloseButton } from "../CloseButton.tsx";
+import { TextCommitField, pushSaveToast } from "../settings/save/index.ts";
 import {
   PRESET_PARTS, PRESET_PART_WORDS, PRESET_FLOW_PARTS, applyPreset, parsePresetText, presetFileName, presetNameTaken, presetOf,
   presetPolicyParts, presetSaveParts, presetText, presetWritableParts,
@@ -110,16 +111,26 @@ export function PresetCards(p: PresetCardsProps) {
     void use(preset, presetPolicyParts(asked));
   };
 
-  const saveMine = () => {
-    const name = mineName.trim();
+  /** The name field commits on Enter or blur: the preset is saved, and the toast's Undo deletes it again. */
+  const saveMine = (raw: string) => {
+    const name = raw.trim();
     if (!name || !p.onSaveMine) return;
-    if (presetNameTaken(name, shipped)) {
-      setError(`A shipped preset is already called “${name}”: give yours another name.`);
-      return;
-    }
     // Saved with the parts All projects can carry, so a machine-wide preset never holds a project's roster.
     const includes = presetSaveParts(flowHome);
-    void run(() => p.onSaveMine!(presetOf(p.target, name, includes)));
+    void run(() => p.onSaveMine!(presetOf(p.target, name, includes))).then((e) => {
+      if (e) return;
+      setPanel(null);
+      pushSaveToast(`Saved “${name}”`, () => { void p.onDeleteMine?.(name); });
+    });
+  };
+  const nameError = (raw: string): string | null => {
+    const name = raw.trim();
+    return name && presetNameTaken(name, shipped) ? `A shipped preset is already called “${name}”: give yours another name.` : null;
+  };
+  const deleteMine = (preset: PresetFile) => {
+    void run(() => p.onDeleteMine!(preset.name)).then((e) => {
+      if (!e) pushSaveToast(`Deleted “${preset.name}”`, () => { void p.onSaveMine?.(preset); });
+    });
   };
 
   const download = (preset: PresetFile) => {
@@ -177,7 +188,7 @@ export function PresetCards(p: PresetCardsProps) {
             <Button tone="primary" disabled={busy || parts.length === 0 || noFlowHome(parts)} onClick={() => void use(chosen, parts)}>Use this preset</Button>
             <Button onClick={() => { setPanel("share"); setError(null); }}>Share or download</Button>
             {mine.includes(chosen) && p.onDeleteMine && (
-              <Button onClick={() => void run(() => p.onDeleteMine!(chosen.name))}>Delete</Button>
+              <Button onClick={() => deleteMine(chosen)}>Delete</Button>
             )}
           </div>
           {noFlowHome(parts) && (
@@ -244,13 +255,13 @@ export function PresetCards(p: PresetCardsProps) {
         <div className="agx-flow-preset-panel" role="group" aria-label="Save this setup as a preset" data-panel="new">
           <header><b>Save this setup</b><span className="agx-flow-preset-sp" /><CloseButton title="Close the save panel" onClick={() => setPanel(null)} /></header>
           <p className="agx-flow-preset-hint">It saves the orchestrator's and workers' engines, the limits, the rules, the safety and the flow you have now.</p>
-          <input className={`${INPUT} w-full`} style={{ ...INPUT_STYLE, marginTop: 8 }} value={mineName} onChange={(e) => setMineName(e.target.value)} placeholder="e.g. Night shift" aria-label="The preset's name" />
+          <div style={{ marginTop: 8 }}>
+            <TextCommitField label="The preset's name" value={mineName} placeholder="e.g. Night shift" validate={nameError}
+              onSave={(v) => { setMineName(v); saveMine(v); }} />
+          </div>
           {!flowHome && (
             <p className="agx-flow-preset-hint">Under All projects it saves the parts every project shares: engines, limits, rules, safety and refusals. A flow belongs to one project, so it stays out.</p>
           )}
-          <div className="agx-flow-preset-actions">
-            <Button tone="primary" disabled={!mineName.trim() || !p.onSaveMine || busy} onClick={saveMine}>Save preset</Button>
-          </div>
         </div>
       )}
 

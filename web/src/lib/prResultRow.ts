@@ -1,5 +1,5 @@
 import { cardReviewers } from "./cardReviewers.ts";
-import type { LaneId } from "./prLanes.ts";
+import type { LaneId } from "../../../shared/prLanes.ts";
 import type { PrSummary } from "../../../shared/types.ts";
 
 /**

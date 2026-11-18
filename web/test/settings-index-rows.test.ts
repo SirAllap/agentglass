@@ -17,7 +17,8 @@ describe("settingsRows.gen.ts is fresh", () => {
   test("regenerating it produces byte-identical output", () => {
     const committed = readFileSync(new URL("../src/lib/settingsRows.gen.ts", import.meta.url).pathname, "utf8");
     expect(buildOutput()).toEqual(committed);
-  });
+    // buildOutput scans every settings page source: ~9 s measured cold, so it gets more than bun's 5 s default.
+  }, 30_000);
 
   test("at least 89 rows are indexed", () => {
     // Measured, not guessed: much of this app's settings surface is drawn

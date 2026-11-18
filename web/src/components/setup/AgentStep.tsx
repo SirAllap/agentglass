@@ -95,7 +95,7 @@ export function AgentStep({ report, error, picked, busy, display, onPick, onRech
         </div>
         {cmd && (
           <div className="setup-cmd">
-            <code title={cmd}>{cmd}</code>
+            <code data-tip={cmd}>{cmd}</code>
             <button type="button" className="setup-btn setup-btn-xs" onClick={() => void copy(cmd, setSaid)}>Copy</button>
           </div>
         )}

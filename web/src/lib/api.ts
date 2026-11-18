@@ -1,32 +1,37 @@
+import { publishListChecks } from "./prListChecks.ts";
 import type { AutoEntry } from "./housekeeping.ts";
+import type { FlowRoleRow } from "../../../shared/browserWorkers.ts";
 import type { Plan as CleanupPlan, Report as CleanupReport } from "./cleanupPr.ts";
 import { deskGated } from "./deskGate.ts";
+import { finalAnswers } from "./finalAnswers.ts";
+import { clickupListIdShape } from "../../../shared/cardRef.ts";
 import type { LookupAnswer } from "./remoteRepos.ts";
-import { forgetShared, sharedRead } from "./sharedRead.ts";
+import { invalidate as forgetShared, load as remoteLoad } from "./remoteStore.ts";
 import type { UiAction, Field, NoteReply, NoteStatus, PluginPanel, PluginPrNotes, PrNotesSummary } from "./pluginTypes.ts";
 import type { ImportedPlace } from "./desktop.ts";
-import type { JiraAddChoice, JiraEpicCardsOut, JiraSpacePickerOut, JiraSpacesEdit, JiraSpacesOut, JiraSpaceTreeOut } from "../../../shared/jiraSpaces.ts";
+import type { JiraAddChoice, JiraEpicCardsOut, JiraProjectBoard, JiraSpacePickerOut, JiraSpacesEdit, JiraSpacesOut, JiraSpaceTreeOut } from "../../../shared/jiraSpaces.ts";
 import type { Policy } from "../../../shared/orchestration.ts";
 import type { Flow } from "../../../shared/flow.ts";
 import type { PreflightTarget } from "../../../shared/preflightEngine.ts";
-import type { ActionAnswer, ActionBody, ItemsAnswer, SettingsAnswer, SettingsChange } from "../../../shared/polaris.ts";
+import type { ActionAnswer, ActionBody, GithubAnswer, ItemsAnswer, SettingsAnswer, SettingsChange } from "../../../shared/polaris.ts";
 import type { AccountsOut } from "../../../shared/pluginAccounts.ts";
 import type { SettingRequestView } from "../../../shared/settingClass.ts";
 import { DEFAULT_LAUNCH_DENY, type LaunchMode, type LaunchPermissions } from "../../../shared/launchModes.ts";
-import type { PinnedPlace, PrWatchFire, PrWatchRule, PrWatchState } from "../../../shared/types.ts";
+import type { PinnedPlace, PrWatchFire, PrWatchRule, PrWatchSetItem, PrWatchState } from "../../../shared/types.ts";
 import type { PrView } from "../../../shared/prFilter.ts";
 import type { AskedAlert } from "../../../shared/notifyPayload.ts";
 import type { CheckOnBasePlan, CheckOnBaseStatus } from "../../../shared/checkOnBase.ts";
-import type { WatchEvent, UsageOpens, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, FolderPrecheck, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitTagOrigin, GitStashFile, GitLastFetch, GitRangeCounts, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, DockerDisk, DockerPeek, DockerEnvRow, BrowseReport, BrowsePage, FileFacts, FileGitFacts, TerminalCommands, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, RemoteStatus, ServeResult, PairState, PairedDevice, DeviceScope, Budget, BudgetStatus, AgentProbe, EnginesReport, SetupState, SetupRepos, SetupScan, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, OrphanReport, OrphanStopResult, DiskCleanReport, DiskCleanRunResult, SpaceReport, FindReport, GrepReport, DiskPlaces, VolumeList, NetworkList, RemoteStep, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, PluginUpdateReport, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest, FsBody, FsAnswer, FsJob, FsTrashRow, FsProps, OpenWithList, FinderAction, FinderActionList, MediaFacts } from "../../../shared/types.ts";
+import type { WatchEvent, UsageOpens, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, Collision, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, FolderPrecheck, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitTagOrigin, GitStashFile, GitLastFetch, GitRangeCounts, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerRepoLeftovers, DockerCapability, DockerDisk, DockerPeek, DockerEnvRow, BrowseReport, BrowsePage, FileFacts, FileGitFacts, TerminalCommands, ConflictBlock, ConflictFile, MergeSessionView, BlockChoice, MergeInfo, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrSummary, PrActionResult, PrLocalHead, GitCapability, DbNotice, HookSetupStatus, HookSetupResult, PrCheckJob, CheckFailures, CheckFailureSummary, FailingTests, PrCheckRollup, RemoteStatus, ServeResult, PairState, PairedDevice, DeviceScope, Budget, BudgetStatus, AgentProbe, EnginesReport, SetupState, SetupRepos, SetupScan, UsageHistory, ActionRecord, IssuesReport, IssuePrsReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, OrphanReport, OrphanStopResult, DiskCleanReport, DiskSpace, DiskCleanRunResult, SpaceReport, FindReport, GrepReport, DiskPlaces, VolumeList, NetworkList, RemoteStep, AgentPane, PanesResponse, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, Recipe, RecipesResponse, ReviewRecipe, ReviewRecipesResponse, BrowserUseStatus, ProviderUsage, GitLocksReport, ProcDetail, PrBranchSummary, ChangeRow, ChangeRowsResult, FileDiff, GitFileChange, RepoStats, Changelog, GitSubmodule, BlameLine, FileHistoryEntry, GitBisectStatus, AgentSessionRow, InboxItem, PluginsStatus, PublicPlugin, PluginUpdateReport, Catalogue, LaneRow, MarkKind, MarkOp, MarkRow, LogDigest, FsBody, FsAnswer, FsJob, FsTrashRow, FsProps, OpenWithList, FinderAction, FinderActionList, MediaFacts } from "../../../shared/types.ts";
 import type { JiraUnits } from "../../../shared/jiraStatusUnits.ts";
 import type { WorkSend } from "./jiraWorklog.ts";
-import type { CardEdit, CardFact, ProvidersResponse, JiraBlockOutcome, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraStep, JiraStepChoice, JiraStepKey, JiraStepPr, JiraSteps, JiraStepsRead, JiraStatus, JiraViews, JiraViewRead, JiraBoardAreas, JiraBoardContext, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, CardDev, CardWebLink, CardEvent, TrackerChoice } from "../../../shared/providers.ts";
+import type { CardEdit, CardFact, ProvidersResponse, JiraBlockOutcome, JiraConnectResult, JiraHandoffRule, JiraMoves, JiraPerson, JiraSettings, JiraPair, JiraStep, JiraStepChoice, JiraStepKey, JiraStepPr, JiraSteps, JiraStepsRead, JiraStatus, JiraViews, JiraViewRead, JiraBoardAreas, JiraBoardContext, JiraViewChoice, JiraProjectChoice, ProviderStatus, ProviderTasksResponse, SavedView, SavedFolder, ClickUpBoards, ViewTasksResponse, TaskDetail, TaskReply, ProviderTask, ListStatus, ListField, ListPlace, ListMember, ClickUpPrefs, ClickUpSpace, CardPr, CardDev, CardWebLink, CardEvent, TrackerChoice } from "../../../shared/providers.ts";
+import type { AccountRow, RepoAccounts } from "./accountsModel.ts";
 import { DEFAULT_NOTIFY_PREFS, type NotifyPrefs } from "../../../shared/notifyPrefs.ts";
 import type { CheckMetric } from "../../../shared/checkBaseline.ts";
 import type { UiReply } from "../../../shared/uiActions.ts";
 import type { GithubProblem } from "../../../shared/githubStatus.ts";
 import type { Look } from "../../../shared/unstick.ts";
-import type { NamedAgentRow } from "./workerBar.ts";
+import type { NamedAgentRow } from "./workerTab.ts";
 import type { ManifestProject, ManifestStartWrite, ManifestSummary, ManifestWrite } from "../../../shared/manifest.ts";
 
 /** A partial update: any group may name just the keys it changes. */
@@ -79,7 +84,11 @@ export type RepoSpend = {
 };
 
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
+import type { MemoryReserveReport, MemoryReserveResult } from "../../../shared/memoryReserve.ts";
 import * as demo from "./demo.ts";
+import type { MergeLock, MergeLockState } from "../../../shared/mergeLock.ts";
+export type MergeLockRow = { lock: MergeLock; state: MergeLockState };
+export type MergeLockWrite = { ok: boolean; lock?: MergeLock | null; state?: MergeLockState | null; error?: string };
 import { latchStage } from "./stageIntent.ts";
 import type { KeyringState } from "./keyringRow.ts";
 
@@ -479,7 +488,7 @@ export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string
   /** This bench tab is the checkout's note, in Neovim. No path: the server
    *  derives the note's file itself. */
   note = false) =>
-  withToken(`${SERVER.replace(/^http/, "ws")}/terminal/pty?root=${encodeURIComponent(root)}&cols=${cols}&rows=${rows}`
+  ptyTarget(`root=${encodeURIComponent(root)}&cols=${cols}&rows=${rows}`
     // A single-use ticket for an agent to start in this pane — never the prompt
     // itself, which is kilobytes and has no business in a URL. See
     // api.termAgentTicket and the server's agentticket.ts.
@@ -498,6 +507,135 @@ export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string
     + (view && line > 1 ? `&line=${Math.floor(line)}` : "")
     + (fresh ? "&fresh=1" : "")
     + (isConsole ? "&console=1" : ""));
+
+/*
+ * The terminal relay's door. When the server runs its terminal bytes in a
+ * process of their own (server/src/relay/), the window connects there with a
+ * one-use ticket instead of through the main server, whose single event loop a
+ * disk or CPU stall freezes for seconds. Tickets are minted ahead of time,
+ * a few at a time, so `ptyWsUrl` stays synchronous for its four callers. An
+ * empty or stale pool means the old door, which always works: that is also the
+ * whole fallback when the relay is down, restarting, or off.
+ */
+type RelayTicket = { id: string; port: number; gen: number; at: number };
+let relayPool: RelayTicket[] = [];
+let relayFilling = false;
+const RELAY_TICKET_FRESH_MS = 35_000; // the server keeps one for 45 s
+
+let relayOffUntil = 0;
+let relayKnown: Promise<boolean | null> | null = null;
+/** Only a window on this machine's own loopback: through a tunnel or a LAN
+ *  address the relay's 127.0.0.1 port is somebody else's. */
+const loopbackServer = (): boolean => { try { return /^(127\.0\.0\.1|localhost)$/.test(new URL(SERVER).hostname); } catch { return false; } };
+
+function refillRelayTickets(): void {
+  if (relayFilling || relayPool.length >= 2 || typeof fetch !== "function" || Date.now() < relayOffUntil || !loopbackServer()) return;
+  relayFilling = true;
+  // Ask whether the server runs a relay before ever POSTing for a ticket: off
+  // means one cheap GET per page load and nothing else, ever.
+  relayFill = (relayKnown ?? (relayKnown = fetch(`${SERVER}/health`).then((r) => r.json()).then((h) => !!h?.relayEnabled, () => null)))
+    .then((on) => { if (on === false) { relayOffUntil = Infinity; return null; } if (on === null) { relayKnown = null; return null; } return post<{ relay?: boolean; port?: number; gen?: number; tickets?: string[] }>("/terminal/relay-ticket?n=4", {}); })
+    .then((r) => {
+      if (!r) return;
+      if (!r?.relay || !r.port || !r.tickets) { relayPool = []; relayOffUntil = Date.now() + 30_000; return; }
+      // A new generation is a restarted relay: whatever was pooled is dead.
+      if (relayPool.some((t) => t.gen !== r.gen)) relayPool = [];
+      const at = Date.now();
+      relayPool.push(...r.tickets.map((id) => ({ id, port: r.port!, gen: r.gen ?? 0, at })));
+    })
+    .catch(() => { /* old door */ })
+    .finally(() => { relayFilling = false; });
+}
+
+/** The refill in flight, so a first connection can wait for it. */
+let relayFill: Promise<void> | null = null;
+/** The longest a terminal waits for its first ticket before taking the old door. */
+export const RELAY_FIRST_WAIT_MS = 600;
+
+/**
+ * Something to wait for before opening a terminal socket, or null when there
+ * is nothing to wait for.
+ *
+ * Tickets are fetched ahead so `ptyWsUrl` can stay synchronous, but the first
+ * terminal of a page connects before the first fetch has come back. Measured
+ * on the installed app with the relay on: the window's main terminal went
+ * through the old door every time (one bridge under the server, none under
+ * the relay), so the terminal that matters most never got what the relay is
+ * for. A terminal now waits for that first answer, and no longer than
+ * RELAY_FIRST_WAIT_MS: with the relay off, down or slow it opens on the old
+ * door as before.
+ */
+export function relayReady(now = Date.now()): Promise<void> | null {
+  if (relayPool.some((t) => now - t.at < RELAY_TICKET_FRESH_MS)) return null;
+  if (typeof fetch !== "function" || now < relayOffUntil || !loopbackServer()) return null;
+  /* After the server is up, never before. On a cold start the page loads while
+     the server is still booting: the health read behind the refill was refused,
+     which reads as "no relay", and the terminal took the old door for the rest
+     of its life. Measured on the installed app after the first version of this
+     wait: still one bridge under the server and none under the relay. The
+     socket could not have connected before the server either, so waiting for
+     it costs the terminal nothing; the cap starts once it is up. */
+  return whenServerUp().then(() => {
+    refillRelayTickets();
+    const fill = relayFill;
+    if (!relayFilling || !fill) return;
+    return Promise.race([fill, new Promise<void>((r) => setTimeout(r, RELAY_FIRST_WAIT_MS))]);
+  });
+}
+
+/** How long the old door is used after the relay turned a terminal away. */
+export const RELAY_REFUSED_OFF_MS = 60_000;
+
+/**
+ * A terminal socket closed: was that the relay turning it away?
+ *
+ * A browser cannot read why a WebSocket upgrade failed, and the terminal's
+ * retry simply asked for the next ticket. So when the relay refused the
+ * window (its origin list was wrong), every retry went to the same door and
+ * the terminal stayed on "disconnected · reconnecting" for as long as the
+ * relay was on: about two minutes on the installed app, until it was switched
+ * off by hand. A relay socket that closes before its shell was ever ready now
+ * sends the retries to the old door for RELAY_REFUSED_OFF_MS. A terminal that
+ * was live and dropped is a restart, not a refusal, and keeps the relay.
+ */
+/** True for a socket that went through the relay, false for the old door (`/terminal/pty` on the server). */
+export const onRelay = (url: string): boolean => /^ws:\/\/127\.0\.0\.1:\d+\/pty\?/.test(url);
+
+/**
+ * Whether a relay ticket is in hand, asking for one and waiting up to `ms`.
+ *
+ * For a terminal that is already live on the old door and may move: the first
+ * wait (relayReady) is bounded so a terminal never sits blank, and on a cold
+ * start it lost the race twice in a row. Measured on the installed app after
+ * both fixes: the relay was up 337 ms after the server, and the one terminal of
+ * the window was still on the old door, because it had connected first. A
+ * terminal that is already drawing can wait as long as it likes.
+ */
+export async function relayTicketSoon(ms = 5_000): Promise<boolean> {
+  const fresh = () => Date.now() >= relayOffUntil && relayPool.some((t) => Date.now() - t.at < RELAY_TICKET_FRESH_MS);
+  if (fresh()) return true;
+  if (typeof fetch !== "function" || Date.now() < relayOffUntil || !loopbackServer()) return false;
+  refillRelayTickets();
+  const fill = relayFill;
+  if (relayFilling && fill) await Promise.race([fill, new Promise<void>((r) => setTimeout(r, ms))]);
+  return fresh();
+}
+
+export function relayTurnedAway(url: string, wasLive: boolean, now = Date.now()): boolean {
+  if (wasLive || !onRelay(url)) return false;
+  relayPool = [];
+  relayOffUntil = Math.max(relayOffUntil, now + RELAY_REFUSED_OFF_MS);
+  return true;
+}
+
+function ptyTarget(query: string): string {
+  const now = Date.now();
+  relayPool = relayPool.filter((t) => now - t.at < RELAY_TICKET_FRESH_MS);
+  const t = relayPool.shift();
+  refillRelayTickets();
+  if (t && now >= relayOffUntil) return `ws://127.0.0.1:${t.port}/pty?t=${t.id}&${query}`;
+  return withToken(`${SERVER.replace(/^http/, "ws")}/terminal/pty?${query}`);
+}
 
 /*
  * The gap between the window appearing and the sidecar listening.
@@ -668,9 +806,19 @@ async function get<T>(path: string, signal?: AbortSignal, headers: Record<string
   throw last;
 }
 
-/** How long callers of `gitRepos` share one answer. Short: the server keeps its
- *  own for 15 s, and a git write or the server's "git changed" frame drops it. */
+/** How long callers of `gitRepos` share one answer (remoteStore key `git:repos`):
+ *  unchanged from `sharedRead`'s own window, shorter than the server's own 15s
+ *  cache behind it. A git write or the server's "git changed" frame drops it
+ *  before that, but neither covers a git command run outside agentglass, so
+ *  this stays short rather than matching the side pane's own 60s target. */
 const REPOS_SHARE_MS = 2_000;
+
+/** A Jira write names its repo in the query, where the server's one account edge reads it. */
+const withRepo = (path: string, repo?: string): string => repo ? `${path}${path.includes("?") ? "&" : "?"}${new URLSearchParams({ repo })}` : path;
+const repoQuery = (repo?: string): string => (repo ? `?${new URLSearchParams({ repo })}` : "");
+/** One live guide grant, as `/browser/guide-grants` lists it. */
+export interface GuideGrantRow { id: string; agent: string; site: string; since: string; until: string }
+export type GuideGrantsReply = { ok: boolean; grants?: GuideGrantRow[]; error?: string };
 
 async function post<T>(path: string, body: unknown, headers: Record<string, string> = {}): Promise<T> {
   // Gated like GET, and only gated: waiting for a listener changes nothing
@@ -682,7 +830,7 @@ async function post<T>(path: string, body: unknown, headers: Record<string, stri
   // A git write changes what /git/repos says (dirty count, branch): drop the
   // shared copy before AND after, so nothing asks for a stale one meanwhile.
   const git = path.startsWith("/git/");
-  if (git) forgetShared();
+  if (git) forgetShared("git:repos");
   try {
     const r = await fetch(SERVER + path, { method: "POST", headers: authHeaders({ "content-type": "application/json", ...(deskGated(path) ? deskHeader() : {}), ...headers }), body: JSON.stringify(body) });
     const out = await (r.json() as Promise<T>);
@@ -691,7 +839,7 @@ async function post<T>(path: string, body: unknown, headers: Record<string, stri
     if (r.status === 202) return { ...(out as object), ok: false, error: "not saved: this window is not the desktop app, so the change waits as a request for the app's Approve" } as T;
     return out;
   } finally {
-    if (git) forgetShared();
+    if (git) forgetShared("git:repos");
   }
 }
 
@@ -723,6 +871,9 @@ function viewerTz(): string | null {
   return tzMemo;
 }
 
+import type { UsageAccount } from "../../../shared/usageAccounts.ts";
+export type OwnAccountsRead = { ok: boolean; accounts: UsageAccount[]; sources: Record<string, { id: string; label: string }[] | undefined> };
+export type OwnAccountsWrite = { ok: boolean; accounts?: UsageAccount[]; error?: string };
 const D = <T,>(v: T) => Promise.resolve(v); // demo helper
 const demoPrAction = (): PrActionResult => ({ ok: false, error: "the demo is read-only" });
 
@@ -837,6 +988,14 @@ export interface PrivacyFacts {
 
 export type PinState = "open" | "draft" | "merged" | "closed";
 
+type ClickupListAnswer = { ok: boolean; error?: string; name?: string; statuses?: ListStatus[]; fields?: ListField[]; place?: ListPlace };
+/** One request per list at a time, and a 4xx stands until it ages out: see finalAnswers.ts. */
+const clickupListAsk = finalAnswers((k: string) => {
+  const at = k.indexOf("\n");
+  const [repo, id] = at < 0 ? [undefined, k] : [k.slice(0, at), k.slice(at + 1)];
+  return get<ClickupListAnswer>(`/clickup/list?${new URLSearchParams({ id, ...(repo ? { repo } : null) })}`);
+});
+
 const realApi = {
   recent: (limit = 300) => get<WatchEvent[]>(`/events/recent?limit=${limit}`),
   /** Where the machine's agents are sitting, in tmux terms. Asked on demand —
@@ -909,7 +1068,7 @@ const realApi = {
   /** The live window of this exact name in this repository (and checkout, when
    *  `path` is given), or null. */
   tmuxLiveWindow: (root: string, name: string, path?: string) =>
-    get<{ ok: boolean; window: { session: string; windowId: string; paneId: string; name: string; path: string; idle?: true } | null }>(
+    get<{ ok: boolean; window: { session: string; windowId: string; paneId: string; name: string; path: string; given?: string; card?: string; idle?: true } | null }>(
       `/terminal/tmux/live-window?root=${encodeURIComponent(root)}&name=${encodeURIComponent(name)}${path ? `&path=${encodeURIComponent(path)}` : ""}`),
   /** Tabs/splits/focus/kill/rename/resize on the engine's tmux. */
   tmuxWindowOp: (op: string, body: Record<string, unknown>) =>
@@ -936,7 +1095,7 @@ const realApi = {
   sessions: (limit = 100, provider?: string) =>
     get<SessionRollup[]>(`/sessions?limit=${limit}${provider ? `&provider=${encodeURIComponent(provider)}` : ""}`),
   filterOptions: () =>
-    get<{ source_apps: string[]; hook_event_types: string[]; models: string[] }>(
+    get<{ source_apps: string[]; hook_event_types: string[]; models: string[]; partial?: true }>(
       `/events/filter-options`
     ),
   // `kind`: "events" is the raw rows, bounded by retention; "daily" is the
@@ -962,6 +1121,10 @@ const realApi = {
   openCodeKey: () => get<{ ok: boolean; set: boolean }>(`/usage/opencode/key`),
   setOpenCodeKey: (key: string) => post<{ ok: boolean; set?: boolean; error?: string }>(`/usage/opencode/key`, { key }),
   clearOpenCodeKey: () => post<{ ok: boolean; set?: boolean; error?: string }>(`/usage/opencode/key`, { clear: true }),
+  /** The accounts added per provider: id, label and the NAME of a source, never a credential. */
+  ownAccounts: () => get<OwnAccountsRead>(`/usage/own-accounts`),
+  ownAccountAdd: (provider: string, label: string, source?: string) => post<OwnAccountsWrite>(`/usage/own-accounts`, { provider, label, ...(source ? { source } : {}) }),
+  ownAccountRemove: (provider: string, id: string) => post<OwnAccountsWrite>(`/usage/own-accounts`, { provider, id, remove: true }),
   claimPaceAlerts: (alertAt: number) => post<{ ok: boolean; fired: number }>(`/usage/pace-claim`, { alertAt }),
   // usage_since: the epoch the call counts are known from. They are bounded
   // by AGENTGLASS_RETENTION_DAYS, so a bare count reads as a lifetime total
@@ -1037,6 +1200,10 @@ const realApi = {
   browserReady: (client: string, on: boolean, lanes: string[] = []) => post<{ ok: boolean }>("/browser/ready", { client, on, lanes }, deskHeader()),
   /** Report what the built-in browser did with an agent's ask. The server is
    *  holding that agent's request open until this lands — see browserdrive.ts. */
+  /** A running `guide run`'s event from the panel: the person's hand on the guided tab, or a card button.
+   *  The window's own call (the desk key); the server moves the plan on here. */
+  guideEvent: (ev: { tab: string; event: string; visit?: number; url?: string; note?: string }) =>
+    post<{ ok: boolean; error?: string }>("/browser/guide/event", ev, deskHeader()),
   browserResult: (r: { client?: string; id: string; ok: boolean; value?: unknown; error?: string; diagnosis?: unknown }) =>
     post<{ ok: boolean; known: boolean }>("/browser/result", r),
   /** Answer a command the server is holding open (POST /control with an `id`, or a
@@ -1068,7 +1235,7 @@ const realApi = {
   // notesWorthyRepos.
   /** One checkout's row, read now — not shared, not cached (see repoPulse.ts). */
   gitRepo: (root: string) => get<{ repo: GitRepoRef | null }>(`/git/repo?root=${encodeURIComponent(root)}`),
-  gitRepos: () => sharedRead("git/repos", REPOS_SHARE_MS, () => get<{ repos: GitRepoRef[]; roots?: string[] }>("/git/repos")),
+  gitRepos: () => remoteLoad("git:repos", () => get<{ repos: GitRepoRef[]; roots?: string[] }>("/git/repos"), REPOS_SHARE_MS),
   /** Put a PNG somewhere an agent can read it, and say where. A tmux window
    *  takes text; a megabyte of base64 in a prompt is not text. */
   /** Everywhere another browser has been, for the address bar. */
@@ -1117,6 +1284,8 @@ const realApi = {
   gitReflogEnable: (root: string) => post<GitActionResult>("/git/reflog-enable", { root }),
   gitFetch: (root: string, remote?: string) => post<GitActionResult>("/git/fetch", { root, remote }),
   gitBranches: (root: string) => get<{ current: string; branches: GitBranch[]; trunk?: string | null; checking?: boolean }>(`/git/branches?root=${encodeURIComponent(root)}`),
+  /** Commits only this branch holds (no other branch, not origin); null when git cannot say. */
+  gitBranchOnlyHere: (root: string, name: string) => get<{ count: number; shared?: number; commits: { shortHash: string; subject: string }[] } | null>(`/git/branch-only-here?root=${encodeURIComponent(root)}&name=${encodeURIComponent(name)}`),
   gitLog: (root: string, limit = 100) => get<{ commits: GitCommit[] }>(`/git/log?root=${encodeURIComponent(root)}&limit=${limit}`),
   gitCommitDiff: (root: string, hash: string) => get<{ changes: GitFileChange[] }>(`/git/commit-diff?root=${encodeURIComponent(root)}&hash=${encodeURIComponent(hash)}`),
   gitRefs: (root: string) => get<{ ok: boolean; refs?: string[]; error?: string }>(`/git/refs?root=${encodeURIComponent(root)}`),
@@ -1300,7 +1469,7 @@ const realApi = {
   actionRun: (id: string, paths: string[], source: "selection" | "background", confirmed?: boolean) => post<{ ok: boolean; error?: string; confirm?: boolean; job?: FsJob }>("/finder/actions/run", { id, paths, source, ...(confirmed ? { confirmed: true } : {}) }).catch((e: unknown) => ({ ok: false, error: e instanceof Error ? e.message : String(e) } as { ok: boolean; error?: string; confirm?: boolean; job?: FsJob })),
   fsTrash: () => get<{ ok: boolean; entries: FsTrashRow[] }>("/fs/trash"),
   fsProps: (path: string) => get<{ ok: boolean; error?: string; props?: FsProps }>(`/fs/props?path=${encodeURIComponent(path)}`),
-  previewFacts: (path: string) => get<FileFacts>(`/preview/facts?path=${encodeURIComponent(path)}`),
+  previewFacts: (path: string, signal?: AbortSignal) => get<FileFacts>(`/preview/facts?path=${encodeURIComponent(path)}`, signal),
   /** Status, +/-, branch and last commit of one file, for the info rail. */
   previewGit: (path: string) => get<FileGitFacts>(`/preview/git?path=${encodeURIComponent(path)}`),
   /**
@@ -1312,9 +1481,9 @@ const realApi = {
    */
   /** The text of a file up to `cap` bytes, from the slice route: `size` is the
    *  whole file and `truncated` says whether the cap cut it. */
-  previewText: async (path: string, cap: number): Promise<{ ok: true; text: string; size: number; truncated: boolean } | { ok: false; error: string }> => {
+  previewText: async (path: string, cap: number, signal?: AbortSignal): Promise<{ ok: true; text: string; size: number; truncated: boolean } | { ok: false; error: string }> => {
     try {
-      const r = await fetch(`${SERVER}/preview/file?path=${encodeURIComponent(path)}&cap=${cap}`, { headers: authHeaders() });
+      const r = await fetch(`${SERVER}/preview/file?path=${encodeURIComponent(path)}&cap=${cap}`, { headers: authHeaders(), signal });
       if (!r.ok) {
         const why = await r.json().catch(() => null) as { error?: string } | null;
         return { ok: false, error: why?.error ?? `the engine refused it (${r.status})` };
@@ -1346,6 +1515,8 @@ const realApi = {
   /** Hand a file to the desktop's own viewer — a picture belongs to the picture
    *  viewer, not to the editor the text files open in. */
   previewOpen: (path: string) => post<{ ok: boolean; with?: string; error?: string }>("/preview/open", { path }),
+  /** The address a browser tab opens a file at: a one-file ticket, never the token (server auth.ts pageTicket). Relative to SERVER. */
+  previewPageLink: (path: string, scripts = false) => get<{ path: string }>(`/preview/pagelink?path=${encodeURIComponent(path)}${scripts ? "&scripts=1" : ""}`),
   finderEditState: (root: string) => get<{ ok: boolean; live: boolean; modified: boolean; error?: string }>(`/bench/finder-edit?root=${encodeURIComponent(root)}`),
   finderEditEnd: (root: string) => post<{ ok: boolean; ended?: boolean; error?: string }>("/bench/finder-edit/end", { root }),
   finderEditSave: (root: string) => post<{ ok: boolean; live: boolean; modified: boolean; error?: string }>("/bench/finder-edit/save", { root }),
@@ -1366,6 +1537,8 @@ const realApi = {
   /** Remove images by tag or id, one at a time on the server so a single
    *  refusal does not abandon the rest. */
   dockerRemoveImages: (refs: string[]) => post<DockerActionResult>("/docker/images/rm", { refs }),
+  dockerLeftovers: (force = false) => get<{ repos: DockerRepoLeftovers[] }>(`/docker/leftovers${force ? "?force=1" : ""}`),
+  dockerRemoveOrphans: (repo: string, images: string[], volumes: string[]) => post<DockerActionResult>("/docker/orphans/remove", { repo, images, volumes }),
   dockerRemoveNetwork: (name: string) => post<DockerActionResult>("/docker/networks/rm", { name }),
   dockerRemoveVolume: (name: string) => post<DockerActionResult>("/docker/volumes/rm", { name }),
   /** Why does yours start and mine not. The values of anything
@@ -1425,61 +1598,82 @@ const realApi = {
   keyringRehydrate: () => post<{ ok: boolean; error?: string } & Partial<KeyringState>>("/keyring/rehydrate", {}),
   /** What is left of GitHub's hourly budget — this app is made of `gh` calls. */
   ghRateLimit: () => get<{ ok: boolean; error?: string; budgets?: { id: string; label: string; limit: number; remaining: number; reset: number }[] }>("/prs/rate-limit"),
-  providerConnect: (id: string, token: string) =>
-    post<{ ok: boolean; error?: string; status?: ProviderStatus }>("/providers/connect", { id, token }),
-  providerDisconnect: (id: string, o: { forgetBoards?: boolean } = {}) =>
-    post<{ ok: boolean; error?: string; status?: ProviderStatus }>("/providers/disconnect", o.forgetBoards ? { id, forgetBoards: true } : { id }),
+  providerConnect: (id: string, token: string, accountKey?: string) =>
+    post<{ ok: boolean; error?: string; status?: ProviderStatus }>("/providers/connect", accountKey ? { id, token, accountKey } : { id, token }),
+  providerDisconnect: (id: string, o: { forgetBoards?: boolean; accountKey?: string } = {}) =>
+    post<{ ok: boolean; error?: string; status?: ProviderStatus }>("/providers/disconnect", { id, ...(o.forgetBoards ? { forgetBoards: true } : null), ...(o.accountKey ? { accountKey: o.accountKey } : null) }),
+  /** The accounts stored for a provider: who each is, never a token. */
+  providerAccounts: (id: string) => get<{ ok: boolean; error?: string; accounts?: AccountRow[] }>(`/providers/accounts?id=${encodeURIComponent(id)}`),
+  providerSetDefault: (id: string, accountKey: string) =>
+    post<{ ok: boolean; error?: string; accounts?: AccountRow[] }>("/providers/default", { id, accountKey }),
+  /** Which account each repo uses, per provider. Absent is the default account. */
+  trackerAccounts: () => get<{ ok: boolean; accounts?: RepoAccounts }>("/tracker/accounts"),
+  setTrackerAccount: (repo: string, provider: string, accountKey: string | null) =>
+    post<{ ok: boolean; error?: string; accounts?: RepoAccounts }>("/tracker/accounts", { repo, provider, accountKey }),
   providerWorkspaces: (id: string) =>
     get<{ ok: boolean; workspaces?: { id: string; name: string }[]; error?: string }>(`/providers/workspaces?id=${encodeURIComponent(id)}`),
   providerWorkspace: (id: string, workspaceId: string, name: string) =>
     post<{ ok: boolean; error?: string; status?: ProviderStatus }>("/providers/workspace", { id, workspaceId, name }),
   /* Jira's own door, because it needs three fields where the others need one.
      Like `providerConnect` it sends a secret and receives none back. */
-  jiraConnect: (email: string, site: string, token: string) =>
-    post<JiraConnectResult>("/jira/connect", { email, site, token }),
+  jiraConnect: (email: string, site: string, token: string, accountKey?: string) =>
+    post<JiraConnectResult>("/jira/connect", { email, site, token, ...(accountKey ? { accountKey } : null) }),
   jiraStatus: () => get<JiraStatus>("/jira/status"),
   jiraWrites: (on: boolean) => post<{ ok: boolean; error?: string; writes?: boolean }>("/jira/writes", { on }),
   jiraWriteKind: (kind: "move" | "comment" | "link" | "assign", on: boolean) => post<{ ok: boolean; error?: string; writeKinds?: Record<"move" | "comment" | "link" | "assign", boolean> }>("/jira/write-kinds", { kind, on }),
   /** The pull requests that name a Jira card, by its key. Same answer as `clickupPrs`. */
-  jiraPrs: (key: string, root = "") =>
-    get<{ ok: boolean; prs: CardPr[]; error?: string }>(`/jira/prs?${new URLSearchParams({ key, root })}`),
+  jiraPrs: (key: string, root = "", repo?: string) =>
+    get<{ ok: boolean; prs: CardPr[]; error?: string }>(withRepo(`/jira/prs?${new URLSearchParams({ key, root })}`, repo)),
   /** The pull requests a card is linked to on the Jira site: one request, read when the card is opened. */
-  jiraLinks: (key: string) =>
-    get<{ ok: boolean; links: { url: string; number: number; title: string; resolved: boolean }[]; web?: CardWebLink[]; error?: string }>(`/jira/links?${new URLSearchParams({ key })}`),
+  jiraLinks: (key: string, repo?: string) =>
+    get<{ ok: boolean; links: { url: string; number: number; title: string; resolved: boolean }[]; web?: CardWebLink[]; error?: string }>(withRepo(`/jira/links?${new URLSearchParams({ key })}`, repo)),
   /** What the site's development tool holds for a card, by its numeric id: `dev` is null when there is nothing to show. */
-  jiraDev: (id: string) => get<{ ok: boolean; dev: CardDev | null }>(`/jira/dev?${new URLSearchParams({ id })}`),
+  jiraDev: (id: string, repo?: string) => get<{ ok: boolean; dev: CardDev | null }>(withRepo(`/jira/dev?${new URLSearchParams({ id })}`, repo)),
   /** Put a pull request on a card as a remote link. Refused by the server unless Jira writes are switched on. */
-  jiraLink: (key: string, url: string, title = "") =>
-    post<{ ok: boolean; linked?: boolean; url?: string; error?: string }>("/jira/link", { key, url, title }),
+  jiraLink: (key: string, url: string, title = "", repo?: string) =>
+    post<{ ok: boolean; linked?: boolean; url?: string; error?: string }>(withRepo("/jira/link", repo), { key, url, title }),
   /** Every pull request that names a card of one project, from ONE search: card key to its pull requests. */
-  jiraProjectPrs: (project: string, root = "") =>
-    get<{ ok: boolean; byCard: Record<string, CardPr[]>; truncated?: boolean; error?: string }>(`/jira/prs?${new URLSearchParams({ project, root })}`),
+  jiraProjectPrs: (project: string, root = "", repo?: string) =>
+    get<{ ok: boolean; byCard: Record<string, CardPr[]>; truncated?: boolean; error?: string }>(withRepo(`/jira/prs?${new URLSearchParams({ project, root })}`, repo)),
   /** Which tracker each repository's cards live in, keyed by lower-case `owner/name`. Absent is auto. */
   trackerProjects: (withRepos = false) =>
-    get<{ ok: boolean; projects?: Record<string, Exclude<TrackerChoice, "auto">>; repos?: string[] }>(`/tracker/projects${withRepos ? "?repos=1" : ""}`),
+    get<{ ok: boolean; projects?: Record<string, Exclude<TrackerChoice, "auto">>; clickupWrites?: Record<string, true>; repos?: string[] }>(`/tracker/projects${withRepos ? "?repos=1" : ""}`),
   setTrackerProject: (repo: string, tracker: TrackerChoice) =>
     post<{ ok: boolean; error?: string; projects?: Record<string, Exclude<TrackerChoice, "auto">> }>("/tracker/projects", { repo, tracker }),
+  /** The repository's ClickUp-writes switch: the fallback tracker is read-only
+   *  until this is turned on. */
+  setClickupWrites: (repo: string, on: boolean) =>
+    post<{ ok: boolean; error?: string; writes?: Record<string, true> }>("/tracker/projects", { repo, clickupWrites: on }),
   /** One Jira card by its key or numeric id. */
-  jiraTask: (id: string) => get<{ ok: boolean; error?: string; task?: ProviderTask }>(`/jira/task?id=${encodeURIComponent(id)}`),
+  jiraTask: (id: string, repo?: string) => get<{ ok: boolean; error?: string; task?: ProviderTask }>(withRepo(`/jira/task?id=${encodeURIComponent(id)}`, repo)),
   /** A card from what was typed: `ORBIT-1042`, or a bare number tried against the site's projects. */
-  jiraFind: (q: string, signal?: AbortSignal) => get<{ ok: boolean; error?: string; task?: ProviderTask; asked?: string }>(`/jira/find?q=${encodeURIComponent(q)}`, signal),
+  jiraFind: (q: string, signal?: AbortSignal, repo?: string) => get<{ ok: boolean; error?: string; task?: ProviderTask; asked?: string }>(`/jira/find?${new URLSearchParams({ q, ...(repo ? { repo } : null) })}`, signal),
   /** What is assigned to you and not done. `truncated` when the page cap cut it short. */
-  jiraSearch: (q: string, signal?: AbortSignal) => get<{ ok: boolean; error?: string; tasks?: ProviderTask[]; truncated?: boolean; throttled?: boolean }>(`/jira/search?q=${encodeURIComponent(q)}`, signal),
+  jiraJql: (q: string, signal?: AbortSignal, full?: boolean, view?: { id: string; quick?: readonly string[]; cross?: boolean }, narrow?: readonly string[], fresh?: boolean) => get<{ ok: boolean; error?: string; tasks?: ProviderTask[]; truncated?: boolean; matching?: number; throttled?: boolean }>(`/jira/jql?q=${encodeURIComponent(q)}${full ? "&full=1" : ""}${fresh ? "&fresh=1" : ""}${narrow?.length ? `&narrow=${narrow.join(",")}` : ""}${view ? `&view=${encodeURIComponent(view.id)}${view.quick?.length ? `&filters=${encodeURIComponent(view.quick.join(","))}` : ""}${view.cross ? "&cross=1" : ""}` : ""}`, signal),
+  jiraViewCount: (id: string, signal?: AbortSignal) => get<{ ok: boolean; error?: string; count?: number; more?: boolean }>(`/jira/view-count?id=${encodeURIComponent(id)}`, signal),
+  jiraJqlCount: (q: string, signal?: AbortSignal) => get<{ ok: boolean; error?: string; count?: number }>(`/jira/jql-count?q=${encodeURIComponent(q)}`, signal),
+  jiraFilter: (id: string) => get<{ ok: boolean; error?: string; filter?: { id: string; name: string; jql: string } }>(`/jira/filter?id=${encodeURIComponent(id)}`),
+  jiraWriteFilter: (id: string, jql: string) => post<{ ok: boolean; error?: string; filter?: { id: string; name: string; jql: string } }>("/jira/filter", { id, jql }),
+  jiraUser: (accountId: string, signal?: AbortSignal, repo?: string) => get<{ ok: boolean; error?: string; name?: string }>(withRepo(`/jira/user?accountId=${encodeURIComponent(accountId)}`, repo), signal),
+  jiraSearch: (q: string, signal?: AbortSignal, repo?: string) => get<{ ok: boolean; error?: string; tasks?: ProviderTask[]; truncated?: boolean; throttled?: boolean }>(withRepo(`/jira/search?q=${encodeURIComponent(q)}`, repo), signal),
   /** The moves a Jira card has from where it is. An empty list carries `cannot`, the sentence for it. */
-  jiraTransitions: (key: string) =>
-    get<{ ok: boolean; error?: string; throttled?: boolean } & Partial<JiraMoves>>(`/jira/transitions?key=${encodeURIComponent(key)}`),
+  jiraTransitions: (key: string, repo?: string) =>
+    get<{ ok: boolean; error?: string; throttled?: boolean } & Partial<JiraMoves>>(`/jira/transitions?${new URLSearchParams({ key, ...(repo ? { repo } : null) })}`),
   /** One move, with the `updated` the person saw; the server refuses it as a conflict if the card has moved since. */
-  jiraTransition: (key: string, transitionId: string, updated: number, fields?: Record<string, string | string[]>) =>
-    post<ClickUpWrite>("/jira/transition", { key, transitionId, updated, ...(fields ? { fields } : null) }),
+  jiraTransition: (key: string, transitionId: string, updated: number, fields?: Record<string, string | string[]>, repo?: string) =>
+    post<ClickUpWrite>(`/jira/transition${repoQuery(repo)}`, { key, transitionId, updated, ...(fields ? { fields } : null) }),
   /** Who the card can be given to, by what was typed. A short answer is not "that is everybody": Jira scans part of its directory. */
-  jiraAssignable: (key: string, q: string, transition = "") =>
-    get<{ ok: boolean; error?: string; throttled?: boolean; people?: JiraPerson[] }>(`/jira/assignable?${new URLSearchParams({ key, q, ...(transition ? { transition } : {}) })}`),
+  jiraAssignable: (key: string, q: string, transition = "", repo?: string) =>
+    get<{ ok: boolean; error?: string; throttled?: boolean; people?: JiraPerson[] }>(`/jira/assignable?${new URLSearchParams({ key, q, ...(transition ? { transition } : {}), ...(repo ? { repo } : {}) })}`),
+  /** Everybody assignable to the project, not just those on a loaded card. Asked once per project and kept by the server. */
+  jiraMembers: (project: string, repo?: string) =>
+    get<{ ok: boolean; error?: string; throttled?: boolean; people?: JiraPerson[] }>(`/jira/members?${new URLSearchParams({ project, ...(repo ? { repo } : {}) })}`),
   /** Give the card to `to` (a person's `key`), or to nobody with null. */
-  jiraSetAssignee: (key: string, to: string | null, updated: number) =>
-    post<JiraWrite>("/jira/assignee", { key, to, updated }),
+  jiraSetAssignee: (key: string, to: string | null, updated: number, repo?: string) =>
+    post<JiraWrite>(`/jira/assignee${repoQuery(repo)}`, { key, to, updated }),
   /** The hand-off, in one request; `to`/`clear` absent is the project's setting. */
-  jiraHandOff: (key: string, updated: number, choice: { to?: string; clear?: boolean } = {}) =>
-    post<JiraWrite>("/jira/handoff", { key, updated, ...choice }),
+  jiraHandOff: (key: string, updated: number, choice: { to?: string; clear?: boolean } = {}, repo?: string) =>
+    post<JiraWrite>(withRepo("/jira/handoff", repo), { key, updated, ...choice }),
   jiraSettings: () => get<{ ok: boolean } & JiraSettings>("/jira/settings"),
   /** One project's hand-off, or null to drop it. */
   setJiraHandoff: (project: string, rule: JiraHandoffRule | null) =>
@@ -1487,9 +1681,14 @@ const realApi = {
   /** The steps in effect, global to the site and by status name; `overrides` are projects whose older hand-off rule still wins. */
   jiraSteps: () => get<{ ok: boolean; error?: string } & Partial<JiraStepsRead>>("/jira/steps"),
   setJiraSteps: (steps: Partial<Record<keyof JiraSteps, Partial<JiraStep>>>) => post<{ ok: boolean; error?: string } & Partial<JiraStepsRead>>("/jira/steps", { steps }),
+  /** The GitHub-login → Jira-account pairs this machine learned, and the two ways it changes. */
+  jiraPairs: () => get<{ ok: boolean; error?: string; pairs?: JiraPair[] }>("/jira/pairs"),
+  jiraLearnPairs: (pairs: { login: string; accountId: string; name: string; email?: string }[]) =>
+    post<{ ok: boolean; error?: string; pairs?: JiraPair[] }>("/jira/pairs", { pairs }),
+  jiraForgetPair: (login: string) => post<{ ok: boolean; error?: string; pairs?: JiraPair[] }>("/jira/pairs/forget", { login }),
   /** Run one step on a card, as one request. Behind the write switch. */
-  jiraRunStep: (key: string, updated: number, trigger: JiraStepKey, choice: JiraStepChoice = {}, pr?: JiraStepPr) =>
-    post<JiraWrite>("/jira/step", { key, updated, trigger, choice, ...(pr ? { pr } : null) }),
+  jiraRunStep: (key: string, updated: number, trigger: JiraStepKey, choice: JiraStepChoice = {}, pr?: JiraStepPr, repo?: string) =>
+    post<JiraWrite>(`/jira/step${repoQuery(repo)}`, { key, updated, trigger, choice, ...(pr ? { pr } : null) }),
   /** The projects the workflow map is drawn from, with their statuses; `fresh` goes past the server's held answer. */
   jiraStatusUnits: (fresh = false) =>
     get<{ ok: boolean; error?: string; throttled?: boolean; counted?: string[] } & Partial<JiraUnits>>(`/jira/status-units${fresh ? "?fresh=1" : ""}`),
@@ -1505,6 +1704,11 @@ const realApi = {
   jiraSpaceTree: (space: string, o: { fresh?: boolean; showDone?: boolean } = {}) =>
     get<JiraSpaceTreeOut>(`/jira/space-tree?space=${encodeURIComponent(space)}${o.fresh ? "&fresh=1" : ""}${o.showDone ? "&showDone=1" : ""}`),
   jiraEpicCards: (epic: string) => get<JiraEpicCardsOut>(`/jira/epic-cards?epic=${encodeURIComponent(epic)}`),
+  /** A space's own "Column order from board" pick: `boardId` undefined (or "") goes back to Automatic. */
+  jiraSetSpaceColumnBoard: (key: string, boardId: string | undefined) =>
+    post<JiraSpacesOut | { ok: false; error: string }>("/jira/spaces/column-board", { key, boardId: boardId ?? "" }),
+  /** A project's own boards, for the picker. Ten minutes held server side; does not add the project anywhere. */
+  jiraProjectBoards: (key: string) => get<{ ok: boolean; error?: string; boards?: JiraProjectBoard[] }>(`/jira/project-boards?key=${encodeURIComponent(key)}`),
   /** The saved Jira views and folders: local, no request to Jira. */
   jiraViews: () => get<JiraViews>("/jira/views"),
   /** One saved view's cards. `cached` answers from disk only; `force` skips the server's held answer. */
@@ -1515,7 +1719,17 @@ const realApi = {
   /** Put a card before or after another on its board; nothing is read back. */
   /** The cards under the board's epics, one read kept ten minutes (server/src/jiraboards.ts `readBoardAreas`). */
   jiraBoardAreas: (id: string) => get<JiraBoardAreas>(`/jira/board-areas?id=${encodeURIComponent(id)}`),
-  jiraRank: (key: string, ask: { before?: string; after?: string }) => post<ClickUpWrite>("/jira/rank", { key, ...ask }),
+  jiraRank: (key: string, ask: { before?: string; after?: string }, repo?: string) => post<ClickUpWrite>(withRepo("/jira/rank", repo), { key, ...ask }),
+  /** Put cards in a sprint (Jira Software agile API); behind the Jira write switch. */
+  jiraSprintMove: (sprint: string, keys: string[], repo?: string) => post<ClickUpWrite>(withRepo("/jira/sprint-move", repo), { sprint, keys }),
+  jiraClone: (key: string, repo?: string) => post<ClickUpWrite & { created?: string }>(withRepo("/jira/clone", repo), { key }),
+  jiraBacklogMove: (keys: string[], repo?: string) => post<ClickUpWrite>(withRepo("/jira/backlog-move", repo), { keys }),
+  /** One change to several cards; person-only on the server. The answer says what happened to each card. */
+  jiraBulk: (keys: string[], change: { kind: string; value?: unknown; add?: string[]; remove?: string[] }, repo?: string) =>
+    post<{ ok: boolean; error?: string; results: Array<{ key: string; ok: boolean; error?: string }> }>(withRepo("/jira/bulk", repo), { keys, change }),
+  /** What a bulk change offers on a board: the active and future sprints, and the site priorities. */
+  jiraBulkOptions: (board: string, repo?: string) =>
+    get<{ ok: boolean; error?: string; active: { id: string; name: string } | null; future: Array<{ id: string; name: string }>; next: string; priorities: Array<{ id: string; name: string }> }>(withRepo(`/jira/bulk/sprints?board=${encodeURIComponent(board)}`, repo)),
   /** Boards and favourite filters the add-a-view list offers. */
   jiraViewChoices: (q = "") =>
     get<{ ok: boolean; error?: string; boards: JiraViewChoice[]; filters: JiraViewChoice[]; truncated?: boolean }>(`/jira/view-choices?q=${encodeURIComponent(q)}`),
@@ -1523,67 +1737,89 @@ const realApi = {
   jiraAddView: (input: { url: string } | { kind: "board" | "filter"; id: string }) =>
     post<{ ok: boolean; error?: string; view?: SavedView; alternatives?: JiraAddChoice[] }>("/jira/views/add", input),
   jiraRemoveView: (id: string) => post<{ ok: boolean; error?: string }>("/jira/views/remove", { id }),
+  /** The person's favourite filters on the site (read only). */
+  jiraFavourites: (signal?: AbortSignal) => get<{ ok: boolean; filters?: { id: string; name: string; jql: string }[]; error?: string }>("/jira/favourites", signal),
+  /** Rename, share with the team, or change the search of a saved query. Local only: nothing is written to Jira. */
+  jiraEditView: (id: string, patch: { name?: string; team?: boolean; tab?: boolean; jql?: string }) =>
+    post<{ ok: boolean; error?: string; view?: SavedView }>("/jira/views/edit", { id, ...patch }),
+  jiraDuplicateView: (id: string) => post<{ ok: boolean; error?: string; view?: SavedView }>("/jira/views/duplicate", { id }),
+  /** Keep a search as a local saved query, named if a name is given. */
+  jiraSaveJql: (jql: string, name?: string) => post<{ ok: boolean; error?: string; view?: SavedView }>("/jira/views/save-jql", { jql, ...(name ? { name } : null) }),
   jiraAddFolder: (key: string) => post<{ ok: boolean; error?: string; folder?: SavedFolder }>("/jira/folders/add", { key }),
   jiraRemoveFolder: (id: string) => post<{ ok: boolean }>("/jira/folders/remove", { id }),
   /** A Jira card with its description and comments as Markdown; `more` is how many comments the read left out. */
-  jiraDetail: (key: string) =>
-    get<{ ok: boolean; error?: string; throttled?: boolean; detail?: TaskDetail; more?: number }>(`/jira/detail?key=${encodeURIComponent(key)}`),
+  jiraDetail: (key: string, repo?: string, signal?: AbortSignal) =>
+    get<{ ok: boolean; error?: string; throttled?: boolean; detail?: TaskDetail; more?: number }>(withRepo(`/jira/detail?key=${encodeURIComponent(key)}`, repo), signal),
+  /** A parent's sub-tasks as the board's own rows: one search per opened parent (server/src/jira.ts `childCards`). */
+  jiraChildCards: (key: string, repo?: string) =>
+    get<{ ok: boolean; error?: string; throttled?: boolean; tasks?: ProviderTask[]; truncated?: boolean }>(withRepo(`/jira/child-cards?key=${encodeURIComponent(key)}`, repo)),
   /** One page of what happened on a card: its history, the rest of its work log, or the comments the card read left out. `next` is where the following page starts. */
-  jiraActivity: (key: string, kind: "history" | "worklog" | "comments", startAt = 0) =>
-    get<{ ok: boolean; error?: string; throttled?: boolean; events?: CardEvent[]; comments?: TaskDetail["comments"]; total?: number; next?: number }>(`/jira/activity?${new URLSearchParams({ key, kind, startAt: String(startAt) })}`),
+  jiraActivity: (key: string, kind: "history" | "worklog" | "comments", startAt = 0, repo?: string) =>
+    get<{ ok: boolean; error?: string; throttled?: boolean; events?: CardEvent[]; comments?: TaskDetail["comments"]; total?: number; next?: number }>(withRepo(`/jira/activity?${new URLSearchParams({ key, kind, startAt: String(startAt) })}`, repo)),
   /** Who a comment on this card may mention, for what was typed after `@`. `key` is the id a mention carries. */
-  jiraPeople: (key: string, q: string) =>
-    get<{ ok: boolean; error?: string; throttled?: boolean; people?: { key: string; name: string; initials: string; avatar?: string }[] }>(`/jira/people?${new URLSearchParams({ key, q })}`),
+  jiraPeople: (key: string, q: string, repo?: string) =>
+    get<{ ok: boolean; error?: string; throttled?: boolean; people?: { key: string; name: string; initials: string; avatar?: string }[] }>(withRepo(`/jira/people?${new URLSearchParams({ key, q })}`, repo)),
   /** One comment, Markdown; `mentions` are the people named in it, by the id `jiraPeople` gave. */
-  jiraComment: (key: string, text: string, mentions: { id: string; name: string }[] = [], replyTo?: string) =>
-    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string }>("/jira/comment", { key, text, mentions, ...(replyTo ? { replyTo } : {}) }),
+  jiraComment: (key: string, text: string, mentions: { id: string; name: string }[] = [], replyTo?: string, repo?: string) =>
+    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string }>(withRepo("/jira/comment", repo), { key, text, mentions, ...(replyTo ? { replyTo } : {}) }),
   /** Your own comment, changed (the answer is the comment as it now stands) or deleted. The card's stamp moved with either: read the card again. */
-  jiraCommentEdit: (key: string, id: string, text: string, mentions: { id: string; name: string }[] = []) =>
-    post<ClickUpWrite & { comment?: TaskDetail["comments"][number]; partial?: string }>("/jira/comment/edit", { key, id, text, mentions }),
-  jiraCommentDelete: (key: string, id: string) =>
-    post<ClickUpWrite & { removed?: boolean }>("/jira/comment/delete", { key, id }),
+  jiraCommentEdit: (key: string, id: string, text: string, mentions: { id: string; name: string }[] = [], repo?: string) =>
+    post<ClickUpWrite & { comment?: TaskDetail["comments"][number]; partial?: string }>(withRepo("/jira/comment/edit", repo), { key, id, text, mentions }),
+  jiraCommentDelete: (key: string, id: string, repo?: string) =>
+    post<ClickUpWrite & { removed?: boolean }>(withRepo("/jira/comment/delete", repo), { key, id }),
   /** One field of a card's Details. `updated` is the stamp the person saw; the answer is the card, its Details and what it still lets them change. */
-  jiraEdit: (key: string, ask: JiraEditAsk, updated: number) =>
-    post<ClickUpWrite & { facts?: CardFact[]; edit?: CardEdit; /** Set when the description was the field: it as it now stands, in Markdown. */ description?: string }>("/jira/edit", { key, ...ask, updated }),
+  jiraEdit: (key: string, ask: JiraEditAsk, updated: number, repo?: string) =>
+    post<ClickUpWrite & { facts?: CardFact[]; edit?: CardEdit; /** Set when the description was the field: it as it now stands, in Markdown. */ description?: string }>(withRepo("/jira/edit", repo), { key, ...ask, updated }),
   /** What a card is joined to (server/src/jiraRelate.ts). The answer of a sub-task or a link is the card again; of an address, the card's whole list of them. */
-  jiraLinkTypes: () => get<{ ok: boolean; error?: string; throttled?: boolean; kinds?: JiraLinkKind[] }>("/jira/link-types"),
-  jiraSubtask: (key: string, title: string) =>
-    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string; created?: string }>("/jira/subtask", { key, title }),
-  jiraRelate: (key: string, other: string, typeId: string, outward: boolean) =>
-    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string; already?: boolean }>("/jira/relate", { key, other, typeId, outward }),
-  jiraUnrelate: (key: string, id: string) =>
-    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string }>("/jira/relate/remove", { key, id }),
-  jiraWebLink: (key: string, url: string, title: string) =>
-    post<ClickUpWrite & { web?: CardWebLink[]; already?: boolean }>("/jira/weblink", { key, url, title }),
-  jiraWebUnlink: (key: string, id: string) =>
-    post<ClickUpWrite & { web?: CardWebLink[] }>("/jira/weblink/remove", { key, id }),
+  jiraLinkTypes: (repo?: string) => get<{ ok: boolean; error?: string; throttled?: boolean; kinds?: JiraLinkKind[] }>(withRepo("/jira/link-types", repo)),
+  jiraSubtask: (key: string, title: string, repo?: string) =>
+    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string; created?: string }>(withRepo("/jira/subtask", repo), { key, title }),
+  jiraRelate: (key: string, other: string, typeId: string, outward: boolean, repo?: string) =>
+    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string; already?: boolean }>(withRepo("/jira/relate", repo), { key, other, typeId, outward }),
+  jiraUnrelate: (key: string, id: string, repo?: string) =>
+    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string }>(withRepo("/jira/relate/remove", repo), { key, id }),
+  jiraWebLink: (key: string, url: string, title: string, repo?: string) =>
+    post<ClickUpWrite & { web?: CardWebLink[]; already?: boolean }>(withRepo("/jira/weblink", repo), { key, url, title }),
+  jiraWebUnlink: (key: string, id: string, repo?: string) =>
+    post<ClickUpWrite & { web?: CardWebLink[] }>(withRepo("/jira/weblink/remove", repo), { key, id }),
   /**
    * Time logged on a card (server/src/jiraWorklog.ts). `updated` is the stamp the person saw; the answer is the card again, with the
    * remaining estimate before and after the write and, for an add, the id of the entry made.
    */
-  jiraWorklog: (key: string, send: WorkSend, updated: number) =>
-    post<JiraWorkWrite>("/jira/worklog", { key, ...send, updated }),
-  jiraWorklogEdit: (key: string, id: string, send: WorkSend, updated: number) =>
-    post<JiraWorkWrite>("/jira/worklog/edit", { key, id, ...send, updated }),
-  jiraWorklogDelete: (key: string, id: string, send: Pick<WorkSend, "adjust">, updated: number) =>
-    post<JiraWorkWrite>("/jira/worklog/delete", { key, id, ...send, updated }),
+  jiraWorklog: (key: string, send: WorkSend, updated: number, repo?: string) =>
+    post<JiraWorkWrite>(withRepo("/jira/worklog", repo), { key, ...send, updated }),
+  jiraWorklogEdit: (key: string, id: string, send: WorkSend, updated: number, repo?: string) =>
+    post<JiraWorkWrite>(withRepo("/jira/worklog/edit", repo), { key, id, ...send, updated }),
+  jiraWorklogDelete: (key: string, id: string, send: Pick<WorkSend, "adjust">, updated: number, repo?: string) =>
+    post<JiraWorkWrite>(withRepo("/jira/worklog/delete", repo), { key, id, ...send, updated }),
   /** The connected account's own mark on a card: `on` puts it on or takes it off, one request and no stamp (server/src/jiraFollow.ts). */
-  jiraWatch: (key: string, on: boolean) => post<JiraFollowWrite>("/jira/watch", { key, on }),
-  jiraVote: (key: string, on: boolean) => post<JiraFollowWrite>("/jira/vote", { key, on }),
+  jiraWatch: (key: string, on: boolean, repo?: string) => post<JiraFollowWrite>(withRepo("/jira/watch", repo), { key, on }),
+  jiraVote: (key: string, on: boolean, repo?: string) => post<JiraFollowWrite>(withRepo("/jira/vote", repo), { key, on }),
   /** One file onto a card: a multipart form, the file under `file`. The answer is the card again. */
-  jiraAttach: async (key: string, file: File) => {
+  jiraAttach: async (key: string, file: File, repo?: string) => {
     await whenServerUp();
     const form = new FormData();
     form.append("key", key);
     form.append("file", file, file.name);
     // No content type: the boundary in it is the browser's to write.
-    const r = await fetch(SERVER + "/jira/attach", { method: "POST", headers: authHeaders(), body: form });
+    const r = await fetch(SERVER + withRepo("/jira/attach", repo), { method: "POST", headers: authHeaders(), body: form });
     return (await r.json()) as ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string; added?: string };
   },
-  jiraUnattach: (key: string, id: string) =>
-    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string }>("/jira/attach/remove", { key, id }),
+  jiraUnattach: (key: string, id: string, repo?: string) =>
+    post<ClickUpWrite & { detail?: TaskDetail; more?: number; partial?: string }>(withRepo("/jira/attach/remove", repo), { key, id }),
   /** Labels the site knows that start with what was typed. */
-  jiraLabels: (q: string) => get<{ ok: boolean; error?: string; throttled?: boolean; labels?: string[] }>(`/jira/labels?q=${encodeURIComponent(q)}`),
+  jiraLabels: (q: string, repo?: string) => get<{ ok: boolean; error?: string; throttled?: boolean; labels?: string[] }>(withRepo(`/jira/labels?q=${encodeURIComponent(q)}`, repo)),
+  /** The site's custom fields, by name, for a step's "Set a field" block. */
+  jiraFields: () => get<{ ok: boolean; error?: string; unauthorised?: boolean; fields?: { name: string; type: string }[] }>("/jira/fields"),
+  /** The JQL box's vocabulary: every field (its operators and types) and every function. Kept ten minutes server side. */
+  jiraJqlAutocomplete: () => get<{
+    ok: boolean; error?: string;
+    fields?: { value: string; displayName: string; operators: string[]; types: string[] }[];
+    functions?: { value: string; displayName: string; isList: boolean; types: string[] }[];
+  }>("/jira/jql-autocomplete"),
+  /** One field's values, or people, as typed - already the quoted text (an accountId for a user field) JQL wants inserted. */
+  jiraJqlSuggest: (field: string, value: string, signal?: AbortSignal) =>
+    get<{ ok: boolean; error?: string; results?: { value: string; display: string }[] }>(`/jira/jql-suggest?${new URLSearchParams({ field, value })}`, signal),
   providerTasks: (force = false) =>
     get<ProviderTasksResponse>(`/tasks/provider${force ? "?force=1" : ""}`),
 
@@ -1603,6 +1839,10 @@ const realApi = {
   /** Who is working on what: what each agent said, joined with the panes,
    *  worktrees and deputy runs this app already reads. */
   agentBoard: () => get<{ ok: boolean; agents?: import("../components/LanternView.tsx").LanternRow[]; chairs?: import("../components/LanternView.tsx").LanternChair[]; watch?: import("../components/LanternView.tsx").LanternWatch; cacheTtlMinutes?: number }>("/agents/board"),
+  /** What one project has spent today, from the stored events and the rollup:
+   *  the same answer before and after a restart, unlike the board's rows. */
+  spendToday: (root: string) =>
+    get<{ ok: boolean; day?: string; usd?: number }>(`/spend/today${root ? `?root=${encodeURIComponent(root)}` : ""}`),
   /** Take a status line off the board, whoever posted it — a person's call,
    *  which is why it is not the tokenless `done` an agent sends for itself. */
   agentForget: (name: string) => post<{ ok: boolean; cleared?: boolean; error?: string }>("/agents/forget", { name }),
@@ -1616,6 +1856,9 @@ const realApi = {
   seatClose: (root: string) => post<{ ok: boolean; was?: boolean }>("/seat/close", { root }),
   /** Stand the chair down and seat the engine the policy names. Refused until the hand-off is written. */
   seatChange: (root: string) => post<{ ok: boolean; error?: string }>("/seat/change", { root }),
+  /** The server's own answer for one command: the same check a worker's tool call meets. No worker named = a new worker at this project's default level. */
+  seatCan: (root: string, command: string, worker = "") =>
+    post<{ ok: boolean; error?: string; answer?: string; layer?: string; rule?: string; text?: string }>("/seat/can", { root, command, worker }),
   seatSettingsSave: (root: string, f: { powers?: string; model?: string }) =>
     post<{ ok: boolean; error?: string }>("/seat/settings", { root, ...f }),
   seatDoctrineSave: (root: string, text: string) =>
@@ -1691,19 +1934,26 @@ const realApi = {
       "/orchestration", { root, policy }, deskHeader()),
   /** The flow in force for a project: the one it saved, or the template. */
   getFlow: (root: string) =>
-    get<{ ok: boolean; error?: string; scope: "project" | "template"; root: string; flow: Flow }>(`/flow?root=${encodeURIComponent(root)}`),
-  /** Store a whole flow. The person's own window only; an agent is refused. */
+    get<{ ok: boolean; error?: string; scope: "project" | "template"; root: string; flow: Flow; undo: { who: string; at: number } | null }>(`/flow?root=${encodeURIComponent(root)}`),
+  /** The closed sets a flow edit is checked against, from the server that validates it. */
+  flowOptions: (root: string) =>
+    get<{ ok: boolean; error?: string; icons?: string[]; hues?: string[]; policyRoles?: string[]; stages?: { id: string; label: string }[] }>(`/flow/options?root=${encodeURIComponent(root)}`),
+  /** Store a whole flow. The person's own window, or the project's seat when `flow.agentEdit` is on. */
   putFlow: (root: string, flow: Flow) =>
-    put<{ ok: boolean; error?: string; scope?: "project" | "template"; root?: string; flow?: Flow }>(`/flow?root=${encodeURIComponent(root)}`, flow, deskHeader()),
+    put<{ ok: boolean; error?: string; scope?: "project" | "template"; root?: string; flow?: Flow; undo?: { who: string; at: number } | null }>(`/flow?root=${encodeURIComponent(root)}`, flow, deskHeader()),
   /** Remove a saved flow, so the project falls back to the template. */
   deleteFlow: (root: string) =>
-    del<{ ok: boolean; error?: string; scope?: "project" | "template"; root?: string; flow?: Flow }>(`/flow?root=${encodeURIComponent(root)}`, deskHeader()),
+    del<{ ok: boolean; error?: string; scope?: "project" | "template"; root?: string; flow?: Flow; undo?: { who: string; at: number } | null }>(`/flow?root=${encodeURIComponent(root)}`, deskHeader()),
+  /** Put back the flow from before the last write. The person's own window only. */
+  undoFlow: (root: string) =>
+    post<{ ok: boolean; error?: string; scope?: "project" | "template"; root?: string; flow?: Flow; undo?: { who: string; at: number } | null; undone?: string }>(`/flow/undo?root=${encodeURIComponent(root)}`, {}, deskHeader()),
   /** Polaris: the settings in force for a project (or the global ones) and the layer each door came from. */
   polarisSettings: (root?: string) => get<SettingsAnswer | { ok: false; error: string }>(`/polaris/settings${root ? `?root=${encodeURIComponent(root)}` : ""}`),
   /** Choose a preset, flip the switch, or store a whole layer. The person's own window only. */
   polarisSettingsSave: (change: SettingsChange, root?: string) =>
     put<SettingsAnswer | { ok: false; error: string }>("/polaris/settings", { ...change, ...(root ? { root } : {}) }, deskHeader()),
   /** A verdict for each open pull request of a project; reading only. */
+  polarisGithub: (root: string) => get<GithubAnswer | { ok: false; error: string }>(`/polaris/github?root=${encodeURIComponent(root)}`),
   polarisItems: (root: string) => get<ItemsAnswer | { ok: false; error: string }>(`/polaris/items?root=${encodeURIComponent(root)}`),
   /** A click on one pull request: write a beacon, dock it, ignore it, or propose a course or cleanup. */
   polarisAct: (root: string, number: number, body: ActionBody) =>
@@ -1751,8 +2001,8 @@ const realApi = {
   /** Replace the whole list; a refusal comes back as `error`, with nothing saved. */
   prSetViews: (repo: string, views: PrView[]) =>
     post<{ ok: boolean; views?: PrView[]; error?: string }>(`/prs/views?repo=${encodeURIComponent(repo)}`, { views }),
-  clickupView: (id?: string, force = false) =>
-    get<ViewTasksResponse>(`/clickup/view?${new URLSearchParams({ ...(id ? { id } : {}), ...(force ? { force: "1" } : {}) })}`),
+  clickupView: (id?: string, force = false, signal?: AbortSignal) =>
+    get<ViewTasksResponse>(`/clickup/view?${new URLSearchParams({ ...(id ? { id } : {}), ...(force ? { force: "1" } : {}) })}`, signal),
   clickupAddView: (url: string) =>
     post<{ ok: boolean; error?: string; view?: SavedView }>("/clickup/views/add", { url }),
   clickupRemoveView: (id: string) => post<{ ok: boolean }>("/clickup/views/remove", { id }),
@@ -1787,9 +2037,9 @@ const realApi = {
     post<{ ok: boolean; error?: string; view?: SavedView }>("/clickup/views/replace", { id, url }),
   /** One list's own statuses and fields, for a card that came from somewhere
    *  other than the board on screen. */
-  clickupList: (id: string) =>
-    get<{ ok: boolean; error?: string; name?: string; statuses?: ListStatus[]; fields?: ListField[]; place?: ListPlace }>(
-      `/clickup/list?id=${encodeURIComponent(id)}`),
+  clickupList: (id: string, repo?: string): Promise<ClickupListAnswer> =>
+    // Not a ClickUp list id (another tracker's task carries its own in the same field): answered here, nothing sent.
+    clickupListIdShape(id) ? clickupListAsk(repo ? `${repo}\n${id}` : id) : Promise.resolve({ ok: false, error: "That card's list is not a ClickUp list" }),
   /** Who can be put on a card, from the list it lives in. */
   clickupMembers: (list: string, workspace = false) =>
     get<{ ok: boolean; error?: string; members?: ListMember[] }>(workspace ? "/clickup/members?workspace=1" : `/clickup/members?list=${encodeURIComponent(list)}`),
@@ -1798,9 +2048,10 @@ const realApi = {
       `/clickup/prs?${new URLSearchParams({ card, field, root, task })}`),
   /** Ask the server to read the search's expensive half now. Fire and forget:
    *  it answers at once and does the work behind the answer. */
-  clickupWarm: () => get<{ ok: boolean }>("/clickup/warm").catch(() => ({ ok: false })),
-  clickupFind: (q: string) =>
-    get<{ ok: boolean; error?: string; task?: ProviderTask; asked?: string }>(`/clickup/find?q=${encodeURIComponent(q)}`),
+  clickupWarm: (root = "") => get<{ ok: boolean }>(`/clickup/warm${root ? `?${new URLSearchParams({ root })}` : ""}`).catch(() => ({ ok: false })),
+  /** `repo` names the repository the card is asked for, so the account that repo chose answers. */
+  clickupFind: (q: string, repo?: string) =>
+    get<{ ok: boolean; error?: string; task?: ProviderTask; asked?: string }>(`/clickup/find?${new URLSearchParams({ q, ...(repo ? { repo } : null) })}`),
   /** Merge the base into the pull request's branch in a worktree of its own, so
    *  the conflict exists somewhere it can be resolved. Writes — see the route. */
   prConflict: (root: string, number: number) =>
@@ -1936,13 +2187,13 @@ const realApi = {
   clickupSearch: (q: string, force = false, signal?: AbortSignal) =>
     get<{ ok: boolean; tasks?: ProviderTask[]; scanned?: number; at?: number; error?: string; refs?: number; partial?: boolean; since?: number; capped?: boolean; more?: boolean }>(
       `/clickup/search?q=${encodeURIComponent(q)}${force ? "&force=1" : ""}`, signal),
-  clickupTask: (id: string) =>
-    get<{ ok: boolean; error?: string } & Partial<TaskDetail>>(`/clickup/task?id=${encodeURIComponent(id)}`),
+  clickupTask: (id: string, signal?: AbortSignal) =>
+    get<{ ok: boolean; error?: string } & Partial<TaskDetail>>(`/clickup/task?id=${encodeURIComponent(id)}`, signal),
   /** `user` puts somebody ELSE on the card; without it, you. */
   clickupAssign: (id: string, on: boolean, updated?: number, user?: number) =>
     post<ClickUpWrite>("/clickup/assign", { id, on, updated, ...(user != null ? { user } : null) }),
-  clickupStatus: (id: string, status: string, updated?: number) =>
-    post<ClickUpWrite>("/clickup/status", { id, status, updated }),
+  clickupStatus: (id: string, status: string, updated?: number, repo?: string) =>
+    post<ClickUpWrite>("/clickup/status", { id, status, updated, ...(repo ? { repo } : null) }),
   /**
    * Several changes to one card, as one write.
    *
@@ -1950,8 +2201,8 @@ const realApi = {
    * moves it, and the second and third were refused as "somebody changed this
    * card while you had it open" — by us.
    */
-  clickupCard: (id: string, changes: { add?: number[]; rem?: number[]; status?: string; addMe?: boolean }, updated?: number) =>
-    post<ClickUpWrite>("/clickup/card", { id, updated, ...changes }),
+  clickupCard: (id: string, changes: { add?: number[]; rem?: number[]; status?: string; addMe?: boolean }, updated?: number, repo?: string) =>
+    post<ClickUpWrite>("/clickup/card", { id, updated, ...changes, ...(repo ? { repo } : null) }),
   /** ClickUp's own flag. `null` takes it off, which is a value the picker offers. */
   clickupPriority: (id: string, priority: string | null, updated?: number) =>
     post<ClickUpWrite>("/clickup/priority", { id, priority, updated }),
@@ -2013,6 +2264,8 @@ const realApi = {
   /** These four take the COMMENT's id, not the card's. */
   clickupCommentEdit: (id: string, text: string) =>
     post<ClickUpWrite>("/clickup/comment/edit", { id, text }),
+  clickupCommentReplies: (id: string) =>
+    get<{ ok: true; data: { replies: TaskReply[] } } | { ok: false; error: string }>(`/clickup/comment/replies?id=${encodeURIComponent(id)}`),
   clickupCommentReply: (id: string, text: string) =>
     post<ClickUpWrite>("/clickup/comment/reply", { id, text }),
   clickupCommentResolve: (id: string, on: boolean) =>
@@ -2028,9 +2281,9 @@ const realApi = {
   reminderSnooze: (id: string, minutes: number) => post<{ ok: boolean }>("/tasks/reminder/snooze", { id, minutes }),
 
   // --- github issues ---
-  issuesList: (root: string, state = "open", q = "", assignee = "") =>
+  issuesList: (root: string, state = "open", q = "", assignee = "", signal?: AbortSignal) =>
     get<IssuesReport>(`/issues/list?root=${encodeURIComponent(root)}&state=${state}`
-      + `&q=${encodeURIComponent(q)}&assignee=${encodeURIComponent(assignee)}`),
+      + `&q=${encodeURIComponent(q)}&assignee=${encodeURIComponent(assignee)}`, signal),
   issueDetail: (root: string, number: number) =>
     get<{ ok: boolean; issue?: IssueDetail; error?: string }>(`/issues/detail?root=${encodeURIComponent(root)}&number=${number}`),
   /** The pull requests that close or mention an issue. Its own call rather than
@@ -2038,6 +2291,8 @@ const realApi = {
    *  be on screen before it finishes. */
   issuePrs: (root: string, number: number) =>
     get<IssuePrsReport>(`/issues/prs?root=${encodeURIComponent(root)}&number=${number}`),
+  /** A pasted picture, saved where a pane can be pointed at it: the answer is its path. */
+  terminalImage: (data: string) => post<{ ok: boolean; file?: string; error?: string }>("/terminal/image", { data }),
   /** Hand the server a prompt and get a ticket to open a pane with. The way a
    *  terminal with no tmux starts an agent — see server/src/agentticket.ts. */
   termAgentTicket: (cwd: string, prompt: string, yolo: boolean, title: string, kind?: string) =>
@@ -2086,8 +2341,8 @@ const realApi = {
   flightAnswer: (planId: string, answer: string) => post<{ ok: boolean; error?: string }>(`/flight-plan/plans/${encodeURIComponent(planId)}/answer`, { answer }),
   /** One setting of the settings door at a project; a machine-wide one takes "" and ignores it. */
   settingAt: (id: string, root: string) =>
-    get<{ ok: boolean; value?: unknown; scopedSet?: boolean; error?: string }>(`/settings/door?id=${encodeURIComponent(id)}&root=${encodeURIComponent(root)}`),
-  settingAtGlobal: (id: string) => get<{ ok: boolean; value?: unknown; error?: string }>(`/settings/door?id=${encodeURIComponent(id)}`),
+    get<{ ok: boolean; value?: unknown; scopedSet?: boolean; env?: { name: string; value: string } | null; error?: string }>(`/settings/door?id=${encodeURIComponent(id)}&root=${encodeURIComponent(root)}`),
+  settingAtGlobal: (id: string) => get<{ ok: boolean; value?: unknown; flowRoles?: FlowRoleRow[]; env?: { name: string; value: string } | null; error?: string }>(`/settings/door?id=${encodeURIComponent(id)}`),
   settingAtSet: (id: string, value: unknown, root: string) =>
     post<{ ok: boolean; applied?: boolean; error?: string }>("/settings/door", { id, value, root }),
   /** Everything with a worktree still on disk, so the list can say what is in
@@ -2120,10 +2375,19 @@ const realApi = {
   /** What is eating the disk and what a clean would remove (the `safe` lines).
    *  Read-only and cached; `fresh` may rescan, never faster than every 30 s. */
   machineDiskClean: (fresh = false) => get<DiskCleanReport>(`/machine/disk-clean${fresh ? "?fresh=1" : ""}`),
+  /** The last scan the server kept, or null. Never starts a scan: this is what the panel asks on open. */
+  machineDiskCleanKept: () => get<{ report: DiskCleanReport | null; scanning?: boolean; reading?: string | null; space?: DiskSpace | null }>("/machine/disk-clean?peek=1"),
   /** Remove the safe lines named by `ids` (all of them when omitted). Only a
    *  person's click is accepted; `dryRun` lists what would go and removes nothing.
    *  `at` is the scan on screen: the server refuses if that is not the plan it would clean. */
   machineDiskCleanRun: (ids?: string[], at?: number, dryRun = false) => post<DiskCleanRunResult>("/machine/disk-clean/run", { ids, dryRun, at }),
+  /** Start the report about the kept scan (a background turn; poll the kept scan for it). Writes words only, deletes nothing. */
+  machineDiskExplain: () => post<{ ok: boolean; error?: string }>("/machine/disk-clean/explain", {}),
+  machineDiskExplainCancel: () => post<{ ok: boolean }>("/machine/disk-clean/explain/cancel", {}),
+  /** Whether the app's memory reserve is honoured at every systemd level above it. */
+  memoryReserve: () => get<MemoryReserveReport>("/machine/memory-reserve"),
+  /** The person's press: set the reserve on the levels above the app (one password prompt), or take it off. */
+  setMemoryReserve: (action: "apply" | "undo") => post<MemoryReserveResult>("/machine/memory-reserve", { action }),
   /** Where a checkout's disk went, one level down. A `du` walk: seconds on a
    *  repository with a node_modules, so it is asked for, never polled. */
   machineSpace: (root: string) => get<SpaceReport>(`/machine/space?root=${encodeURIComponent(root)}`),
@@ -2227,6 +2491,9 @@ const realApi = {
   /** The notification diet — which kinds may notify, and on which channels.
    *  See shared/notifyPrefs.ts. */
   notifyPrefs: () => get<{ ok: boolean; prefs: NotifyPrefs }>("/notify/prefs"),
+  /** The desktop's own Do Not Disturb; `supported: false` off Omarchy. */
+  desktopDnd: () => get<{ ok: boolean; supported: boolean; on: boolean }>("/notify/dnd"),
+  setDesktopDnd: (on: boolean) => post<{ ok: boolean; supported: boolean; on: boolean }>("/notify/dnd", { on }),
   setNotifyPrefs: (prefs: NotifyPrefs) => post<{ ok: boolean; prefs: NotifyPrefs }>("/notify/prefs", prefs),
   /** Which repositories a review plugin may read the authoring session of
    *  (`plugins.sessionReads.repos`), and the ones the app has a checkout of to pick from. */
@@ -2281,8 +2548,8 @@ const realApi = {
   /** Fetched fresh, never cached — a stale list read as live is the one
    *  thing this must not do. `ok: false` covers an unreachable or malformed
    *  catalogue equally; the caller shows the error either way. */
-  pluginCatalogueFetch: (url: string) =>
-    get<{ ok: true; catalogue: Catalogue } | { ok: false; error: string }>(`/plugins/catalogue?url=${encodeURIComponent(url)}`),
+  pluginCatalogueFetch: (url: string, signal?: AbortSignal) =>
+    get<{ ok: true; catalogue: Catalogue } | { ok: false; error: string }>(`/plugins/catalogue?url=${encodeURIComponent(url)}`, signal),
   pluginInstallFromCatalogue: (catalogueUrl: string, pluginId: string) =>
     post<{ ok: true; plugin: PublicPlugin } | { ok: false; error: string }>(
       "/plugins/install-from-catalogue", { catalogueUrl, pluginId }),
@@ -2340,6 +2607,7 @@ const realApi = {
   updateNotes: (tag?: string) => get<ReleaseNotes>(`/update/notes${tag ? `?tag=${encodeURIComponent(tag)}` : ""}`),
   updateRun: () => post<{ ok: boolean; error?: string }>("/update/run", {}),
   updateLog: () => get<{ ok: boolean; text: string; steps?: string }>("/update/log"),
+  reportRaw: () => get<Record<string, string>>("/update/report-raw"),
   // Claude Code hook wiring (#187): read state, and turn it on/off by writing
   // ~/.claude/settings.json server-side (idempotent, backed up first).
   hooksStatus: () => get<HookSetupStatus>("/hooks/status"),
@@ -2369,9 +2637,9 @@ const realApi = {
     post<{ ok: boolean; error?: string; replies?: { id: string; title: string; text: string }[] }>("/saved-replies/save", r),
   removeReply: (id: string) =>
     post<{ ok: boolean; replies?: { id: string; title: string; text: string }[] }>("/saved-replies/remove", { id }),
-  prCodeowners: (root: string) =>
+  prCodeowners: (root: string, signal?: AbortSignal) =>
     get<{ ok: boolean; path?: string; rules?: { pattern: string; owners: string[] }[]; error?: string }>(
-      `/prs/codeowners?${new URLSearchParams({ root })}`),
+      `/prs/codeowners?${new URLSearchParams({ root })}`, signal),
   prEditComment: (root: string, nodeId: string, body: string, kind: "issue" | "review" = "issue") =>
     post<PrActionResult>("/prs/comment-edit", { root, nodeId, body, kind }),
   /** Fold a comment away, or put it back. Not a delete: GitHub keeps it, records the
@@ -2388,7 +2656,7 @@ const realApi = {
   prMilestone: (root: string, number: number, title: string) =>
     post<PrActionResult>("/prs/milestone", { root, number, title }),
   prList: (root: string, filter: "mine" | "review" | "all", state: "open" | "closed" | "all" = "open", force = false, after?: string, q?: string) =>
-    get<PrListResponse>(`/prs/list?root=${encodeURIComponent(root)}&filter=${filter}&state=${state}${force ? "&force=1" : ""}${after ? `&after=${encodeURIComponent(after)}` : ""}${q ? `&q=${encodeURIComponent(q)}` : ""}`),
+    get<PrListResponse>(`/prs/list?root=${encodeURIComponent(root)}&filter=${filter}&state=${state}${force ? "&force=1" : ""}${after ? `&after=${encodeURIComponent(after)}` : ""}${q ? `&q=${encodeURIComponent(q)}` : ""}`).then((r) => { publishListChecks(r.repo, r.prs); return r; }),
   /** Apply a suggested change: reads the file, splices the lines, commits. */
   prApplySuggestion: (root: string, number: number, a: { path: string; startLine?: number; line: number; suggestion: string; author?: string }) =>
     post<PrActionResult>("/prs/apply-suggestion", { root, number, ...a }),
@@ -2398,13 +2666,13 @@ const realApi = {
     get<{ ok: boolean; lines?: string[]; start?: number; total?: number; binary?: boolean; url?: string; error?: string }>(
       `/prs/file-slice?root=${encodeURIComponent(root)}&number=${number}&path=${encodeURIComponent(path)}&side=${side}${from ? `&from=${from}` : ""}${to ? `&to=${to}` : ""}`),
   /** What the facet menus can offer — from the repository, not the page. */
-  prFacets: (root: string) =>
+  prFacets: (root: string, projects: string[] = [], signal?: AbortSignal) =>
     get<{ ok: boolean; data?: { authors: string[]; assignees: string[]; labels: { name: string; color: string }[]; milestones: string[]; bases: string[] }; error?: string }>(
-      `/prs/facets?root=${encodeURIComponent(root)}`),
+      `/prs/facets?root=${encodeURIComponent(root)}${projects.length ? `&projects=${encodeURIComponent(projects.join(","))}` : ""}`, signal),
   /** Who `@` can complete to, and which issues `#` can. */
-  prMentions: (root: string) =>
+  prMentions: (root: string, signal?: AbortSignal) =>
     get<{ ok: boolean; data?: { users: string[]; issues: { number: number; title: string }[] }; error?: string }>(
-      `/prs/mentions?root=${encodeURIComponent(root)}`),
+      `/prs/mentions?root=${encodeURIComponent(root)}`, signal),
   /** One line comment, posted on its own — no review, no verdict. */
   prLineComment: (root: string, number: number, c: { path: string; line: number; startLine?: number; side?: "LEFT" | "RIGHT"; body: string }) =>
     post<PrActionResult>("/prs/line-comment", { root, number, ...c }),
@@ -2507,6 +2775,11 @@ const realApi = {
   prUpdateBranch: (root: string, number: number, syncLocal = false) =>
     post<PrActionResult>("/prs/update-branch", { root, number, syncLocal }),
   prRerun: (root: string, number: number) => post<PrActionResult>("/prs/rerun", { root, number }),
+  /** Workflow runs GitHub holds for a maintainer's approval (shared/heldRuns.ts). */
+  prHeldRuns: (root: string, number: number) =>
+    get<{ ok: boolean; runs: { id: number; name: string }[]; error?: string }>(`/prs/held-runs?${new URLSearchParams({ root, number: String(number) })}`),
+  /** "Approve workflows to run". The server takes only a person's click, and only on the head the panel showed. */
+  prApproveRuns: (root: string, number: number, headSha: string) => post<PrActionResult>("/prs/approve-runs", { root, number, headSha }),
   /** "Tell me when this PR's CI does X" — the rules live on the server, see
    *  server/src/prNotifyWatch.ts. */
   prWatches: () => get<PrWatchState & { ok: boolean }>("/prs/notify-watch"),
@@ -2516,6 +2789,9 @@ const realApi = {
   prWatchPending: () => get<{ ok: boolean; fires: PrWatchFire[] }>("/prs/notify-watch/pending"),
   prWatchAck: (seq: number) => post<{ ok: boolean }>("/prs/notify-watch/ack", { seq }),
   prWatchRemove: (id: string) => post<{ ok: boolean }>("/prs/notify-watch/remove", { id }),
+  /** The board's bulk "Tell me when…": each PR ends with exactly its `rules` card rules; `prev` sent back is the Undo. */
+  prWatchSetMany: (root: string, items: PrWatchSetItem[]) =>
+    post<{ ok: boolean; prev: PrWatchSetItem[]; skipped?: number[]; failed?: number[]; error?: string }>("/prs/notify-watch/set-many", { root, items }),
   /** The notifications the person asked for: the ones still waiting, and the last few for the audit. */
   askedAlerts: () => get<{ ok: boolean; open: AskedAlert[] }>("/alerts/asked"),
   askedAudit: () => get<{ ok: boolean; audit: AskedAlert[] }>("/alerts/asked/audit"),
@@ -2529,6 +2805,14 @@ const realApi = {
   prMerge: (root: string, number: number, method: "squash" | "merge" | "rebase", opts: { deleteBranch?: boolean; auto?: boolean; headSha?: string; subject?: string; body?: string; disableAuto?: boolean }) =>
     post<PrActionResult>("/prs/merge", { root, number, method, ...opts }),
   prClose: (root: string, number: number, reopen = false) => post<PrActionResult>("/prs/close", { root, number, reopen }),
+  /** The person's merge lock (shared/mergeLock.ts). Reads are open; the writes are refused to agents by the server. */
+  mergeLocks: (root: string) => get<{ ok: boolean; locks?: MergeLockRow[]; error?: string }>(`/prs/merge-locks?root=${encodeURIComponent(root)}`),
+  mergeLock: (root: string, number: number) =>
+    get<{ ok: boolean; lock: MergeLock | null; state: MergeLockState | null; log: { verb: string; detail: string; who: string; at: number }[]; error?: string }>(`/prs/merge-lock?root=${encodeURIComponent(root)}&number=${number}`),
+  mergeLockSet: (root: string, number: number, lock: { until: number | null; items: { id?: string; text: string; done: boolean }[]; note: string; afterPr: number | null }) =>
+    post<MergeLockWrite>("/prs/merge-lock", { root, number, ...lock }),
+  mergeLockTick: (root: string, number: number, itemId: string, done: boolean) => post<MergeLockWrite>("/prs/merge-lock/tick", { root, number, itemId, done }),
+  mergeLockUnlock: (root: string, number: number, confirm: string) => post<MergeLockWrite>("/prs/merge-lock/unlock", { root, number, confirm }),
   /** Unstick's two writes. The server re-checks each against a fresh read. */
   prUnstickClose: (root: string, number: number) => post<PrActionResult>("/prs/unstick-close", { root, number }),
   prUnstickReopen: (root: string, number: number) => post<PrActionResult>("/prs/unstick-reopen", { root, number }),
@@ -2539,8 +2823,8 @@ const realApi = {
    *  claiming nothing is queued. */
   /** A note on a ClickUp card's activity. `assignee` is what makes it arrive:
    *  an `@Name` inside the text is plain text and notifies nobody. */
-  clickupComment: (id: string, text: string, assignee?: number) =>
-    post<{ ok: boolean; error?: string; unauthorised?: boolean }>("/clickup/comment", { id, text, ...(assignee != null ? { assignee } : null) }),
+  clickupComment: (id: string, text: string, assignee?: number, repo?: string) =>
+    post<{ ok: boolean; error?: string; unauthorised?: boolean }>("/clickup/comment", { id, text, ...(assignee != null ? { assignee } : null), ...(repo ? { repo } : null) }),
   /** Whether the agent on this machine can post to Slack — see slackreach.ts. */
   notifyReach: () => get<{ ok: boolean; slack: boolean }>("/notify/reach"),
   prPendingReview: (root: string, number: number) =>
@@ -2566,8 +2850,14 @@ const realApi = {
   /** The person's own change to one of them, from Settings: applied at once. */
   settingsDoorSet: (id: string, value: unknown) =>
     post<{ ok: boolean; applied?: boolean; error?: string }>("/settings/door", { id, value }),
+  /** Guide grants: one agent may guide the person on their own tab, on one site, for two hours. */
+  guideGrants: () => get<GuideGrantsReply>("/browser/guide-grants"),
+  addGuideGrant: (agent: string, site: string) => post<GuideGrantsReply>("/browser/guide-grants", { agent, site }),
+  dropGuideGrant: (id: string) => post<GuideGrantsReply>("/browser/guide-grants/drop", { id }),
   /** Whether paired phones raise their own notification for a watch or a card (`phone.alerts`). */
   phoneAlerts: () => get<{ ok: boolean; value?: unknown }>("/settings/door?id=phone.alerts"),
+  /** Whether this server started the terminal relay, and whether its environment decided that ("1" or "0") instead of the stored choice. */
+  relayState: () => get<{ relayEnabled?: boolean; relayHeld?: "1" | "0" | null }>("/health"),
   /** What agents asked to change and wait for the person on (the settings door). */
   settingsRequests: () => get<{ ok: boolean; requests: SettingRequestView[] }>("/settings/requests", undefined, deskHeader()),
   /** What the automatic cleanup after a merge is doing and has done (server/src/cleanupAuto.ts), newest first. */
@@ -2583,6 +2873,9 @@ const realApi = {
   /** The Docker build cache every project shares (not one PR's leftover): its reclaimable size, and the prune. Person-only on the server. */
   cleanupBuildCache: () => get<{ ok: boolean; reclaimableBytes?: number; totalBytes?: number; error?: string }>("/cleanup/build-cache"),
   cleanupBuildCachePrune: () => post<{ ok: boolean; freedBytes?: number; remainingBytes?: number; error?: string }>("/cleanup/build-cache/prune", {}),
+  /** Puts back the briefs an automatic run moved to archive/ (the toast's Undo). */
+  cleanupUndoBriefs: (repo: string, pr: number) =>
+    post<{ ok: boolean; restored?: string[]; refused?: string[]; error?: string }>("/cleanup/undo-briefs", { repo, pr }),
   /** The person's answer: carries the desk key (deskGate.ts), as only the person may give it. */
   settingsRequestDecide: (id: string, approve: boolean, bulk = false) =>
     post<{ ok: boolean; applied?: boolean; error?: string }>("/settings/requests/decide", { id, approve, ...(bulk ? { bulk: true } : {}) }),
@@ -2705,6 +2998,9 @@ const demoApi: typeof realApi = {
   refreshOpenCodeUsage: () => D((demo.providerUsage() as ProviderUsage[]).find((r) => r.provider === "opencode")!),
   openCodeDetail: () => D({ ok: true, detail: null }),
   openCodeKey: () => D({ ok: true, set: false }),
+  ownAccounts: () => D<OwnAccountsRead>({ ok: true, accounts: [], sources: {} }),
+  ownAccountAdd: (_p: string, _l: string, _s?: string) => D<OwnAccountsWrite>({ ok: false, error: "Not in the demo." }),
+  ownAccountRemove: (_p: string, _i: string) => D<OwnAccountsWrite>({ ok: false, error: "Not in the demo." }),
   setOpenCodeKey: () => D({ ok: false, error: "not available in the demo" }),
   clearOpenCodeKey: () => D({ ok: false, error: "not available in the demo" }),
   claimPaceAlerts: (_alertAt: number) => D({ ok: true, fired: 0 }),
@@ -2763,6 +3059,7 @@ const demoApi: typeof realApi = {
   browserManager: (_client: string, _on: boolean) => D({ ok: true, lanes: [] as string[] }),
   browserLanes: () => D({ ok: true, lanes: [] as LaneRow[] }),
   browserReady: (_client: string, _on: boolean, _lanes?: string[]) => D({ ok: true }),
+  guideEvent: (_ev: { tab: string; event: string; visit?: number; url?: string }) => D({ ok: false, error: "demo" }),
   browserResult: (_r: { client?: string; id: string; ok: boolean; value?: unknown; error?: string; diagnosis?: unknown }) => D({ ok: true, known: false }),
   controlResult: (_r: { rid: string } & UiReply) => D({ ok: true, known: false }),
   hideProject: (_path: string, _hidden: boolean) => D({ ok: false, hidden: [] as string[], persisted: false, error: "unavailable in the demo" }),
@@ -2818,6 +3115,7 @@ const demoApi: typeof realApi = {
   filesMeasure: (_p: string) => D({ ok: false }),
   editorWhere: (_i: string) => D({ ok: false }),
   editorOpen: (_path: string, _line: number) => D({ ok: false, error: "no editor in the demo" }),
+  gitBranchOnlyHere: (_root: string, _name: string) => D(null),
   gitLog: (_root: string, _limit?: number) => D(demo.gitLog()),
   gitCommitDiff: (_root: string, hash: string) => D(demo.gitCommitDiff(hash)),
   gitRefs: (_root: string) => D({ ok: true, refs: ["main", "origin/main"] as string[] }),
@@ -2909,16 +3207,19 @@ const demoApi: typeof realApi = {
   previewMedia: () => D({ ok: false, error: "the demo has no filesystem" } as MediaFacts),
   frameUrl: () => "",
   previewOpen: () => D({ ok: false, error: "the demo has no filesystem" }),
+  previewPageLink: (path: string, scripts = false) => D({ path: `/preview/page?path=${encodeURIComponent(path)}${scripts ? "&scripts=1" : ""}` }),
   finderEditState: () => D({ ok: true, live: false, modified: false }),
   finderEditEnd: () => D({ ok: true, ended: false }),
   finderEditSave: () => D({ ok: false, live: false, modified: false, error: "not available in the demo" }),
   previewReveal: () => D({ ok: false, error: "the demo has no filesystem" }),
   diskGrep: () => D({ ok: false, hits: [], files: 0, truncated: false, via: "", error: "the demo has no filesystem" } as GrepReport),
   dockerLogs: (id: string, _tail?: number) => D(demo.dockerLogs(id)),
-  dockerDisk: () => D({ images: 0, containers: 0, volumes: 0, buildCache: 0, reclaimable: 0, orphans: [], volumes_: [], at: Date.now() } as DockerDisk),
+  dockerDisk: () => D({ images: 0, containers: 0, volumes: 0, buildCache: 0, reclaimable: 0, imageCount: 0, imageReclaimable: 0, orphans: [], perImage: [], volumes_: [], at: Date.now() } as DockerDisk),
   dockerPeek: () => D({ ok: false, error: "the demo has no volumes to look inside" } as DockerPeek),
   dockerPruneCache: () => D({ ok: false, error: "the demo is read-only" } as DockerActionResult),
   dockerRemoveImages: () => D({ ok: false, error: "the demo is read-only" } as DockerActionResult),
+  dockerLeftovers: () => D({ repos: [] }),
+  dockerRemoveOrphans: () => D({ ok: false, error: "the demo is read-only" } as DockerActionResult),
   dockerRemoveNetwork: () => D({ ok: false, error: "the demo is read-only" } as DockerActionResult),
   dockerRemoveVolume: () => D({ ok: false, error: "the demo is read-only" } as DockerActionResult),
   dockerEnvDiff: () => D({ ok: false, error: "the demo has one of everything" }),
@@ -2939,6 +3240,8 @@ const demoApi: typeof realApi = {
   pluginPanels: (_plugin?: string, _panel?: string) => D({ ok: true, panels: [] as PluginPanel[] }),
   pluginAction: (_p: string, _panel: string | undefined, _a: UiAction, _v?: Record<string, unknown>) => D({ ok: false, error: "not available in the demo" }),
   notifyPrefs: () => D({ ok: true, prefs: DEFAULT_NOTIFY_PREFS }),
+  desktopDnd: () => D({ ok: true, supported: false, on: false }),
+  setDesktopDnd: (_on: boolean) => D({ ok: true, supported: false, on: false }),
   setNotifyPrefs: (_p: NotifyPrefs) => D({ ok: false, prefs: DEFAULT_NOTIFY_PREFS }),
   sessionReads: () => D({ ok: true, repos: [] as string[], known: [] as string[] }),
   setSessionReads: (_r: string[]) => D({ ok: false, repos: [] as string[] }),
@@ -2989,6 +3292,7 @@ const demoApi: typeof realApi = {
   hooksUninstall: () => D({ ok: false, installed: false, changed: false, settingsPath: "~/.claude/settings.json", error: "not available in the demo" } as HookSetupResult),
   hooksGate: (_on: boolean) => D({ ok: false, installed: false, changed: false, settingsPath: "~/.claude/settings.json", error: "not available in the demo" } as HookSetupResult),
   updateLog: () => D({ ok: true, text: "" }),
+  reportRaw: () => D({} as Record<string, string>),
   dockerInspect: (_id: string) => D({ ok: false, env: [] as string[], config: "", error: "not available in the demo" }),
   dockerTop: (_id: string) => D({ ok: false, text: "", error: "not available in the demo" }),
   terminalCommands: (_root: string) => D({ enabled: false, make: [], scripts: [] } as TerminalCommands),
@@ -3067,11 +3371,14 @@ const demoApi: typeof realApi = {
   prDraft: (_r: string, _n: number, _d: boolean) => D(demoPrAction()),
   prUpdateBranch: (_r: string, _n: number, _s?: boolean) => D(demoPrAction()),
   prRerun: (_r: string, _n: number) => D(demoPrAction()),
+  prHeldRuns: (_r: string, _n: number) => D({ ok: true, runs: [] as { id: number; name: string }[] } as { ok: boolean; runs: { id: number; name: string }[]; error?: string }),
+  prApproveRuns: (_r: string, _n: number, _h: string) => D(demoPrAction()),
   prWatches: () => D({ ok: true, watches: [], presets: [] }),
   prWatchAdd: (_r: string, _n: number, _t: string, _rule: PrWatchRule) => D({ ok: false, error: "not available in the demo" }),
   prWatchPending: () => D({ ok: true, fires: [] as PrWatchFire[] }),
   prWatchAck: (_s: number) => D({ ok: true }),
   prWatchRemove: (_id: string) => D({ ok: true }),
+  prWatchSetMany: (_r: string, _items: PrWatchSetItem[]) => D({ ok: false, prev: [] as PrWatchSetItem[], error: "not available in the demo" }),
   askedAlerts: () => D({ ok: true, open: [] as AskedAlert[] }),
   askedAudit: () => D({ ok: true, audit: [] as AskedAlert[] }),
   askedSeen: (_id: string) => D({ ok: true }),
@@ -3080,6 +3387,11 @@ const demoApi: typeof realApi = {
   prWatchApply: (_r: string, _n: number, _t: string) => D({ ok: false, applied: 0, error: "not available in the demo" }),
   prWatchPreset: (_r: string, _rules: PrWatchRule[], _a: boolean) => D({ ok: false, error: "not available in the demo" }),
   prMerge: (_r: string, _n: number, _m: "squash" | "merge" | "rebase", _o: { deleteBranch?: boolean; auto?: boolean; headSha?: string; subject?: string; body?: string; disableAuto?: boolean }) => D(demoPrAction()),
+  mergeLocks: (_r: string) => D({ ok: true, locks: [] as MergeLockRow[] }),
+  mergeLock: (_r: string, _n: number) => D({ ok: true, lock: null, state: null, log: [] }),
+  mergeLockSet: (_r: string, _n: number, _l: unknown) => D({ ok: false, error: "the demo keeps no merge locks" } as MergeLockWrite),
+  mergeLockTick: (_r: string, _n: number, _i: string, _d: boolean) => D({ ok: false, error: "the demo keeps no merge locks" } as MergeLockWrite),
+  mergeLockUnlock: (_r: string, _n: number, _c: string) => D({ ok: false, error: "the demo keeps no merge locks" } as MergeLockWrite),
   prClose: (_r: string, _n: number, _reopen?: boolean) => D(demoPrAction()),
   prUnstickClose: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" } as PrActionResult),
   prUnstickReopen: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" } as PrActionResult),
@@ -3087,6 +3399,9 @@ const demoApi: typeof realApi = {
   launchPermissions: () => D({ ok: true, mode: "default" as LaunchMode, deny: [...DEFAULT_LAUNCH_DENY] }),
   settingsDoor: () => D({ ok: true, settings: [] as { id: string; value?: unknown }[] }),
   settingsDoorSet: (_id: string, _value: unknown) => D({ ok: false, error: "not available in the demo" }),
+  guideGrants: () => D<GuideGrantsReply>({ ok: true, grants: [] }),
+  addGuideGrant: (_agent: string, _site: string) => D<GuideGrantsReply>({ ok: false, error: "not available in the demo" }),
+  dropGuideGrant: (_id: string) => D<GuideGrantsReply>({ ok: false, error: "not available in the demo" }),
   launchFlags: () => D({ ok: true, overrides: {} as Record<string, Record<string, string[]>>, builtin: {} as Record<string, Record<string, string[]>> }),
   launchFlagsSave: (_k: string, _m: unknown) => D({ ok: false, error: "not available in the demo", overrides: {} as Record<string, Record<string, string[]>> }),
   launchPermissionsSave: (_p: unknown) => D({ ok: false, error: "not available in the demo", mode: "default" as LaunchMode, deny: [...DEFAULT_LAUNCH_DENY] }),
@@ -3097,8 +3412,10 @@ const demoApi: typeof realApi = {
   cleanupInventory: (_r: string, _p: { pr: number; branch: string }[]) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; rows?: { pr: number; items?: number; bytes?: number; unknown?: boolean }[]; error?: string }),
   cleanupBuildCache: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; reclaimableBytes?: number; error?: string }),
   cleanupBuildCachePrune: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; freedBytes?: number; error?: string }),
+  cleanupUndoBriefs: (_r: string, _p: number) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; restored?: string[]; refused?: string[]; error?: string }),
   settingsRequestDecide: (_id: string, _approve: boolean) => D({ ok: false, error: "not available in the demo" }),
   phoneAlerts: () => D({ ok: true, value: true }),
+  relayState: () => D({ relayEnabled: false, relayHeld: null } as { relayEnabled?: boolean; relayHeld?: "1" | "0" | null }),
   agentsChangeWithoutAsking: () => D({ ok: true, trusted: false }),
   agentsChangeWithoutAskingSave: (_on: boolean) => D({ ok: false, error: "not available in the demo" }),
   prPrompts: () => D({ ok: true, recipes: [] as ReviewRecipe[] }),
@@ -3136,7 +3453,7 @@ const demoApi: typeof realApi = {
   providerDisconnect: (_i: string, _o?: { forgetBoards?: boolean }) => D({ ok: false, error: "not available in the demo" }),
   providerWorkspaces: (_i: string) => D({ ok: false, error: "not available in the demo" }),
   providerWorkspace: (_i: string, _w: string, _n: string) => D({ ok: false, error: "not available in the demo" }),
-  jiraConnect: (_e: string, _s: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraConnect: (_e: string, _s: string, _t: string, _k?: string) => D({ ok: false, error: "not available in the demo" }),
   jiraStatus: () => D({ connected: false, site: null, kind: null, auth: null, api: null, deployment: null, account: null, prefixes: [], writes: false, writeKinds: { move: true, comment: true, link: true, assign: true } }),
   jiraWrites: (_o: boolean) => D({ ok: false, error: "not available in the demo" }),
   jiraWriteKind: (_k: string, _o: boolean) => D({ ok: false, error: "not available in the demo" }),
@@ -3146,20 +3463,35 @@ const demoApi: typeof realApi = {
   jiraLink: (_k: string, _u: string, _t?: string) => D({ ok: false, error: "not available in the demo" }),
   jiraProjectPrs: (_p: string, _r?: string) => D({ ok: true, byCard: {} as Record<string, CardPr[]> }),
   trackerProjects: (_r?: boolean) => D({ ok: true, projects: {}, repos: [] }),
+  providerAccounts: (_i: string) => D({ ok: true, accounts: [] as AccountRow[] }),
+  providerSetDefault: (_i: string, _k: string) => D({ ok: false, error: "not available in the demo" }),
+  trackerAccounts: () => D({ ok: true, accounts: {} as RepoAccounts }),
+  setTrackerAccount: (_r: string, _p: string, _k: string | null) => D({ ok: false, error: "not available in the demo" }),
   setTrackerProject: (_r: string, _t: TrackerChoice) => D({ ok: false, error: "not available in the demo" }),
+  setClickupWrites: (_r: string, _on: boolean) => D({ ok: false, error: "not available in the demo" }),
   jiraTask: (_i: string) => D({ ok: false, error: "not available in the demo" }),
-  jiraFind: (_q: string, _signal?: AbortSignal) => D({ ok: false, error: "not available in the demo" }),
-  jiraSearch: (_q: string) => D({ ok: false, error: "not available in the demo" }),
-  jiraTransitions: (_k: string) => D({ ok: false, error: "not available in the demo" }),
-  jiraTransition: (_k: string, _t: string, _u: number) => D({ ok: false, error: "not available in the demo" }),
-  jiraAssignable: (_k: string, _q: string, _t?: string) => D({ ok: true, people: [] as JiraPerson[] }),
+  jiraFind: (_q: string, _signal?: AbortSignal, _repo?: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraJql: (_q: string, _signal?: AbortSignal, _full?: boolean, _view?: { id: string; quick?: readonly string[]; cross?: boolean }) => D({ ok: false, error: "not available in the demo" }),
+  jiraViewCount: (_id: string, _signal?: AbortSignal) => D({ ok: false, error: "not available in the demo" }),
+  jiraJqlCount: (_q: string, _signal?: AbortSignal) => D({ ok: false, error: "not available in the demo" }),
+  jiraFilter: (_id: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraWriteFilter: (_id: string, _jql: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraUser: (_accountId: string, _signal?: AbortSignal) => D({ ok: false, error: "not available in the demo" }),
+  jiraSearch: (_q: string, _signal?: AbortSignal, _repo?: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraTransitions: (_k: string, _repo?: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraTransition: (_k: string, _t: string, _u: number, _f?: Record<string, string | string[]>, _repo?: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraAssignable: (_k: string, _q: string, _t?: string, _r?: string) => D({ ok: true, people: [] as JiraPerson[] }),
+  jiraMembers: (_project: string) => D({ ok: true, people: [] as JiraPerson[] }),
   jiraSetAssignee: (_k: string, _to: string | null, _u: number) => D({ ok: false, error: "not available in the demo" }),
   jiraHandOff: (_k: string, _u: number, _c?: { to?: string; clear?: boolean }) => D({ ok: false, error: "not available in the demo" }),
   jiraSettings: () => D({ ok: true, writes: false, handoff: {} as Record<string, JiraHandoffRule> }),
   setJiraHandoff: (_p: string, _r: JiraHandoffRule | null) => D({ ok: false, error: "not available in the demo" }),
-  jiraSteps: () => D({ ok: true, steps: { handoff: { enabled: false, blocks: [] }, review: { enabled: false, blocks: [] }, merge: { enabled: false, blocks: [] } } as JiraSteps, overrides: [] as string[] }),
+  jiraSteps: () => D({ ok: true, steps: { handoff: { enabled: false, blocks: [] }, review: { enabled: false, blocks: [] }, merge: { enabled: false, blocks: [] }, people: { enabled: false, blocks: [] }, note: { enabled: false, blocks: [] } } as JiraSteps, overrides: [] as string[] }),
   setJiraSteps: (_s: Partial<Record<keyof JiraSteps, Partial<JiraStep>>>) => D({ ok: false, error: "not available in the demo" }),
-  jiraRunStep: (_k: string, _u: number, _t: JiraStepKey, _c?: JiraStepChoice, _p?: JiraStepPr) => D({ ok: false, error: "not available in the demo" }),
+  jiraPairs: () => D({ ok: true, pairs: [] as JiraPair[] }),
+  jiraLearnPairs: (_p: { login: string; accountId: string; name: string; email?: string }[]) => D({ ok: true, pairs: [] as JiraPair[] }),
+  jiraForgetPair: (_l: string) => D({ ok: true, pairs: [] as JiraPair[] }),
+  jiraRunStep: (_k: string, _u: number, _t: JiraStepKey, _c?: JiraStepChoice, _p?: JiraStepPr, _repo?: string) => D({ ok: false, error: "not available in the demo" }),
   jiraStatusUnits: (_f?: boolean) => D({ ok: true, spaces: [], source: "spaces" as const, counted: [] as string[] }),
   setJiraCounted: (_c: string[]) => D({ ok: false, error: "not available in the demo" }),
   jiraProjectStatuses: (_p: string) => D({ ok: true, statuses: [] as { id: string; name: string; kind: "open" | "done" | "other" }[] }),
@@ -3168,6 +3500,8 @@ const demoApi: typeof realApi = {
   jiraSpacePicker: (_q?: string) => D<JiraSpacePickerOut | { ok: false; error: string; throttled?: boolean }>({ ok: true, projects: [] }),
   jiraSpaceTree: (_s: string, _o?: { fresh?: boolean; showDone?: boolean }) => D<JiraSpaceTreeOut>({ ok: false, error: "not available in the demo" }),
   jiraEpicCards: (_e: string) => D<JiraEpicCardsOut>({ ok: false, error: "not available in the demo" }),
+  jiraSetSpaceColumnBoard: (_k: string, _b: string | undefined) => D({ ok: false as const, error: "not available in the demo" }),
+  jiraProjectBoards: (_k: string) => D({ ok: true, boards: [] as JiraProjectBoard[] }),
   jiraViews: () => D<JiraViews>({
     connected: true, site: "acme.example", current: "board:1",
     views: [{ id: "board:1", name: "ORBIT board", url: "", addedAt: 0 }], folders: [],
@@ -3175,6 +3509,11 @@ const demoApi: typeof realApi = {
   jiraBoardContext: (_id: string) => D<JiraBoardContext>({ ok: true, filters: [], epics: [] }),
   jiraBoardAreas: (_id: string) => D<JiraBoardAreas>({ ok: true, tasks: [] }),
   jiraRank: (_k: string, _a: { before?: string; after?: string }) => D({ ok: false, error: "not available in the demo" }),
+  jiraSprintMove: (_s: string, _k: string[]) => D({ ok: false, error: "not available in the demo" }),
+  jiraClone: (_k: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraBacklogMove: (_k: string[]) => D({ ok: false, error: "not available in the demo" }),
+  jiraBulk: (_k: string[], _c: { kind: string }) => D({ ok: false, error: "not available in the demo", results: [] as Array<{ key: string; ok: boolean; error?: string }> }),
+  jiraBulkOptions: (_b: string) => D({ ok: true, active: null as { id: string; name: string } | null, future: [] as Array<{ id: string; name: string }>, next: "", priorities: [] as Array<{ id: string; name: string }> }),
   jiraView: (_id: string, _o?: { force?: boolean; cached?: boolean; filters?: readonly string[] }) => D<JiraViewRead>({
     ok: true, at: Date.now(),
     columns: [
@@ -3192,9 +3531,14 @@ const demoApi: typeof realApi = {
   jiraProjectChoices: () => D({ ok: true, projects: [{ key: "ORBIT", name: "Orbit" }] }),
   jiraAddView: (_i: { url: string } | { kind: "board" | "filter"; id: string }) => D({ ok: false, error: "not available in the demo" }),
   jiraRemoveView: (_i: string) => D({ ok: false }),
+  jiraFavourites: (_signal?: AbortSignal) => D({ ok: false, error: "not available in the demo" }),
+  jiraEditView: (_id: string, _patch: { name?: string; team?: boolean; tab?: boolean; jql?: string }) => D({ ok: false, error: "not available in the demo" }),
+  jiraDuplicateView: (_id: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraSaveJql: (_jql: string, _name?: string) => D({ ok: false, error: "not available in the demo" }),
   jiraAddFolder: (_k: string) => D({ ok: false, error: "not available in the demo" }),
   jiraRemoveFolder: (_i: string) => D({ ok: false }),
   jiraDetail: (_k: string) => D({ ok: false, error: "not available in the demo" }),
+  jiraChildCards: (_k: string) => D({ ok: false, error: "not available in the demo" }),
   jiraActivity: (_k: string, _kind: "history" | "worklog" | "comments", _at = 0) => D({ ok: false, error: "not available in the demo" }),
   jiraPeople: (_k: string, _q: string) => D({ ok: true, people: [] as { key: string; name: string; initials: string; avatar?: string }[] }),
   jiraComment: (_k: string, _t: string, _m?: { id: string; name: string }[], _r?: string) => D({ ok: false, error: "not available in the demo" }),
@@ -3215,6 +3559,9 @@ const demoApi: typeof realApi = {
   jiraAttach: (_k: string, _f: File) => D({ ok: false, error: "not available in the demo" }),
   jiraUnattach: (_k: string, _i: string) => D({ ok: false, error: "not available in the demo" }),
   jiraLabels: (_q: string) => D({ ok: true, labels: [] as string[] }),
+  jiraFields: () => D({ ok: true, fields: [] as { name: string; type: string }[] }),
+  jiraJqlAutocomplete: () => D({ ok: true, fields: [], functions: [] }),
+  jiraJqlSuggest: (_field: string, _value: string, _signal?: AbortSignal) => D({ ok: true, results: [] as { value: string; display: string }[] }),
   providerTasks: (_f?: boolean) => D({ tasks: [], more: false, at: 0 }),
   recipes: (_r?: string) => D({ recipes: [] }),
   recipeSave: (_r: Recipe) => D({ ok: false, error: "not available in the demo" }),
@@ -3223,12 +3570,14 @@ const demoApi: typeof realApi = {
   // `connected: false` — the demo has no token, and every chip that gates on
   // this stays off rather than leading somewhere that does not exist.
   agentBoard: () => D({ ok: true, agents: demoLanternField(), chairs: [{ root: "/home/you/code/orbit", name: "orchestrator-orbit", kind: "claude", model: "sonnet", next: { engine: "opencode", model: "big-pickle" }, handedOff: true }], watch: { at: Date.now() - 6 * 60_000, flagged: 2, every: 15, on: true }, cacheTtlMinutes: 5 }),
+  spendToday: () => D({ ok: true, day: new Date().toISOString().slice(0, 10), usd: 1.22 }),
   agentForget: (_name: string) => D({ ok: true, cleared: true }),
   seat: () => D({ ok: true, root: "/demo/orbit", live: false, seat: null, agent: null, doctrine: "", doctrineText: "", tasks: [], needs: [], models: [], defaultModel: "", field: [], lines: [], wokenAt: null, floorHours: 4, screen: "", reports: [], unread: 0 } as SeatAnswer),
   engineModels: (_e: string) => D({ ok: true, models: [] as { id: string; label: string }[] }),
   seatOpen: (_r: string, _p?: string, _m?: string) => D({ ok: false, error: "not available in the demo" }),
   seatClose: (_r: string) => D({ ok: false }),
   seatChange: (_r: string) => D({ ok: false, error: "not available in the demo" }),
+  seatCan: (_r: string, _c: string, _w?: string) => D({ ok: false, error: "not available in the demo" }),
   seatSettingsSave: (_r: string, _f: object) => D({ ok: false, error: "not available in the demo" }),
   seatDoctrineSave: (_r: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
   seatTaskAdd: (_r: string, _t: string, _p?: string) => D({ ok: false, error: "not available in the demo" }),
@@ -3270,13 +3619,16 @@ const demoApi: typeof realApi = {
     } as Policy,
   }),
   orchestrationSave: (_p: Policy | null, _root?: string) => D({ ok: false, error: "not available in the demo" }),
-  getFlow: (_root: string) => D({ ok: false, error: "not available in the demo", scope: "template" as const, root: "", flow: {} as Flow }),
+  getFlow: (_root: string) => D({ ok: false, error: "not available in the demo", scope: "template" as const, root: "", flow: {} as Flow, undo: null }),
+  flowOptions: (_root: string) => D({ ok: false, error: "not available in the demo" }),
   putFlow: (_root: string, _flow: Flow) => D({ ok: false, error: "not available in the demo" }),
   deleteFlow: (_root: string) => D({ ok: false, error: "not available in the demo" }),
+  undoFlow: (_root: string) => D({ ok: false, error: "not available in the demo" }),
   orchestrationState: () => D({ ok: true, rules: [] as PolicyRuleState[] }),
   polarisSettings: (_root?: string) => D({ ok: false, error: "not available in the demo" }),
   polarisSettingsSave: (_c: SettingsChange, _root?: string) => D({ ok: false, error: "not available in the demo" }),
   polarisItems: (_root: string) => D({ ok: false, error: "not available in the demo" }),
+  polarisGithub: (_root: string) => D({ ok: false, error: "not available in the demo" }),
   polarisAct: (_root: string, _n: number, _b: ActionBody) => D({ ok: false, error: "not available in the demo" }),
   polarisBeaconSend: (_root: string, _n: number, _b?: { reason?: string; paneId?: string }) => D({ ok: false, error: "not available in the demo" }),
   polarisBeaconEdit: (_root: string, _n: number, _b: { reason?: string; text: string }) => D({ ok: false, error: "not available in the demo" }),
@@ -3305,8 +3657,8 @@ const demoApi: typeof realApi = {
   clickupList: (_i: string) => D({ ok: false, error: "not available in the demo" }),
   clickupReplaceView: (_i: string, _u: string) => D({ ok: false, error: "not available in the demo" }),
   clickupPrs: (_c: string, _f: string, _r: string, _t?: string) => D({ ok: true, prs: [] }),
-  clickupWarm: () => D({ ok: false }),
-  clickupFind: (_q: string) => D({ ok: false, error: "not available in the demo" }),
+  clickupWarm: (_r?: string) => D({ ok: false }),
+  clickupFind: (_q: string, _repo?: string) => D({ ok: false, error: "not available in the demo" }),
   // The one pull request in the demo that is behind its base is #461, and it
   // said so with no number and nothing about this machine — which is exactly
   // the pair of blanks the Update button used to leave everywhere. The demo
@@ -3365,6 +3717,7 @@ const demoApi: typeof realApi = {
   clickupChecklistItemAdd: (_c: string, _n: string) => D({ ok: false, error: "not available in the demo" }),
   clickupChecklistCheck: (_c: string, _i: string, _d: boolean) => D({ ok: false, error: "not available in the demo" }),
   clickupCommentEdit: (_i: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
+  clickupCommentReplies: (_i: string) => D({ ok: false as const, error: "not available in the demo" } as { ok: true; data: { replies: TaskReply[] } } | { ok: false; error: string }),
   clickupCommentReply: (_i: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
   clickupCommentResolve: (_i: string, _o: boolean) => D({ ok: false, error: "not available in the demo" }),
   clickupCommentDelete: (_i: string) => D({ ok: false, error: "not available in the demo" }),
@@ -3395,11 +3748,12 @@ const demoApi: typeof realApi = {
   flightResume: (_r: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; held?: boolean; error?: string }),
   flightRaiseBudget: (_u: number, _s: "day" | "week") => D({ ok: false, error: "not available in the demo" } as { ok: boolean; capUsd?: number; until?: number; error?: string }),
   flightAnswer: (_p: string, _a: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; error?: string }),
-  settingAt: (_id: string, _r: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; value?: unknown; scopedSet?: boolean; error?: string }),
-  settingAtGlobal: (_id: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; value?: unknown; error?: string }),
+  settingAt: (_id: string, _r: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; value?: unknown; scopedSet?: boolean; env?: { name: string; value: string } | null; error?: string }),
+  settingAtGlobal: (_id: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; value?: unknown; flowRoles?: FlowRoleRow[]; env?: { name: string; value: string } | null; error?: string }),
   settingAtSet: (_id: string, _v: unknown, _r: string) => D({ ok: false, error: "not available in the demo" } as { ok: boolean; applied?: boolean; error?: string }),
   termAgentTicket: (_c: string, _p: string, _y: boolean, _t: string) =>
     D({ ok: false, error: "not available in the demo" }),
+  terminalImage: (_d: string) => D({ ok: false, error: "not available in the demo" }),
   openShell: (_r: string) => D({ ok: false, error: "not available in the demo" }),
   tmuxStatus: () => D({ ok: false, bin: { available: false, source: "none", path: "", version: null, reason: "demo" }, capability: { available: false, reason: "demo" }, confMode: "append", override: "", overrideActive: false, broken: false, brokenReason: "", restoreEnabled: false, resumeMode: "lazy", prefix: "", terminal: "engine", source: "auto", lastCaptureAt: null, crashLoop: null }),
   tmuxConfSave: (_m: string, _o: string) => D({ ok: false, error: "not available in the demo" }),
@@ -3429,7 +3783,13 @@ const demoApi: typeof realApi = {
     if (v === "staged") queueMicrotask(() => latchStage({ id: "diskclean.stage", a: { ids: "docker:cache\nworktree:/home/dev/code/orbit-ORBIT-1042\ndocker:volumes-used" } }, "orbit-helper"));
     return D(demo.machineDiskClean(v));
   },
+  machineDiskCleanKept: () => D({ report: null }),
   machineDiskCleanRun: (ids?: string[], _at?: number, _d = false) => D(demo.machineDiskCleanRun(ids)),
+  machineDiskExplain: () => D({ ok: false, error: "unavailable in the demo" }),
+  machineDiskExplainCancel: () => D({ ok: false }),
+  // The demo runs on nobody's machine: there is no session to reserve memory in.
+  memoryReserve: () => D({ state: "not-applicable", want: 0, levels: [], missing: [], why: "The demo runs no local processes." } as MemoryReserveReport),
+  setMemoryReserve: (_action: "apply" | "undo") => D({ ok: false, error: "unavailable in the demo", report: { state: "not-applicable", want: 0, levels: [], missing: [], why: "The demo runs no local processes." } } as MemoryReserveResult),
   machineSpace: (r: string) => D(demo.machineSpace(r)),
   machineKill: (_p: number) => D({ ok: false, error: "not available in the demo" }),
   machineLocks: () => D({ locks: [], scanned: 0, error: "not available in the demo" }),

@@ -1,14 +1,16 @@
+import { fileChooserNote } from "./fileChooserNote.ts";
 import type { BrowserAskFrame } from "../../../shared/types.ts";
-import { ACC_NAME, COLLECTOR, ID_ORIGIN, PICK, STAMP, observeScript } from "./browserObserve.ts";
+import { ACC_NAME, COLLECTOR, ID_ORIGIN, PICK, ROOTS, STAMP, observeScript } from "./browserObserve.ts";
 import { MARKS_ID, MARKS_MAX, MARKS_SCRIPT } from "./browserMarks.ts";
 import { cleanHtmlBody } from "./browserCleanHtml.ts";
 import { A11Y_SCRIPT, VITALS_SCRIPT, VITAL_LIMITS, rate, type VitalName } from "./browserVitals.ts";
 import { LLMS_SCRIPT, PAGE_TOOLS_SCRIPT, callToolScript, shapeCallResult, shapeLlms, shapeTools } from "./browserPageTools.ts";
 import { jsLit } from "../../../shared/jsLit.ts";
 import { cookieSetParams } from "./cookieSet.ts";
-import { FIND, ON_SCREEN, locatorLit, parseLocator } from "./browserLocator.ts";
+import { FIND, MANY_SAMPLES, MATCH_VERDICT, ON_SCREEN, locatorLit, manySentence, parseLocator } from "./browserLocator.ts";
 import { CHECKUP_PAGE, classifyCollector, classifyEvents, collectorSince, trackInflight, type CdpEvent } from "./browserCheckup.ts";
-import { flashPlan, type FlashPlan } from "./browserAgentActivity.ts";
+import { flashPlan, type FlashPlan, type GuideEvent } from "./browserAgentActivity.ts";
+import { clearGuideTab, deliverGuide, emitGuideEvent, heldGuideEnd, newGuideStep, noteGuide, onGuideAnswer, waitGuideNext } from "./browserGuideBus.ts";
 
 /**
  * The window's half of "let an agent drive the browser".
@@ -41,7 +43,7 @@ import { flashPlan, type FlashPlan } from "./browserAgentActivity.ts";
  * Re-exported here so every panel import is unchanged.
  */
 export {
-  crossContainerRefusal, mintTakesThePane, resolveAskTab, type AskOwnership,
+  crossContainerRefusal, mintContainer, mintTakesThePane, resolveAskTab, type AskOwnership,
 } from "../../../shared/browserOwnership.ts";
 
 /**
@@ -877,8 +879,8 @@ const ONE = `((__spec, __lenient, __floor, __act) => {
       const __can = __all.filter((__n) => __on(__n) && !__off(__n));
       if (__can.length === 1) return { kind: "ok", e: __can[0] };
     }
-    if (__all.length > 1 && !(__lenient && __spec.css !== undefined)) {
-      return __keep({ kind: "many", count: __all.length, samples: __all.slice(0, 5).map(__describe) });
+    if (${MATCH_VERDICT}(__all.length, !!(__lenient && __spec.css !== undefined)) === "many") {
+      return __keep({ kind: "many", count: __all.length, samples: __all.slice(0, ${MANY_SAMPLES}).map(__describe) });
     }
     return { kind: "ok", e: __all[0] };
   })`;
@@ -921,7 +923,7 @@ function selectorError(sel: string, r: {
 } | null | undefined): string {
   if (r?.kind === "invalid") return `invalid selector "${sel}": ${r.message}`;
   if (r?.kind === "many") {
-    return `selector matched ${r.count} elements${r.samples?.length ? " — " + r.samples.join(", ") : ""}: narrow ${sel} to one, or use one of the ids`;
+    return manySentence(sel, r.count ?? 0, r.samples);
   }
   if (r?.kind === "unobserved") {
     return `${sel} names nothing here: this page (${r.url ?? "the current page"}) has not been observed since it loaded, `
@@ -1629,6 +1631,22 @@ export function loadFailure(msg: string): string {
  *  and refuse to call it a success when the browser never moved. `explain`
  *  turns a failed load's bare Chromium code into a reason when the caller
  *  can ask for one (`open` asks the egress guard, see withEgressReason). */
+/* The page's title once it has one. Right after a load the webview can still
+   answer with the host (or the url) it keeps as a stand-in, so an `open` said
+   "github.com" for a page titled "Your profile". When the title is empty or is
+   that stand-in, the document's own title is read instead. */
+async function pageTitle(el: DrivableWebview): Promise<string> {
+  const t = el.getTitle();
+  let host = "";
+  try { host = new URL(el.getURL()).host; } catch { /* no url: only an empty title is a stand-in */ }
+  if (t && t !== host && t !== el.getURL()) return t;
+  try {
+    const d = await el.executeJavaScript("document.title");
+    if (typeof d === "string" && d.trim()) return d.trim();
+  } catch { /* the page is not scriptable: keep what the webview said */ }
+  return t;
+}
+
 async function navigateTo(
   el: DrivableWebview, url: string, explain?: (err: string) => Promise<string>,
 ): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
@@ -1673,13 +1691,27 @@ async function navigateTo(
    * for.
    */
   const landed = el.getURL();
-  if (landed === before && landed !== url) {
-    return {
-      ok: false,
-      error: `it did not navigate — still on ${landed}. The browser refused ${url.slice(0, 80)}: some schemes (data:, file:, blob:) are not allowed in this view.`,
-    };
-  }
+  const stuck = neverMoved(url, before, landed);
+  if (stuck) return { ok: false, error: stuck };
   return { ok: true, url: landed };
+}
+
+/**
+ * The refusal for a navigation that ended where it began, or null.
+ *
+ * Only a scheme the guard refuses (`data:`, `file:`, `blob:`) is a refusal.
+ * An http(s) address that ends where the tab already was is a REDIRECT back
+ * to it: a signed-out `github.com/settings/profile` lands on the login page,
+ * and a second `open` of it, from that login page, lands there again. That
+ * arrived; it is no refusal, and it was called one ("some schemes are not
+ * allowed") for an https address.
+ */
+export function neverMoved(url: string, before: string, landed: string): string | null {
+  if (landed !== before || landed === url) return null;
+  let scheme = "";
+  try { scheme = new URL(url).protocol; } catch { /* not an address: the guard's wording below is as good as any */ }
+  if (scheme === "http:" || scheme === "https:") return null;
+  return `it did not navigate — still on ${landed}. The browser refused ${url.slice(0, 80)}: some schemes (data:, file:, blob:) are not allowed in this view.`;
 }
 
 /**
@@ -1900,6 +1932,48 @@ function restoreHostFocus(el: object, before: Element | null): void {
  */
 type HandoffState = { nonce: string; until: string | null; done: boolean; navigated: boolean; off: () => void };
 const handoffs = new WeakMap<object, HandoffState>();
+/* A handoff that ended without the caller, for the next check to report: the
+   deadline (`timeout`) or the person pressing Take over (`takenover`). Without
+   it the check after read "none" and the CLI took that as an answer. */
+const endedOn = new WeakMap<object, "timeout" | "takenover">();
+
+/** Take the banner down and tell the panel. A no-op when nothing is armed. */
+async function endHandoff(el: DrivableWebview): Promise<void> {
+  const st = handoffs.get(el);
+  if (!st) return;
+  handoffs.delete(el);
+  st.off();
+  tellHandoff(el, false);
+  await within(el.executeJavaScript(`(() => { const b = document.getElementById("__agx_handoff__"); if (b) b.remove(); })()`), 1500);
+}
+
+/** Whether this guest has a handoff armed: what a panel that mounts mid-handoff
+ *  reads, since the mark it keeps in its own state did not survive the remount. */
+export function isHandoffArmed(el: object): boolean {
+  return handoffs.has(el);
+}
+
+/** The person pressed Take over during a handoff: it ends now, the banner (with
+ *  a Done that would no longer mean anything) comes down, and the waiting call
+ *  hears `takenover` instead of waiting out its timeout. */
+export async function takeOverHandoff(el: DrivableWebview): Promise<void> {
+  if (!handoffs.has(el)) return;
+  endedOn.set(el, "takenover");
+  await endHandoff(el);
+}
+
+/* Who is told when a guest's handoff is armed or ends: the panel, which lifts
+   its glass for it. The glass is the panel's, the handoff is here, and the two
+   met nowhere, so the glass stayed over the banner's Done. */
+type HandoffListener = (el: object, armed: boolean) => void;
+const handoffListeners = new Set<HandoffListener>();
+export function onHandoff(fn: HandoffListener): () => void {
+  handoffListeners.add(fn);
+  return () => { handoffListeners.delete(fn); };
+}
+const tellHandoff = (el: object, armed: boolean) => {
+  for (const fn of handoffListeners) { try { fn(el, armed); } catch { /* a listener's fault is its own */ } }
+};
 
 /** Whether `until` (a path from `/`, or an http url) holds for `url`: the
  *  PATHNAME equal to it or under it at a `/` boundary. A query never matches, so
@@ -1955,18 +2029,474 @@ function bannerScript(reason: string, nonce: string): string {
   })()`;
 }
 
-async function runHandoff(
-  el: DrivableWebview,
-  a: { reason?: string; until?: string; check?: boolean; waitMs?: number; cancel?: boolean },
-): Promise<{ ok: true; value: Record<string, unknown> } | { ok: false; error: string }> {
-  const info = (state: string) => ({ state, url: el.getURL(), title: el.getTitle() });
-  const end = async () => {
-    const st = handoffs.get(el);
-    if (!st) return;
-    handoffs.delete(el);
-    st.off();
-    await within(el.executeJavaScript(`(() => { const b = document.getElementById("__agx_handoff__"); if (b) b.remove(); })()`), 1500);
+/*
+ * Guide mode, the panel's half. The relay forwards `guide start|next|end` and
+ * `point`, each with `args.activity` for the bubble (.agx-tmp contract: shared
+ * GuideActivity). `point` starts the shell's isolated-world observer on the
+ * target, whose rect and the person's press come back through `onObserved`.
+ * `guide next` waits for the step's one answer (browserGuideBus.ts): a button,
+ * the click on the target, or the page changing. Nothing here runs in the
+ * page's own world.
+ */
+export interface GuideShell {
+  observe: (req: Record<string, unknown>) => Promise<{ ok: boolean; found?: boolean; error?: string; reason?: string }>;
+  onObserved: (fn: (ev: unknown) => void) => () => void;
+  /** `guide run`: POST /browser/guide/event, the one way a run's events reach the server. */
+  report?: (ev: GuideRunReport) => Promise<unknown>;
+}
+/** What the panel tells the server about a running plan: the person's hand, or a card button, tagged with the visit on the card. */
+export interface GuideRunReport { tab: string; event: string; visit?: number; url?: string; note?: string }
+let guideShell: GuideShell | null = null;
+let guideWires: Array<() => void> = [];
+/** The guest each guided tab was last pointed in, so Stop and end can take its observer down. */
+const guideGuests = new Map<string, number>();
+/** Each tab's current step id. The observer tags every report with the id of
+ *  the `point` that started it; a report of an older step (a late navigation,
+ *  a rect from the world being stopped) never answers or moves the new one. */
+const guideStepIds = new Map<string, number>();
+let guideStepSeq = 0;
+/** Each tab's `point --expect` CSS, checked once after the person's click. */
+const guideExpects = new Map<string, string>();
+/** Tabs a `guide run` is on, and the visit on the card: their events go to the server, not to a `guide next`. */
+const guideRuns = new Map<string, { visit: number }>();
+/** A single step's `--wait-*`: what answers its `guide next`. */
+const guideWaits = new Map<string, string>();
+/** Tabs a run was on, kept past a Stop so the card's Resume reaches the server. */
+const guideRunTabs = new Set<string>();
+
+function reportRun(tab: string, event: string, url?: string, note?: string): void {
+  const r = guideRuns.get(tab);
+  if (!guideShell?.report) return;
+  void guideShell.report({ tab, event, ...(r ? { visit: r.visit } : {}), ...(url ? { url } : {}), ...(note ? { note } : {}) }).catch(() => undefined);
+}
+
+/** How long a click is given to take effect (a checkbox toggles, a slow panel opens) before `expect` reads false. */
+export const GUIDE_EXPECT_MAX_MS = 3000;
+
+/** The panel hands the shell's observer in (desktop.ts); null takes the wiring down. */
+export function setGuideShell(shell: GuideShell | null): void {
+  for (const off of guideWires) off();
+  guideWires = [];
+  guideShell = shell;
+  if (!shell) return;
+  guideWires.push(shell.onObserved((raw) => {
+    let ev = raw as GuideEvent | null;
+    if (!ev || ev.kind !== "guide" || typeof ev.tab !== "string") return;
+    const { stepId, ...rest } = ev as GuideEvent & { stepId?: unknown };
+    if (stepId === undefined || stepId !== guideStepIds.get(ev.tab)) return;
+    ev = rest as GuideEvent;
+    const o = ev as GuideEvent & { input?: boolean; submitted?: boolean; gone?: { url?: string }; back?: boolean };
+    /* A run: every report goes to the server, which moves the plan on. */
+    if (guideRuns.has(ev.tab)) {
+      if (o.gone) { reportRun(ev.tab, "lost", o.gone.url); return; }
+      if (o.back) { reportRun(ev.tab, "found"); }
+      if (!o.input && !o.submitted) emitGuideEvent(ev);
+      if (ev.clicked) reportRun(ev.tab, "click");
+      else if (ev.navigated) reportRun(ev.tab, "navigated", ev.navigated.url);
+      else if (o.input) reportRun(ev.tab, "input");
+      else if (o.submitted) reportRun(ev.tab, "submit");
+      return;
+    }
+    if (o.gone || o.back) return;
+    const wait = guideWaits.get(ev.tab);
+    if (o.input || o.submitted) {
+      /* A single step answers its own wait only: typing is not a click's answer. */
+      if (o.input && wait === "input") deliverGuide(ev.tab, { event: "input" });
+      if (o.submitted && wait === "submit") deliverGuide(ev.tab, { event: "submit" });
+      return;
+    }
+    emitGuideEvent(ev);
+    /* Clicking a text box is not typing in it: an input or submit step waits on. */
+    if (ev.clicked && wait !== "input" && wait !== "submit") deliverGuide(ev.tab, { event: "click" });
+    else if (ev.navigated) deliverGuide(ev.tab, { event: "navigated", url: ev.navigated.url });
+  }));
+  guideWires.push(onGuideAnswer(({ tab, answer }) => {
+    /* Resume, and a Stop after the run ended, still go to the server: the Stop ends the guide and frees the tab. */
+    if (guideRuns.has(tab) || ((answer === "resume" || answer === "stop") && guideRunTabs.has(tab))) {
+      reportRun(tab, answer);
+      if (answer === "stop") { stopGuideObserver(tab); guideRuns.delete(tab); }
+      return;
+    }
+    if (answer === "resume") return;
+    deliverGuide(tab, { event: answer });
+    if (answer === "stop") stopGuideObserver(tab);
+  }));
+}
+
+function stopGuideObserver(tab: string): void {
+  const guestId = guideGuests.get(tab);
+  guideGuests.delete(tab);
+  guideStepIds.delete(tab);
+  guideExpects.delete(tab);
+  guideSuggests.delete(tab);
+  if (guestId !== undefined && guideShell) void guideShell.observe({ guestId, stop: true }).catch(() => undefined);
+}
+
+/** A locator as the observer looks it up: CSS, or a role and a name. Text, label and placeholder have no CSS; the bubble then says it cannot follow. */
+function observeSpec(raw: string): { selector?: string; role?: string; name?: string } | null {
+  const l = parseLocator(raw);
+  if ("invalid" in l) return null;
+  if ("css" in l) return { selector: l.css };
+  if (l.by === "role") return { role: l.role, ...(l.name ? { name: l.name } : {}) };
+  if (l.by === "testid") return { selector: `[data-testid=${JSON.stringify(l.value)}]` };
+  if (l.by === "placeholder") return { selector: `[placeholder=${JSON.stringify(l.value)}]` };
+  return null;
+}
+
+/*
+ * `point --suggest`, in the page. TEXT_FIELD names what kind of text field a
+ * node is ("input", "textarea", "editable"), or null for anything else: a
+ * button, a checkbox, a password, a disabled or read-only field. FIELD_EMPTY
+ * says whether it holds no text yet. PUT_DRAFT writes the draft into it the
+ * way a paste would (the native value setter, so a framework's controlled
+ * input hears it, then one input event) and leaves the caret at the end. It
+ * never presses a key, never submits the form, never clicks anything.
+ */
+export const TEXT_FIELD = `((n) => {
+  if (!n || n.nodeType !== 1) return null;
+  const tag = String(n.tagName || "").toLowerCase();
+  if (tag === "textarea") return n.disabled || n.readOnly ? null : "textarea";
+  if (tag === "input") {
+    const t = String(n.type || "text").toLowerCase();
+    if (!["text", "search", "email", "url", "tel"].includes(t)) return null;
+    return n.disabled || n.readOnly ? null : "input";
+  }
+  return n.isContentEditable ? "editable" : null;
+})`;
+/* The field a target stands for: the node itself, or, for a wrapper such as a
+   div[role=textbox] whose editable sits inside it (a rich composer, a custom
+   element whose textarea is in its open shadow root, or one in a same-origin
+   frame inside the wrapper), the first text field within. Null when there is
+   none. Light DOM first, then shadow roots and frames (ROOTS walks them in
+   that order); closed shadow roots and cross-origin frames are not reachable.
+   Measured: Reddit's Title is a faceplate-textarea-input whose textarea lives
+   in its shadow root, and the old walk answered "not a text field". */
+export const FIELD_OF = `((n) => {
+  const isField = ${TEXT_FIELD};
+  if (!n || n.nodeType !== 1) return null;
+  if (isField(n)) return n;
+  for (const f of (${ROOTS})(n)) {
+    const root = f.root;
+    if (!root || !root.querySelectorAll) continue;
+    if (f.in === "frame" && root.body && (root.designMode === "on" || root.body.isContentEditable)) return root.body;
+    for (const c of root.querySelectorAll("textarea, input, [contenteditable]")) if (isField(c)) return c;
+  }
+  return null;
+})`;
+/* A tag pointMatch left, wherever it is: the document, an open shadow root or
+   a same-origin frame. The field it names may live in any of them. */
+const DEEP_QUERY = `((sel) => {
+  const top = document.querySelector(sel);
+  if (top) return top;
+  for (const f of (${ROOTS})(document)) { const n = f.root.querySelector ? f.root.querySelector(sel) : null; if (n) return n; }
+  return null;
+})`;
+export const FIELD_EMPTY = `((n, kind) => String(kind === "editable" ? (n.innerText ?? n.textContent ?? "") : (n.value ?? "")).trim() === "")`;
+/* A draft as a plain-text paste lands in a rich editor: a blank line starts a
+   new paragraph, a single newline is a line break. One insertText with "\n"
+   in it is one paragraph on Reddit's editor, words glued at every break. */
+export const DRAFT_PIECES = `((text) => {
+  const paras = String(text).replace(/\\r\\n?/g, "\\n").replace(/^\\s*\\n|\\n\\s*$/g, "").split(/\\n[ \\t]*\\n\\s*/);
+  const out = [];
+  paras.forEach((p, i) => {
+    if (i) out.push({ op: "insertParagraph" });
+    p.split("\\n").forEach((line, j) => {
+      if (j) out.push({ op: "insertLineBreak" });
+      if (line) out.push({ op: "insertText", text: line });
+    });
+  });
+  return out;
+})`;
+export const PUT_DRAFT = `((n, kind, text) => {
+  n.focus();
+  if (kind === "editable") {
+    /* The field's own document: an editable in a frame selects and types in that frame. */
+    const doc = n.ownerDocument || document, win = (doc && doc.defaultView) || window;
+    const sel = win.getSelection && win.getSelection();
+    if (sel && doc.createRange) { const rg = doc.createRange(); rg.selectNodeContents(n); sel.removeAllRanges(); sel.addRange(rg); }
+    /* Text with no break goes in whole, as before; with breaks, paragraph by paragraph. */
+    const pieces = text.includes("\\n") ? (${DRAFT_PIECES})(text) : [{ op: "insertText", text }];
+    let ok = !!doc.execCommand;
+    for (const p of pieces) { if (!ok) break; ok = doc.execCommand(p.op, false, p.op === "insertText" ? p.text : undefined); }
+    if (!ok) { n.innerText = text; n.dispatchEvent(new Event("input", { bubbles: true })); }
+    return;
+  }
+  let proto = Object.getPrototypeOf(n), set = null;
+  while (proto && !set) { const d = Object.getOwnPropertyDescriptor(proto, "value"); set = d && d.set; proto = Object.getPrototypeOf(proto); }
+  if (set) set.call(n, text); else n.value = text;
+  /* One input event and no change: a change can submit on some pages. */
+  n.dispatchEvent(new Event("input", { bubbles: true }));
+  const end = String(n.value ?? "").length;
+  try { n.setSelectionRange && n.setSelectionRange(end, end); } catch (e) { /* email/url inputs have no selection */ }
+})`;
+
+const SUGGEST_REFUSAL = "point --suggest needs a text field: a textarea, a text input or a contenteditable. Point at the field itself";
+
+let pointTagSeq = 0;
+/** How many nodes a guide step's selector names on the page, by the same
+ *  FIND every verb uses, and the page's url for the refusal. With more than
+ *  one, the first on screen is tagged `data-agx-guide` so the observer rings
+ *  that one and not whichever comes first in the document. With `text`,
+ *  only the nodes whose label holds it count. With `suggest`,
+ *  that node must be a text field; it is tagged `data-agx-suggest` so the
+ *  person's insert finds the same one, and the answer says if it has text. */
+const POINT_RETRY_MS = 300;
+async function pointMatch(el: DrivableWebview, raw: string, text?: string, suggest = false): Promise<{ total: number; tag?: string; url: string; filled?: boolean; seen?: boolean } | { error: string }> {
+  const tag = `g${++pointTagSeq}`;
+  /* A page that cannot be read (mid-navigation, no guest yet) is total -1:
+     a run goes on (its watcher waits), a single point is refused. */
+  const v = await Promise.resolve().then(() => el.executeJavaScript(`(() => {
+    /* deep: a guide step's CSS reaches open shadow roots and same-origin
+       frames when the document has no match (Reddit's Title sits in one). */
+    const spec = Object.assign(${locatorLit(raw)}, { deep: true });
+    const r = ${FIND}(spec);
+    if (r.kind !== "found") return { error: r.message };
+    const want = ${jsLit(text ? text.toLowerCase().replace(/\p{White_Space}+/gu, " ") : "")};
+    const label = (n) => ((n.getAttribute && (n.getAttribute("aria-label") || n.getAttribute("title"))) || n.textContent || n.value || "").toLowerCase().replace(/\\s+/g, " ");
+    /* --text: only the nodes whose label holds it, so "2 comments" is told from "3 hours ago" on the same href. */
+    let nodes = [...r.all, ...r.hidden].filter((n) => !want || label(n).includes(want));
+    const onScreen = ${ON_SCREEN};
+    const seen0 = (n) => { try { return !!onScreen(n); } catch (e) { return !!n.isConnected; } };  /* a throw on a connected (cross-frame) node is not proof it is off screen; a detached node is gone */
+    let first = want && nodes.length ? (nodes.find(onScreen) || nodes[0]) : nodes.length > 1 ? nodes.find(onScreen) : undefined;
+    let field = null;
+    if (${suggest ? "true" : "false"}) {
+      /* The match that IS a text field, on screen first: Wikipedia has two
+         input[name=search], the first hidden; LinkedIn's div[role=textbox] in
+         the page is a shell and the editable one is in a frame, so with no
+         field among the page's matches every root is searched. */
+      const seen = (n) => { try { return onScreen(n); } catch (e) { return false; } };
+      const choose = (list) => {
+        const order = [...(first ? [first] : []), ...list.filter(seen), ...list];
+        const fields = order.map((n) => { const f = ${FIELD_OF}(n); return f && ${TEXT_FIELD}(f) ? { n, f } : null; }).filter(Boolean);
+        return fields.find((x) => seen(x.f)) || fields[0] || null;
+      };
+      let hit = choose(nodes);
+      if (!hit) {
+        const everywhere = ${FIND}(Object.assign(${locatorLit(raw)}, { deep: "all" }));
+        const more = everywhere.kind === "found" ? [...everywhere.all, ...everywhere.hidden].filter((n) => !want || label(n).includes(want)) : [];
+        hit = choose(more);
+        if (hit) nodes = more;
+      }
+      if (!hit) { const at = first || nodes[0]; return { notText: String((at && at.tagName) || "").toLowerCase() }; }
+      const kind = ${TEXT_FIELD}(hit.f);
+      /* The ring goes on the field itself, so the person sees where the draft lands. */
+      first = hit.f;
+      hit.f.setAttribute("data-agx-suggest", ${jsLit(tag)});
+      field = { filled: !${FIELD_EMPTY}(hit.f, kind) };
+    }
+    if (first) first.setAttribute("data-agx-guide", ${jsLit(tag)});
+    return { total: nodes.length, tagged: !!first, seen: nodes.some(seen0), url: location.href, field };
+  })()`)).catch(() => null) as { total?: unknown; tagged?: unknown; url?: unknown; error?: unknown; notText?: unknown; field?: { filled?: unknown } | null; seen?: unknown } | null;
+  if (!v || typeof v !== "object") return { total: -1, url: "" };
+  if (typeof v.error === "string") return { error: `point: ${v.error}` };
+  if (typeof v.notText === "string") return { error: `${SUGGEST_REFUSAL}; ${raw} is ${v.notText ? `a <${v.notText}>` : "not one"}` };
+  return {
+    total: typeof v.total === "number" ? v.total : -1, url: typeof v.url === "string" ? v.url : "",
+    ...(typeof v.seen === "boolean" ? { seen: v.seen } : {}),
+    ...(v.tagged === true ? { tag } : {}),
+    ...(v.field && typeof v.field === "object" ? { tag, filled: v.field.filled === true } : {}),
   };
+}
+
+/** Each tab's draft on the card now: the text, where it goes, and its step. */
+const guideSuggests = new Map<string, { text: string; selector: string; tag?: string; stepId: number | undefined }>();
+
+/**
+ * The person's click on "Insert suggestion" (or "Replace with suggestion").
+ * Only the card's button calls this; no ask, verb or event of the relay
+ * reaches it, so an agent cannot fill the field itself. A field that has
+ * text by now is written only with `replace` (the person said yes on the
+ * card); otherwise the answer is `filled` and the card asks. The webview gets
+ * focus first, so the caret lands in the field and the person can edit.
+ */
+export async function insertGuideSuggestion(el: DrivableWebview, tab: string, replace: boolean): Promise<{ ok: true; inserted: true } | { ok: true; filled: true } | { ok: false; error: string }> {
+  const s = guideSuggests.get(tab);
+  if (!s || (s.stepId !== undefined && s.stepId !== guideStepIds.get(tab))) return { ok: false, error: "This step is over" };
+  try { (el as unknown as { focus?: () => void }).focus?.(); } catch { /* not attached */ }
+  const v = await Promise.resolve().then(() => el.executeJavaScript(`(() => {
+    let n = ${s.tag ? `${DEEP_QUERY}(${jsLit(`[data-agx-suggest="${s.tag}"]`)})` : "null"};
+    if (!n) {
+      const r = ${FIND}(Object.assign(${locatorLit(s.selector)}, { deep: true }));
+      if (r.kind !== "found") return { gone: true };
+      const nodes = [...r.all, ...r.hidden];
+      n = nodes.find(${ON_SCREEN}) || nodes[0];
+    }
+    n = ${FIELD_OF}(n);
+    const kind = n ? ${TEXT_FIELD}(n) : null;
+    if (!kind) return { gone: true };
+    if (!${replace ? "true" : "false"} && !${FIELD_EMPTY}(n, kind)) return { filled: true };
+    ${PUT_DRAFT}(n, kind, ${jsLit(s.text)});
+    return { inserted: true };
+  })()`)).catch(() => null) as { inserted?: unknown; filled?: unknown; gone?: unknown } | null;
+  if (v?.filled === true) return { ok: true, filled: true };
+  if (v?.inserted !== true) return { ok: false, error: "The field is not on the page any more" };
+  /* The person's click filled the field: for a step that waits on input,
+     that is the input. The page's own observer never sees it (the draft is
+     written by script, not typed), so it is reported here. */
+  if (guideRuns.has(tab)) { reportRun(tab, "input"); return { ok: true, inserted: true }; }
+  noteGuide(tab, { event: "suggest-inserted" });
+  if (guideWaits.get(tab) === "input") deliverGuide(tab, { event: "input" });
+  return { ok: true, inserted: true };
+}
+
+/**
+ * The person's "Suggest another" on a draft card, with their optional one-line
+ * note ("shorter"): news for the agent (a run's server, or the waiting
+ * `guide next`), which answers with `guide say --suggest`. Only the card's
+ * button calls this. False when the card has no draft any more.
+ */
+export function requestGuideSuggestion(tab: string, note: string): boolean {
+  if (!guideSuggests.has(tab)) return false;
+  const line = note.replace(/\p{White_Space}+/gu, " ").trim().slice(0, 200);
+  if (guideRuns.has(tab)) reportRun(tab, "regenerate", undefined, line || undefined);
+  else noteGuide(tab, { event: "regenerate", ...(line ? { note: line } : {}) });
+  return true;
+}
+
+export async function runGuide(el: DrivableWebview, ask: BrowserAskFrame): Promise<{ ok: true; value: Record<string, unknown> } | { ok: false; error: string }> {
+  const a = ask.args as Record<string, unknown>;
+  const act = (a.activity && typeof a.activity === "object" ? a.activity : null) as GuideEvent | null;
+  const tab = String(act?.tab ?? a.page ?? a.atTab ?? "");
+  if (!tab) return { ok: false, error: "guide: no tab named" };
+  if (ask.op === "point") {
+    /* Resolved before anything moves: a selector that matches nothing is
+       refused, and the step before keeps its card, rather than a card saying
+       "click the highlighted spot" over a page with nothing highlighted. */
+    const raw = String(a.selector ?? "");
+    const draft = typeof act?.suggest === "string" && act.suggest ? act.suggest : typeof a.suggest === "string" && a.suggest ? a.suggest : undefined;
+    const text = typeof a.text === "string" && a.text ? a.text : undefined;
+    const run = a.run && typeof a.run === "object" && typeof (a.run as { visit?: unknown }).visit === "number" ? a.run as { visit: number } : null;
+    /* A run's new step: the step before is over before anything is looked
+       up, so none of its reports can carry this step's visit. The visit is
+       recorded only once this step is the one on the card. */
+    if (run) { guideStepIds.delete(tab); guideSuggests.delete(tab); }
+    const mark = () => {
+      if (run) { guideRuns.set(tab, { visit: run.visit }); guideRunTabs.add(tab); }
+      else { guideRuns.delete(tab); guideRunTabs.delete(tab); }
+      if (typeof a.wait === "string") guideWaits.set(tab, a.wait); else guideWaits.delete(tab);
+    };
+    /* A run's step with no target: the card only, nothing to ring. A nav
+       step still needs the navigation, so a watcher with nothing to find
+       stays on for it; an OK step needs no watcher. */
+    if (run && !raw) {
+      mark();
+      if (act) emitGuideEvent({ ...act, tab });
+      let navGuest: number | undefined;
+      try { navGuest = el.getWebContentsId?.(); } catch { /* not attached */ }
+      if (a.wait !== "nav" || !guideShell || navGuest === undefined) { stopGuideObserver(tab); return { ok: true, value: { followed: false } }; }
+      const navId = ++guideStepSeq;
+      guideStepIds.set(tab, navId);
+      guideGuests.set(tab, navGuest);
+      const r = await guideShell.observe({ guestId: navGuest, tab, stepId: navId, wait: "nav", ...(act?.step ? { step: act.step } : {}) })
+        .catch((e: unknown): { ok: boolean; error?: string } => ({ ok: false, error: String(e) }));
+      return { ok: true, value: { followed: false, ...(r.ok ? { watching: "nav" } : r.error ? { reason: r.error } : {}) } };
+    }
+    let m = await pointMatch(el, raw, text, draft !== undefined);
+    /* Right after navigation, or while a guest loads, the page cannot be read yet: one more look before refusing. */
+    if (!("error" in m) && m.total === -1 && !run) { await new Promise<void>((r) => setTimeout(r, POINT_RETRY_MS)); m = await pointMatch(el, raw, text, draft !== undefined); }
+    if ("error" in m) { if (run) stopGuideObserver(tab); return { ok: false, error: m.error }; }
+    /* A run's target not on the page yet (the page after a click still
+       loading) is not lost: the watcher waits for it and says gone only
+       after 2 s with none. A single point with no match is refused. */
+    if (m.total === 0 && !run) return { ok: false, error: `no match for ${raw}${text ? ` with text "${text}"` : ""} on ${m.url || "this page"}: observe again and point at an id from it` };
+    /* Never a card with no ring: an unreadable page, or a match nobody can see, is refused. */
+    if (m.total === -1 && !run) return { ok: false, error: "point: the page could not be read: observe again" };
+    if (m.total > 0 && m.seen === false && !run && draft === undefined) return { ok: false, error: `point: ${raw} matched but is not on screen (scrolled out or hidden): observe again` };
+    mark();
+    newGuideStep(tab);
+    /* The step before is over. Its id goes now, so nothing it still reports
+       moves or answers this step; its observer is taken down on every path
+       that does not start a new one (a new start() retires the old world
+       itself, and a stop sent beside it could remove the new binding). */
+    guideStepIds.delete(tab);
+    guideSuggests.delete(tab);
+    if (typeof a.expect === "string" && a.expect) guideExpects.set(tab, a.expect); else guideExpects.delete(tab);
+    /* The person ended the guide while the agent was thinking: no new
+       observer on a guide that is over. The held Stop stays for guide next. */
+    const ended = heldGuideEnd(tab);
+    if (ended) { stopGuideObserver(tab); return { ok: true, value: { followed: false, event: ended.event } }; }
+    if (act) emitGuideEvent({ ...act, tab, ...(draft !== undefined && m.filled ? { suggestFilled: true } : {}) });
+    let guestId: number | undefined;
+    try { guestId = el.getWebContentsId?.(); } catch { /* not attached */ }
+    /* Several match: the ring goes on the first one on screen, tagged by
+       pointMatch, and the answer says how many there were. A draft's ring
+       goes on the field pointMatch chose, which may sit inside the match. */
+    /* The observer finds the node again after a navigation by the selector and the text, not by the tag. */
+    const base = observeSpec(raw);
+    /* No match yet on a run: no tag to follow, so the plan's selector (and its text) finds it when it comes. */
+    const spec = run && m.total <= 0 ? (base ? { again: base, ...(text ? { text } : {}) } : null)
+      : (m.total > 1 || text || draft !== undefined) && m.tag ? { selector: `[data-agx-guide="${m.tag}"]`, ...(run ? { again: base, ...(text ? { text } : {}) } : {}) } : base;
+    const many = m.total > 1 ? { matched: m.total } : {};
+    const keep = (stepId: number | undefined) => {
+      if (draft !== undefined) guideSuggests.set(tab, { text: draft, selector: raw, ...(m.tag ? { tag: m.tag } : {}), stepId });
+    };
+    if (!guideShell || guestId === undefined || !spec) { stopGuideObserver(tab); keep(undefined); return { ok: true, value: { followed: false, ...many } }; }
+    const stepId = ++guideStepSeq;
+    guideStepIds.set(tab, stepId);
+    keep(stepId);
+    guideGuests.set(tab, guestId);
+    const r = await guideShell.observe({
+      guestId, tab, stepId, ...spec, waitClick: a.waitClick === true,
+      ...(typeof a.wait === "string" ? { wait: a.wait } : {}), ...(run ? { watchLost: true } : {}),
+      ...(act?.step ? { step: act.step } : {}),
+    }).catch((e: unknown): { ok: boolean; found?: boolean; error?: string; reason?: string } => ({ ok: false, error: String(e) }));
+    /* Found but not visible (display:none, zero size, a closed <details>): no
+       ring can be drawn, so the agent hears followed:false and why. */
+    if (r.ok && r.reason) { stopGuideObserver(tab); keep(undefined); return { ok: true, value: { followed: false, reason: r.reason, ...many } }; }
+    return { ok: true, value: { followed: r.ok && r.found === true, ...(!r.ok && r.error ? { reason: r.error } : {}), ...many } };
+  }
+  const action = String(a.action ?? "");
+  if (action === "start") {
+    clearGuideTab(tab);
+    if (act) emitGuideEvent({ ...act, tab });
+    return { ok: true, value: { tab } };
+  }
+  /* guide say: the card on screen gets the agent's new words (or a run's lost sentence). Text, never markup. */
+  if (action === "say") {
+    /* A new draft (the answer to "Suggest another") replaces the old one the card's insert writes. */
+    const cur = guideSuggests.get(tab);
+    if (cur && typeof act?.suggest === "string" && act.suggest) guideSuggests.set(tab, { ...cur, text: act.suggest });
+    if (act) emitGuideEvent({ ...act, tab });
+    return { ok: true, value: { tab } };
+  }
+  if (action === "next") {
+    const ms = typeof a.waitMs === "number" ? a.waitMs : 25_000;
+    const n = await waitGuideNext(tab, Math.min(25_000, ms));
+    if (!n) return { ok: true, value: { event: null } };
+    const value: Record<string, unknown> = { event: n.event, ...(n.url ? { url: n.url } : {}), ...(n.note ? { note: n.note } : {}) };
+    /* The press is reported on pointerdown, before the click lands, and a
+       slow page takes longer still: read until it matches, for at most
+       GUIDE_EXPECT_MAX_MS, then false. Only a querySelector: a read, no act. */
+    const css = n.event === "click" ? guideExpects.get(tab) : undefined;
+    if (css) {
+      guideExpects.delete(tab);
+      const stop = Date.now() + GUIDE_EXPECT_MAX_MS;
+      let hit: unknown = null;
+      for (;;) {
+        hit = await within(el.executeJavaScript(`(() => { try { return !!document.querySelector(${jsLit(css)}); } catch (e) { return null; } })()`), 1500).catch(() => null);
+        if (hit === true || Date.now() >= stop) break;
+        await new Promise((r) => setTimeout(r, 150)); // loop-ok: bounded wait for one step's expect
+      }
+      if (typeof hit === "boolean") value.expected = hit;
+    }
+    return { ok: true, value };
+  }
+  if (action === "end") {
+    guideRuns.delete(tab); guideWaits.delete(tab); guideRunTabs.delete(tab);
+    stopGuideObserver(tab);
+    clearGuideTab(tab);
+    emitGuideEvent(act ? { ...act, tab } : { kind: "guide", tab, phase: "end" });
+    return { ok: true, value: { tab } };
+  }
+  return { ok: false, error: 'guide takes action: "start", "say", "next" or "end"' };
+}
+
+export async function runHandoff(
+  el: DrivableWebview,
+  a: { reason?: string; until?: string; check?: boolean; waitMs?: number; cancel?: boolean; timeoutMs?: number },
+): Promise<{ ok: true; value: Record<string, unknown> } | { ok: false; error: string }> {
+  const info = (state: string) => ({ state, url: el.getURL(), title: el.getTitle(), ...(state === "takenover" ? { takenOver: true } : {}) });
+  const end = () => endHandoff(el);
   if (a.cancel) { await end(); return { ok: true, value: info("cancelled") }; }
   if (a.reason) {
     await end();
@@ -1975,19 +2505,35 @@ async function runHandoff(
       return { ok: false, error: `until ${until} is already true for this page — the handoff would end before the person had done anything` };
     }
     const nonce = crypto.randomUUID();
+    endedOn.delete(el);
     const st: HandoffState = { nonce, until, done: false, navigated: false, off: () => {} };
     const onMsg = (e: Event) => { if ((e as unknown as { message?: string }).message === "agx-handoff-done:" + nonce) st.done = true; };
     const onNav = () => { st.navigated = true; };
     el.addEventListener("console-message", onMsg);
     el.addEventListener("did-navigate", onNav);
-    st.off = () => { el.removeEventListener("console-message", onMsg); el.removeEventListener("did-navigate", onNav); };
+    /* The deadline lives HERE, beside the banner, not only in the caller: a
+       CLI that is killed or loses its socket used to leave the banner up, the
+       handoff armed and the glass lifted until somebody pressed Done. At the
+       deadline the banner comes down and the glass returns; a check still
+       waiting reads `timeout`. */
+    const ms = Math.min(Number(a.timeoutMs), 60 * 60_000); // an hour at most: the value comes from the caller, and setTimeout fires at once past 2^31 ms
+    const timer = Number.isFinite(ms) && ms > 0
+      ? setTimeout(() => { if (handoffs.get(el) === st) { endedOn.set(el, "timeout"); void end(); } }, ms) // loop-ok: one deadline per handoff
+      : null;
+    st.off = () => { if (timer) clearTimeout(timer); el.removeEventListener("console-message", onMsg); el.removeEventListener("did-navigate", onNav); };
     handoffs.set(el, st);
+    // Before the banner shows: a Done drawn under the glass cannot be pressed.
+    tellHandoff(el, true);
     const drew = await within(el.executeJavaScript(bannerScript(a.reason, nonce)), 5000);
     if (drew !== true) { await end(); return { ok: false, error: "could not put the banner on this page" }; }
     return { ok: true, value: info("armed") };
   }
   const st = handoffs.get(el);
-  if (!st) return { ok: true, value: info("none") };
+  if (!st) {
+    const was = endedOn.get(el);
+    endedOn.delete(el);
+    return { ok: true, value: info(was ?? "none") };
+  }
   const stop = Date.now() + Math.max(0, Math.min(25_000, Number(a.waitMs ?? 0)));
   for (;;) {
     let state: string | null = null;
@@ -1998,6 +2544,12 @@ async function runHandoff(
       if (hit === true) state = "condition";
     }
     if (!state && st.navigated) state = "navigated";
+    // The deadline fired while this check waited: say so rather than "none" next time.
+    if (!state && handoffs.get(el) !== st) {
+      const was = endedOn.get(el);
+      endedOn.delete(el);
+      return { ok: true, value: info(was ?? "cancelled") };
+    }
     if (state) { await end(); return { ok: true, value: info(state) }; }
     if (Date.now() >= stop) return { ok: true, value: info("waiting") };
     await new Promise((r) => setTimeout(r, 200));
@@ -2588,7 +3140,7 @@ async function runVerb(
       case "open": {
         const url = String(ask.args.url ?? "");
         const r = await navigateTo(el, url, (err) => withEgressReason(err, url, applySessionSettings));
-        return r.ok ? { ok: true, value: { url: r.url, title: el.getTitle() } } : r;
+        return r.ok ? { ok: true, value: { url: r.url, title: await pageTitle(el) } } : r;
       }
 
       case "tools": {
@@ -2624,8 +3176,12 @@ async function runVerb(
       case "a11y":
         return { ok: true, value: await el.executeJavaScript(A11Y_SCRIPT) };
 
+      case "guide":
+      case "point":
+        return await runGuide(el, ask);
+
       case "handoff":
-        return await runHandoff(el, ask.args as { reason?: string; until?: string; check?: boolean; waitMs?: number; cancel?: boolean });
+        return await runHandoff(el, ask.args as { reason?: string; until?: string; check?: boolean; waitMs?: number; cancel?: boolean; timeoutMs?: number });
 
       case "dialog": {
         const a = ask.args as { accept?: boolean; dismiss?: boolean; text?: string; always?: boolean };
@@ -2923,6 +3479,13 @@ async function runVerb(
                return row;
              });
              const loose = Array.from(document.querySelectorAll("input,select,textarea")).filter((n) => !n.form && !isHidden(n)).slice(0, ${MAX_FIELDS}).map(field);
+             /* A checkbox drawn by the app (role=checkbox/switch/radio, aria-checked) is
+                no <input>: listed with its checked state, so a guided agent can read
+                what the person ticked without an act. */
+             for (const n of Array.from(document.querySelectorAll('[role=checkbox],[role=switch],[role=radio]')).slice(0, ${MAX_FIELDS})) {
+               if (loose.length >= ${MAX_FIELDS} || /^(input|select|textarea)$/i.test(n.tagName)) continue;
+               loose.push({ e: stamp(n), name: "", type: String(n.getAttribute("role")), label: label(n) || clean(n.textContent), checked: n.getAttribute("aria-checked") === "true" });
+             }
              if (window.__agxSeq >= firstId) (window.__agxRanges = window.__agxRanges || []).push([firstId, window.__agxSeq]);
              return { url: location.href, title: document.title, forms, loose, idSeq: window.__agxSeq };
            })()`,
@@ -2991,6 +3554,13 @@ async function runVerb(
         // WHAT is wrong rather than landing on the wrong thing in silence.
         const before = el.getURL();
         const watch = watchNavigation(el);
+        /* A click on a file input must not open the OS dialog on the person's
+           screen: intercept for this click only (limit: see fileChooserNote). */
+        const chooser = await cdp("Page.enable", {}).then(() => cdp("Page.setInterceptFileChooserDialog", { enabled: true })).then((r) => r.ok, () => false);
+        /* No drain of the event buffer here: it also holds what other verbs
+           buffered. Only events from this click on are read, by timestamp. */
+        const clickedAt = Date.now();
+        const releaseChooser = () => chooser ? cdp("Page.setInterceptFileChooserDialog", { enabled: false }).catch(() => undefined) : Promise.resolve();
         /* Trusted first: the gate, then a real press at the element's centre
            through the shell, confirmed by the pointerdown the page receives.
            Only when the shell could not send does PRESS run in the page —
@@ -3011,9 +3581,10 @@ async function runVerb(
           if (via.sent) return { ...f, trusted: true, ...unconfirmed(via) };
           const pressed = await el.executeJavaScript(resolveOne(sel, `${PRESS}; return { kind: "ok" };`, false, true), true) as { kind: string } | boolean;
           return pressed && (pressed as { kind: string }).kind === "ok" ? { ...f, trusted: false } : pressed;
-        }).catch((err: unknown) => { watch.dispose(); throw err; }) as { kind: string; reason?: string; t0?: number; trusted?: boolean } | boolean;
+        }).catch(async (err: unknown) => { watch.dispose(); await releaseChooser(); throw err; }) as { kind: string; reason?: string; t0?: number; trusted?: boolean } | boolean;
         if (!hit || (hit as { kind: string }).kind !== "ok") {
           watch.dispose();
+          await releaseChooser();
           return { ok: false, error: actionError(String(ask.args.selector ?? ""), hit as never) };
         }
         // Then what it caused, and where we are now. A click is the commonest
@@ -3024,11 +3595,19 @@ async function runVerb(
         // `settleAfterAct` for how long "after" is.
         if ((hit as { confirmed?: boolean }).confirmed === false) {
           watch.dispose();
+          await releaseChooser();
           return notArrived(`the click on ${String(ask.args.selector ?? "")}`);
         }
         const t0 = Number((hit as { t0?: number }).t0) || Date.now();
-        const effect = await settleAfterAct(el, watch, before, t0);
-        return { ok: true, value: { clicked: ask.args.selector, trusted: (hit as { trusted?: boolean }).trusted === true, url: el.getURL(), title: el.getTitle(), effect } };
+        /* try/finally: if settling or reading the events throws, interception
+           would stay on and the person's own file dialogs would never open. */
+        let effect: Awaited<ReturnType<typeof settleAfterAct>>;
+        let asked: ReturnType<typeof fileChooserNote> | null = null;
+        try {
+          effect = await settleAfterAct(el, watch, before, t0);
+          asked = chooser ? fileChooserNote((await cdpEvents().catch(() => [])).filter((e) => e.at >= clickedAt), String(ask.args.selector ?? "")) : null;
+        } finally { await releaseChooser(); }
+        return { ok: true, value: { clicked: ask.args.selector, trusted: (hit as { trusted?: boolean }).trusted === true, url: el.getURL(), title: el.getTitle(), effect, ...(asked ? { fileChooser: asked } : {}) } };
       }
 
       case "dblclick":
@@ -4732,7 +5311,7 @@ async function runVerb(
       case "reload": {
         const hard = ask.args.bypassCache !== false;
         await reloadAndSettle(el, hard);
-        return { ok: true, value: { url: el.getURL(), bypassedCache: hard } };
+        return { ok: true, value: { url: el.getURL(), title: await pageTitle(el), bypassedCache: hard } };
       }
       case "cookies": {
         /* A set goes through the network stack, not the page: measured in

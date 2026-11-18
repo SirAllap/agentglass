@@ -31,6 +31,8 @@ const STEPS: JiraSteps = {
   handoff: { enabled: true, blocks: [{ type: "move", statusNames: ["Peer check"] }, { type: "link" }] },
   review: off,
   merge: { enabled: true, blocks: [{ type: "move", statusNames: ["Shipped"] }] },
+  people: off,
+  note: off,
 };
 const view = (o: Partial<JiraViewProps> = {}) =>
   renderToStaticMarkup(React.createElement(JiraSettingsView, {
@@ -41,18 +43,15 @@ const view = (o: Partial<JiraViewProps> = {}) =>
 const asSpaces = (u: JiraUnit[]): MapSpace[] => u.filter((x) => x.counted !== false).map((x) => ({ id: x.id, name: x.name, statuses: x.statuses }));
 
 describe("the Jira page, drawn from handed-in settings", () => {
-  test("write permissions: four kinds, each its own switch bound to its setting, and a kind that is off draws off", () => {
+  test("the write switches moved to Permissions > Changes outside: Jira keeps a link row, no second switch", () => {
     const html = view({ status: { ...STATUS, writeKinds: { move: true, comment: false, link: true, assign: true } } });
-    for (const k of ["move", "comment", "link", "assign"]) expect(html).toContain(`data-setting-id="jira.writes.${k}"`);
-    for (const t of ["Move cards between steps", "Comment on a card", "Link a pull request to its card", "Assign a person"]) expect(html).toContain(t);
-    // Three on, one off: the switches say so by aria-checked, in the order the page lists them.
-    const row = (id: string) => html.match(new RegExp(`<button[^>]*data-setting-id="${id.replace(/\./g, "\\.")}"[^>]*>`))?.[0].match(/aria-checked="(true|false)"/)?.[1];
-    expect(["move", "comment", "link", "assign"].map((k) => row(`jira.writes.${k}`))).toEqual(["true", "false", "true", "true"]);
+    expect(html).not.toContain("data-setting-id=\"jira.writes");
+    expect(html).toContain("Permissions › Changes outside");
   });
 
   test("it has the cards the plan names, and no per-project hand-off card", () => {
     const html = view();
-    for (const t of ["Changes in Jira", "What we found", "Workflow map", "Where this shows up", "Advanced", "Saved views and folders", "Write permissions", "Disconnect"]) expect(html).toContain(t);
+    for (const t of ["Changes in Jira", "What we found", "Workflow map", "Where this shows up", "Advanced", "Saved views and folders", "Disconnect"]) expect(html).toContain(t);
     expect(html).not.toContain("QA hand-off");
   });
 
@@ -70,15 +69,19 @@ describe("the Jira page, drawn from handed-in settings", () => {
     const html = view();
     expect(html).toContain("Button on a pull request");
     expect(html).toContain("Option in the merge dialog");
-    expect(html).not.toContain("Item in the review menu");
     expect(html).toContain("Link the pull request on the card");
   });
 
-  test("the review step is called what it is on a Jira card: a button, not an item in a menu", () => {
+  test("the review step keeps the one title every tracker gives it, and Jira draws it as a button on the card", () => {
     const html = view({ steps: { ...STEPS, review: { enabled: true, blocks: [{ type: "move", statusNames: ["Peer check"] }] } } });
-    expect(html).toContain("Review button on a pull request");
-    expect(html).not.toContain("Item in the review menu");
-    expect(html).not.toContain("Review menu");
+    expect(html).toContain("Review step on a pull request");
+    /* The blurb is the shared one, so it names both places; the line under the title says which one this site gets. */
+    expect(html).toContain("An item in the review menu, or a Review button");
+    expect(html).toContain("The Review button in a pull request’s card block");
+  });
+
+  test("the map offers the one press that copies ClickUp's steps", () => {
+    expect(view()).toContain("Copy steps from ClickUp");
   });
 
   test("a step's status is covered where the site has it, and the page says where it is missing", () => {
@@ -89,14 +92,14 @@ describe("the Jira page, drawn from handed-in settings", () => {
   });
 
   test("writes off says read-only; writes on says the steps can act", () => {
-    expect(view({ writes: false })).toContain("agentglass only reads");
+    expect(view({ writes: false })).toContain("Read-only. Turn it on at Permissions");
     const on = view({ writes: true });
-    expect(on).toContain("Only the steps below can change a card");
+    expect(on).toContain("On. Set on Permissions");
     expect(on).toContain("data-guard=\"on\"");
   });
 
   test("no steps: the map is empty and offers Add a step; nothing is added for the person", () => {
-    const html = view({ steps: { handoff: off, review: off, merge: off } });
+    const html = view({ steps: { handoff: off, review: off, merge: off, people: off, note: off } });
     expect(html).toContain("Add a step");
     expect(html).not.toContain("data-press=");
   });
@@ -119,17 +122,18 @@ describe("the Jira page, drawn from handed-in settings", () => {
 });
 
 describe("Jira's steps as the map reads them", () => {
-  test("kinds are the three places and no reviewer list or note, which are ClickUp's own", () => {
-    expect(JIRA.kinds).toEqual(["move", "menu", "merge"]);
+  test("kinds are every place a step can show, the reviewer list and the note included", () => {
+    expect(JIRA.kinds).toEqual(["move", "menu", "merge", "people", "note"]);
     expect(jiraSteps(STEPS).map((s) => s.kind)).toEqual(["move", "merge"]);
     expect(jiraSteps(STEPS)[0]).toMatchObject({ status: "Peer check", implicit: false });
+    expect(jiraSteps({ ...STEPS, people: { enabled: true, blocks: [] }, note: { enabled: true, blocks: [] } }).map((s) => s.kind)).toEqual(["move", "merge", "people", "note"]);
   });
 
   test("adding, editing and removing send the patch the server's save takes, by place", () => {
     expect(jiraAdd("menu")).toEqual({ review: { enabled: true, blocks: [] } });
     expect(jiraBlocks("move", [{ type: "link" }])).toEqual({ handoff: { blocks: [{ type: "link" }] } });
     expect(jiraRemove("merge")).toEqual({ merge: { enabled: false, blocks: [] } });
-    expect(jiraAdd("people")).toEqual({});
+    expect(jiraAdd("people")).toEqual({ people: { enabled: true } });
     // A name every object has is not a place a step can be.
     expect(jiraAdd("toString" as never)).toEqual({});
     expect(jiraRemove("constructor" as never)).toEqual({});
@@ -168,8 +172,8 @@ describe("the page is in the settings index", () => {
   });
   test("the settings on it are defs an agent can read, bound to its row; the connection and the switch are not", () => {
     expect(rows.find((r) => r.settingId === "jira.statusUnits.counted")?.label).toBe("Projects that count");
-    expect(reg.SETTING_DEFS.filter((d) => d.page === "jira").map((d) => d.id)).toEqual(["jira.statusUnits.counted", "jira.tree.shapes"]);
-    expect(reg.isMigrated("jira", "")).toBe(true);
+    expect(reg.SETTING_DEFS.filter((d) => d.page === "jira").map((d) => d.id)).toEqual(["jira.statusUnits.counted", "jira.tree.shapes", "jira.syncFavourites", "jira.board.confirmMoves"]);
+    expect(reg.isMigrated("jira", "Connection")).toBe(true);
   });
 });
 

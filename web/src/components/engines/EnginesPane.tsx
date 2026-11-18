@@ -52,7 +52,7 @@ function Check({ c }: { c: TileCheck }) {
     <div className="agx-ck" data-state={c.state}>
       <span aria-hidden className="agx-ck-i">{c.state === "ok" ? <DoneIcon size={ICON.sm} /> : c.state === "warn" ? <WarningIcon size={ICON.sm} /> : <MinusIcon size={ICON.sm} />}</span>
       <span>{c.label}</span>
-      <em title={c.value}>{c.value}</em>
+      <em data-tip={c.value}>{c.value}</em>
     </div>
   );
 }
@@ -256,7 +256,7 @@ export function EnginesPane() {
   const rows = providers.map((p) => ({ p, e: readiness(p) }));
   const counts = engineCounts(rows.map((r) => engineState(r.e)));
   const needs = rows.filter((r) => !["ready", "checking", "missing"].includes(engineState(r.e)));
-  const [view, setView] = useState<"all" | "ready" | "needs" | "absent">("all");
+  const [view, setView] = useState<"installed" | "all">("all");
   /* The "Needs you" filter, the tiles' badges, the header chip and the nav mark are the same count. */
   useReportNeeds("engines", report && needs.length ? { count: needs.length, title: `${needs.length === 1 ? needs[0]!.p.title : `${needs.length} engines`} ${needs.length === 1 ? "needs" : "need"} sign-in or setup` } : null);
   useReportHead("engines", report ? { chips: [
@@ -266,7 +266,7 @@ export function EnginesPane() {
   ] } : null);
   const shown = rows.filter((r) => {
     const s = engineState(r.e);
-    return view === "all" || (view === "ready" ? s === "ready" : view === "needs" ? needs.includes(r) : s === "missing");
+    return view === "all" || s !== "missing";
   });
 
   return (
@@ -284,10 +284,8 @@ export function EnginesPane() {
       <div className="agx-tiles-bar">
         <Segmented<typeof view> track label="Show engines" value={view} onChange={setView}
           options={[
+            { id: "installed", label: `Installed ${counts.all - counts.absent}` },
             { id: "all", label: `All ${counts.all}` },
-            { id: "ready", label: `Ready ${counts.ready}` },
-            { id: "needs", label: `Needs you ${counts.needs}` },
-            { id: "absent", label: `Not installed ${counts.absent}` },
           ]} />
         <span className="flex-1" />
         <Button onClick={() => load(true)}><IconLabel icon={<SearchIcon size={ICON.xs} />}>Rescan this machine</IconLabel></Button>
@@ -303,6 +301,12 @@ export function EnginesPane() {
         {view === "all" && <AddCli />}
       </div>
       {!shown.length && <EmptyState>Nothing in this state.</EmptyState>}
+
+      <SettingsCard title="Elsewhere">
+        <SettingRow agentExempt label="Usage key for OpenCode Go" hint="Set on Usage & budgets." onClick={() => openSettings("budgets")} />
+        <SettingRow agentExempt label="Worker CLIs and models" hint="What each role uses." onClick={() => openSettings("workers")} />
+        <SettingRow agentExempt label="Extra flags per engine" hint="Set on Permissions." onClick={() => openSettings("perm")} />
+      </SettingsCard>
 
       <p className="agx-tiles-host">
         <InfoIcon size={ICON.sm} />

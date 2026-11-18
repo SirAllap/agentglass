@@ -39,7 +39,7 @@ export function MiniGraph({ row, selected }: { row?: GraphRow; selected?: boolea
       }} />
       {m.hidden > 0 && (
         <span className="absolute right-0 top-1/2 -translate-y-1/2 text-[9px] leading-none" style={{ color: "var(--text2)" }}
-          title={`${m.hidden} more lane${m.hidden === 1 ? "" : "s"} in this row`}>+{m.hidden}</span>
+          data-tip={`${m.hidden} more lane${m.hidden === 1 ? "" : "s"} in this row`}>+{m.hidden}</span>
       )}
     </span>
   );

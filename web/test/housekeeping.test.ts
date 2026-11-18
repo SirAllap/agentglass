@@ -1,7 +1,7 @@
 // The Lantern's Housekeeping rows: one row per pull request, changed in place,
 // calm (no "needs you"), and nothing for a blocked or empty one.
 import { describe, expect, test } from "bun:test";
-import { housekeepingRows, whenWord, type AutoEntry } from "../src/lib/housekeeping.ts";
+import { autoJustCleaned, autoNote, housekeepingRows, undoableRun, whenWord, type AutoEntry } from "../src/lib/housekeeping.ts";
 
 const NOW = Date.UTC(2026, 9, 29, 12, 0, 0);
 const base: AutoEntry = {
@@ -48,6 +48,26 @@ describe("housekeepingRows", () => {
 
   test("whenWord", () => {
     expect([0, 90_000, 7_200_000, 100_000_000, 400_000_000].map((ms) => whenWord(NOW - ms, NOW))).toEqual(["just now", "1 min ago", "2 h ago", "yesterday", "4 days ago"]);
+  });
+
+  test("a run that just finished is announced once, by the read that saw it finish", () => {
+    const cleaning = { ...base, state: "cleaning" as const, ended_at: null };
+    expect(autoJustCleaned([cleaning], [base])).toEqual([base]);
+    // Nothing before the first read: history is not news.
+    expect(autoJustCleaned([], [base])).toEqual([]);
+    expect(autoJustCleaned([base], [base])).toEqual([]);
+    expect(autoJustCleaned([cleaning], [{ ...base, state: "failed" }])).toEqual([]);
+    // A burst is the newest run; the rest are rows of the Lantern.
+    const older = { ...base, pr: 1, ended_at: NOW - 300_000 }, newer = { ...base, pr: 2, ended_at: NOW };
+    expect(autoJustCleaned([{ ...older, state: "cleaning" }, { ...newer, state: "cleaning" }], [older, newer]).map((e) => e.pr)).toEqual([2, 1]);
+  });
+
+  test("the note is the run's, with what it removed; Undo only for the briefs it moved", () => {
+    const moved = { ...base, items: [{ kind: "brief", target: "/b/ORBIT-1042-brief.md", status: "done" as const, detail: "moved to /b/archive/ORBIT-1042-brief.md" }] };
+    expect(autoNote(moved)).toEqual({ key: "/code/orbit#322", text: "Cleaned ORBIT-1042 · 6.2 GB freed", tone: "ok", lines: ["Removed: /b/ORBIT-1042-brief.md"] });
+    expect(undoableRun(moved)).toBe(true);
+    expect(undoableRun({ ...base, items: [{ kind: "worktree", target: "/w", status: "done", detail: "" }] })).toBe(false);
+    expect(undoableRun({ ...moved, state: "cleaning" })).toBe(false);
   });
 });
 

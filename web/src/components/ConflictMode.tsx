@@ -25,14 +25,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api.ts";
 import { bandLabels, carriedLine, opNoun, stepLabel } from "../lib/conflictBrief.ts";
+import { abandonLost, resolvedFiles, conflictQuestion, conflictSquares, nextStep, placesLabel, settledLine, type ConflictRow } from "../lib/gitDangerModal.ts";
 import { reviewRows } from "../lib/mergeReview.ts";
 import type {
   BlockChoice, ConflictBlock, ConflictFile, GitActionResult, GitFileChange,
   MergeInfo, MergeSessionView,
 } from "../../../shared/types.ts";
-import { CircleIcon, DoneIcon, DotIcon, IconLabel, MoreIcon } from "../lib/glyphIcons.tsx";
+import { DoneIcon, IconLabel, MoreIcon, UndoIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { Button, EDGE, Textarea } from "./workspace/Chrome.tsx";
+import { BranchLine } from "./GitDialog.tsx";
 
 /** Unchanged lines kept either side of a conflict before the rest is folded.
  *  Twelve is about a function signature plus its opening lines — enough to
@@ -100,7 +102,7 @@ export interface ConflictModeProps {
   busy: boolean;
   writeEnabled: boolean;
   act: (fn: () => Promise<GitActionResult>, okMsg?: string, label?: string) => Promise<boolean>;
-  ask: (o: { title: string; body: string; confirmLabel: string; danger?: boolean }) => Promise<boolean>;
+  ask: (o: { title: string; body: import("react").ReactNode; confirmLabel: string; confirmIcon?: import("react").ReactNode; cancelFocus?: boolean; danger?: boolean; lost?: string[]; cancelLabel?: string; node?: import("react").ReactNode }) => Promise<boolean>;
   flash: (ok: boolean, msg: string) => void;
   onAskClaudeTerminal: () => void;
   /** Claude is already working in this checkout's window, so the button opens
@@ -174,6 +176,14 @@ export function ConflictMode(p: ConflictModeProps) {
   const clean = reviewRows(root, session?.files ?? [], p.staged).filter((r) => !r.decided).length;
   const left = session?.left.length ?? rels.length;
   const done = Math.max(0, total - left);
+  const abandon = abandonLost(resolvedFiles(session?.files ?? [], session?.left ?? []));
+  const fileRows: ConflictRow[] = (session?.files.length ? session.files : rels).map((rel) => {
+    const open = rels.includes(rel);
+    const cur = rel === sel && blocks.length > 0;
+    const known = session?.places?.[rel];
+    return { rel, open, places: cur ? blocks.length : known ?? null, settled: cur ? answered : known != null ? 0 : null };
+  });
+  const squares = conflictSquares(fileRows, sel);
 
   const pick = (index: number, c: BlockChoice) => {
     setPicks((prev) => ({ ...prev, [index]: c }));
@@ -211,9 +221,21 @@ export function ConflictMode(p: ConflictModeProps) {
       : blocks.reduce((n, x) => n + x.ours.length, 0);
     const other = side === "ours" ? labels.theirs : labels.ours;
     if (b > 1 && !(await p.ask({
-      title: `Take ${side === "ours" ? labels.ours : labels.theirs} for the whole of ${sel}?`,
-      body: `That answers all ${b} conflicts the same way and drops ${drops} line${drops === 1 ? "" : "s"} from ${other}. If the conflicts are about different things, this loses the ones you did not mean to decide.`,
-      confirmLabel: `Take ${side}`,
+      title: `${side === "ours" ? `Keep ${labels.ours}` : "Take incoming"} for all of ${sel.split("/").pop()}?`,
+      body: <>That answers all <b>{b} places</b> the same way and drops {drops} line{drops === 1 ? "" : "s"} from {other}. If the conflicts are about different things, this loses the ones you did not mean to decide.</>,
+      confirmLabel: side === "ours" ? `Keep ${labels.ours}` : "Take incoming", cancelFocus: true,
+      node: (
+        <div className="flex items-center gap-3 rounded-lg px-3 py-2.5" style={{ background: "var(--surface-inset)", border: EDGE }} data-whole-file="">
+          <span className="flex flex-wrap gap-0.5" style={{ maxWidth: 110 }} aria-hidden>
+            {Array.from({ length: Math.min(b, 16) }, (_, i) => <Sq key={i} tone="open" />)}
+          </span>
+          <span aria-hidden style={{ color: "var(--text3)" }}>→</span>
+          <span className="flex flex-wrap gap-0.5" style={{ maxWidth: 110 }} aria-hidden>
+            {Array.from({ length: Math.min(b, 16) }, (_, i) => <Sq key={i} tone="settled" />)}
+          </span>
+          <span className="text-[11px] min-w-0" style={{ color: "var(--text3)" }}>{b} place{b === 1 ? "" : "s"} answered the same way.</span>
+        </div>
+      ),
     }))) return;
     if (await p.act(() => api.gitResolve(root, [sel], side), `${sel}: kept ${side}`)) {
       const s = await api.gitMergeSession(root);
@@ -292,20 +314,27 @@ export function ConflictMode(p: ConflictModeProps) {
           that is not of your own base, and the wrong commit for every rebase. */}
       <div className="shrink-0 px-4 py-2 border-b flex items-center gap-3 flex-wrap"
         style={{ borderColor: "color-mix(in srgb, var(--border) 45%, transparent)", background: "var(--surface-card)" }}>
-        <span className="text-[11px] font-semibold" style={{ color: "var(--warning-ink)" }}>
-          {merge?.state === "rebasing" ? "Rebasing" : merge?.state === "cherry-picking" ? "Cherry-picking"
-            : merge?.state === "reverting" ? "Reverting" : "Merging"}
+        <span className="text-[13px] font-semibold" style={{ color: "var(--text)" }}>{conflictQuestion(left)}</span>
+        <span className="text-[11px]" style={{ color: "var(--text3)" }}>
+          {opNoun(merge?.state)} <span className="font-mono truncate" style={{ color: "var(--warning-ink)" }}>{labels.theirs}</span> into <span className="font-mono truncate" style={{ color: "var(--primary-hover)" }}>{labels.ours}</span>
         </span>
-        <span className="text-[11px] font-mono truncate" style={{ color: "var(--primary-hover)" }}>{labels.ours}</span>
-        <span className="text-[10px]" style={{ color: "var(--text3)" }}>← incoming</span>
-        <span className="text-[11px] font-mono truncate" style={{ color: "var(--warning-ink)" }}>{labels.theirs}</span>
         {step && (
           <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: EDGE }}
-            title="A rebase replays your commits one at a time and stops on each one that conflicts. It is not over when this file is.">{step}</span>
+            data-tip="A rebase replays your commits one at a time and stops on each one that conflicts. It is not over when this file is.">{step}</span>
         )}
-        <span className="ml-auto text-[11px] tabular-nums" style={{ color: "var(--text2)" }}>
-          <b style={{ color: "var(--text)" }}>{done}</b> of <b style={{ color: "var(--text)" }}>{total}</b> file{total === 1 ? "" : "s"} resolved
+        <span className="ml-auto flex items-center gap-2 text-[11px] tabular-nums" style={{ color: "var(--text2)" }} role="img" aria-label={settledLine(fileRows)}>
+          <span className="flex gap-0.5" aria-hidden>
+            {squares.map((q, i) => <FileBox key={i} q={q} />)}
+          </span>
+          {settledLine(fileRows)}
         </span>
+        <div className="basis-full flex items-center gap-3 min-w-0" data-branch-strip="">
+          <div className="min-w-0 flex-1" style={{ maxWidth: 420 }}><BranchLine commits={3} tone="warn" baseTone="var(--primary)" knot /></div>
+          <span className="flex items-center gap-1.5 text-[10.5px] min-w-0" style={{ color: "var(--text3)" }}>
+            <span className="inline-block w-2 h-2 rounded-sm" style={{ background: "var(--primary)" }} />{labels.ours} = yours
+            <span className="inline-block w-2 h-2 rounded-sm ml-1.5" style={{ background: "var(--warning)" }} />{labels.theirs} = incoming
+          </span>
+        </div>
       </div>
 
       <div className="flex-1 min-h-0 flex">
@@ -321,18 +350,18 @@ export function ConflictMode(p: ConflictModeProps) {
               return (
                 <div key={rel} className="group flex items-center gap-1.5 px-3 py-1 text-[11px]"
                   style={{ background: on ? "var(--bg3)" : "transparent", borderLeft: `2px solid ${on ? "var(--primary)" : "transparent"}` }}>
-                  <span className="shrink-0 flex" style={{ color: isLeft ? "var(--text3)" : "var(--success)" }}>{isLeft ? (on ? <DotIcon size={ICON.xs} /> : <CircleIcon size={ICON.xs} />) : <DoneIcon size={ICON.xs} />}</span>
+                  <FileBox q={!isLeft ? "settled" : on ? "current" : "open"} />
                   <button onClick={() => setSel(rel)} className="min-w-0 flex-1 truncate text-left font-mono"
                     style={{ color: on ? "var(--text)" : "var(--text2)", direction: "rtl", textAlign: "left" }}
-                    title={rel}>{rel}</button>
-                  {on && !!blocks.length && (
-                    <span className="shrink-0 tabular-nums text-[9.5px]" style={{ color: "var(--text3)" }}>{answered}/{blocks.length}</span>
+                    data-tip={rel}>{rel}</button>
+                  {placesLabel(fileRows.find((r) => r.rel === rel) ?? { rel, open: isLeft, places: null, settled: null }) && (
+                    <span className="shrink-0 tabular-nums text-[9.5px]" style={{ color: "var(--text3)" }}>{placesLabel(fileRows.find((r) => r.rel === rel)!)}</span>
                   )}
                   {!isLeft && (
                     <button onClick={() => void reopen(rel)} disabled={busy || !writeEnabled}
                       className="shrink-0 text-[10px] opacity-0 group-hover:opacity-100 px-1 rounded"
                       style={{ color: "var(--error-ink)" }}
-                      title="Put git's original conflict back. This deletes the resolution.">undo</button>
+                      data-tip="Put git's original conflict back. This deletes the resolution.">undo</button>
                   )}
                 </div>
               );
@@ -341,11 +370,12 @@ export function ConflictMode(p: ConflictModeProps) {
           {/* Everything else this merge carries. Named, because the last button
               commits it and a number you were never shown is not consent. */}
           <button onClick={() => setReview(true)}
-            className="shrink-0 text-left px-3 py-2 border-t text-[10.5px] leading-snug"
-            style={{ borderColor: "color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text3)" }}>
+            className="shrink-0 text-left m-2.5 px-3 py-2 rounded-lg text-[10.5px] leading-snug"
+            data-more-files=""
+            style={{ outline: "1px dashed color-mix(in srgb, var(--border) 80%, transparent)", outlineOffset: -1, color: "var(--text3)" }}>
             <b style={{ color: "var(--text2)" }}>{clean} more file{clean === 1 ? "" : "s"}</b>{" "}
             {carriedLine(merge?.state, clean)}<br />
-            <span style={{ textDecoration: "underline", textUnderlineOffset: 2 }}>See {clean === 1 ? "it" : "them"} →</span>
+            <span>Review {clean === 1 ? "it" : "them"} ›</span>
           </button>
         </div>
 
@@ -359,10 +389,11 @@ export function ConflictMode(p: ConflictModeProps) {
                 the word — which is what happened when only one ref was short
                 enough to fit — reads as two different kinds of control. */}
             <div className="ml-auto flex items-center gap-1.5">
+              <span className="text-[10.5px] mr-0.5" style={{ color: "var(--text3)" }}>Whole file:</span>
               <Button onClick={() => void wholeFile("ours")} disabled={busy || !sel}
-                title={`Answer every conflict in this file with ${labels.ours}`}>all {shortSides ? labels.ours : "ours"}</Button>
+                title={`Answer every conflict in this file with ${labels.ours}`}>Keep {shortSides ? labels.ours : "ours"}</Button>
               <Button onClick={() => void wholeFile("theirs")} disabled={busy || !sel}
-                title={`Answer every conflict in this file with ${labels.theirs}`}>all {shortSides ? labels.theirs : "theirs"}</Button>
+                title={`Answer every conflict in this file with ${labels.theirs}`}>Take {shortSides ? "incoming" : "theirs"}</Button>
               <Button onClick={() => sel && p.onOpenEditor(sel, blocks[cursor]?.line ?? 1)} disabled={!sel}
                 title="Open this file in your editor, at this conflict">▸_ editor</Button>
             </div>
@@ -395,7 +426,7 @@ export function ConflictMode(p: ConflictModeProps) {
             )}
             {file && !tooMany && (
               <Body
-                file={file} picks={picks} labels={labels} cursor={cursor} opened={opened}
+                file={file} picks={picks} labels={labels} shas={{ ours: merge?.ours?.sha.slice(0, 7), theirs: merge?.theirs?.sha.slice(0, 7) }} cursor={cursor} opened={opened}
                 editing={editing}
                 onCursor={setCursor}
                 onPick={pick}
@@ -415,7 +446,7 @@ export function ConflictMode(p: ConflictModeProps) {
           {file && !!blocks.length && !tooMany && (
             <div className="shrink-0 px-3 py-2 border-t flex items-center gap-2 text-[11px]"
               style={{ borderColor: "color-mix(in srgb, var(--border) 45%, transparent)" }}>
-              <span style={{ color: "var(--text3)" }}>{answered} of {blocks.length} conflict{blocks.length === 1 ? "" : "s"} in this file answered</span>
+              <span style={{ color: "var(--text3)" }}>{answered} of {blocks.length} place{blocks.length === 1 ? "" : "s"} in this file answered. {nextStep({ left, fileAnswered: answered, fileTotal: blocks.length, commitWord: merge?.state === "rebasing" ? "continue" : "commit" })}</span>
               <div className="ml-auto flex items-center gap-2">
                 <Button tone="ok" onClick={() => void apply()} disabled={!allAnswered || saving || busy || !writeEnabled}
                   title={allAnswered ? "Write every choice and stage the file" : "Answer every conflict first"}>
@@ -431,26 +462,27 @@ export function ConflictMode(p: ConflictModeProps) {
           move that is guaranteed safe. */}
       <div className="shrink-0 px-3 py-2 border-t flex items-center gap-2"
         style={{ borderColor: "color-mix(in srgb, var(--border) 45%, transparent)", background: "var(--surface-card)" }}>
-        <Button tone="danger" disabled={busy}
+        <button type="button" disabled={busy} className="inline-flex items-center gap-1.5 px-2 rounded-lg text-[12px] font-medium disabled:opacity-50" style={{ height: 28, color: "var(--error-ink)" }}
           onClick={async () => {
             if (!(await p.ask({
               title: `Abandon this ${opNoun(merge?.state)}?`,
-              body: "The tree goes back to exactly how it was. Every resolution made here is lost.",
-              danger: true, confirmLabel: "Abandon it",
+              body: abandon.body,
+              lost: resolvedFiles(session?.files ?? [], session?.left ?? []),
+              danger: true, confirmLabel: "Abandon it", confirmIcon: <UndoIcon size={ICON.sm} />, cancelLabel: "Keep working",
             }))) return;
             void p.act(() => api.gitMergeAbort(root), `${opNoun(merge?.state)} aborted`, "abort");
           }}
-          title="Throw it away and put the tree back exactly as it was">Abandon</Button>
+          title="Throw it away and put the tree back exactly as it was"><UndoIcon size={ICON.sm} />Abandon {opNoun(merge?.state)}</button>
         {/* The terminal gives you the session itself, attached, beside your own
             shells, where you can watch it edit and take the keyboard off it. */}
         <span className="text-[10.5px] ml-1" style={{ color: "var(--text3)" }}>Send to terminal</span>
         <Button tint="var(--primary-hover)" onClick={p.onAskClaudeTerminal}
           title={p.terminalWindowLive
             ? "Your agent is already working in this repo's \"conflicts\" window — switch to its tab"
-            : "Opens a tmux window in this repo with your agent on it, told which side is which and which files are in conflict"}>{p.terminalWindowLive ? "▸_ Agent is working · Open tab" : "▸_ in a terminal"}</Button>
+            : "Opens a tmux window in this repo with your agent on it, told which side is which and which files are in conflict"}>{p.terminalWindowLive ? "▸_ Agent is working · Open tab" : "Hand to an agent"}</Button>
         <div className="ml-auto flex items-center gap-2">
           {left > 0
-            ? <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>{left} file{left === 1 ? "" : "s"} still to resolve</span>
+            ? <span className="text-[10.5px]" style={{ color: "var(--text3)" }}><b style={{ color: "var(--text2)" }}>{left} file{left === 1 ? "" : "s"}</b> still open</span>
             : <span className="text-[10.5px]" style={{ color: "var(--success-ink)" }}>every conflict answered</span>}
           <Button tone="ok" disabled={left > 0 || busy || !writeEnabled} onClick={() => setReview(true)}
             title={left > 0 ? "Resolve every file first" : "See everything this commit would carry, then commit"}>
@@ -473,10 +505,12 @@ export function ConflictMode(p: ConflictModeProps) {
  * are irrelevant. Twelve lines of context each side is what you need to judge
  * a conflict; the rest is one row saying how much was skipped, and it opens.
  */
-function Body({ file, picks, labels, cursor, opened, editing, onCursor, onPick, onEdit, onEditText, onEditDone, onOpenFold }: {
+function Body({ file, picks, labels, shas, cursor, opened, editing, onCursor, onPick, onEdit, onEditText, onEditDone, onOpenFold }: {
   file: ConflictFile;
   picks: Record<number, BlockChoice>;
   labels: { ours: string; theirs: string };
+  /** Short commit ids of the two sides, shown on the cards when the merge knows them. */
+  shas?: { ours?: string; theirs?: string };
   cursor: number;
   opened: Set<number>;
   editing: { index: number; text: string } | null;
@@ -489,6 +523,9 @@ function Body({ file, picks, labels, cursor, opened, editing, onCursor, onPick, 
 }) {
   const at = new Map(file.blocks.map((b) => [b.index, b]));
   const order = file.blocks.map((b) => b.index);
+  // A place answered folds to one line; "change" opens it again with the chosen card ringed.
+  const [reopened, setReopened] = useState<ReadonlySet<number>>(new Set());
+  const pickHere = (index: number, c: BlockChoice) => { setReopened((r) => { if (!r.has(index)) return r; const n = new Set(r); n.delete(index); return n; }); onPick(index, c); };
 
   return (
     /*
@@ -532,13 +569,13 @@ function Body({ file, picks, labels, cursor, opened, editing, onCursor, onPick, 
         const chosen = picks[b.index];
         const isCursor = order[cursor] === b.index;
 
-        if (chosen !== undefined && editing?.index !== b.index) {
+        if (chosen !== undefined && editing?.index !== b.index && !reopened.has(b.index)) {
           return (
-            <button key={i} onClick={() => onPick(b.index, chosen)} onDoubleClick={() => onEdit(b)}
+            <button key={i} onClick={() => setReopened((r) => new Set(r).add(b.index))} onDoubleClick={() => onEdit(b)}
               className="w-full text-left my-1 px-[5ch] py-1 text-[10.5px] flex items-center gap-2"
               style={{ color: "var(--text3)", background: "color-mix(in srgb, var(--success) 7%, transparent)", borderLeft: "2px solid color-mix(in srgb, var(--success) 55%, transparent)" }}>
               <span className="flex" style={{ color: "var(--success-ink)" }}><DoneIcon size={ICON.xs} /></span>
-              <span>line {b.line} — {choiceLabel(chosen, labels)}</span>
+              <span>Line {b.line} — {choiceLabel(chosen, labels)}</span>
               <span className="ml-auto" style={{ textDecoration: "underline", textUnderlineOffset: 2 }}>change</span>
             </button>
           );
@@ -548,13 +585,23 @@ function Body({ file, picks, labels, cursor, opened, editing, onCursor, onPick, 
           <div key={i} onMouseEnter={() => onCursor(order.indexOf(b.index))}
             style={isCursor ? { boxShadow: "inset 2px 0 0 var(--primary)" } : undefined}>
 
-            <div className="px-[5ch] pt-1 text-[9.5px] tracking-wider uppercase" style={{ color: "var(--primary-hover)" }}>
-              ours · {labels.ours}
+            <div className="px-[5ch] pt-2 pb-0.5 text-[11.5px] font-semibold" style={{ color: "var(--text)" }}>Line {b.line} — which one stays?</div>
+            <div className="px-[5ch] pb-1 grid gap-2" style={{ gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)" }} data-choice-cards="">
+              <button type="button" onClick={() => pickHere(b.index, "ours")} className="text-left rounded-lg overflow-hidden min-w-0" data-chosen={chosen === "ours" ? "" : undefined}
+                style={{ boxShadow: chosen === "ours" ? "0 0 0 2px var(--primary)" : "inset 0 0 0 1px color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 5%, transparent)" }}>
+                <div className="px-2.5 py-1.5 text-[11.5px] font-semibold flex items-center gap-1.5" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }}>
+                  {chosen === "ours" ? <DoneIcon size={ICON.xs} /> : <Cap k="1" />}Keep {labels.ours}{shas?.ours && <span className="ml-auto font-mono font-normal opacity-70">{shas.ours}</span>}
+                </div>
+                <div style={{ width: "max-content", minWidth: "100%" }}>{b.ours.map((l, k) => <Line key={k} n={(b.ourLine ?? b.line + 1) + k} text={l} tone="ours" />)}</div>
+              </button>
+              <button type="button" onClick={() => pickHere(b.index, "theirs")} className="text-left rounded-lg overflow-hidden min-w-0" data-chosen={chosen === "theirs" ? "" : undefined}
+                style={{ boxShadow: chosen === "theirs" ? "0 0 0 2px var(--warning)" : "inset 0 0 0 1px color-mix(in srgb, var(--warning) 45%, transparent)", background: "color-mix(in srgb, var(--warning) 5%, transparent)" }}>
+                <div className="px-2.5 py-1.5 text-[11.5px] font-semibold flex items-center gap-1.5" style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 12%, transparent)" }}>
+                  {chosen === "theirs" ? <DoneIcon size={ICON.xs} /> : <Cap k="2" />}Take {labels.theirs}{shas?.theirs && <span className="ml-auto font-mono font-normal opacity-70">{shas.theirs}</span>}
+                </div>
+                <div style={{ width: "max-content", minWidth: "100%" }}>{b.theirs.map((l, k) => <Line key={k} n={(b.theirLine ?? b.line + 1) + k} text={l} tone="theirs" />)}</div>
+              </button>
             </div>
-            <div style={{ background: "color-mix(in srgb, var(--primary) 8%, transparent)", borderLeft: "2px solid color-mix(in srgb, var(--primary) 55%, transparent)" }}>
-              {b.ours.map((l, k) => <Line key={k} n={(b.ourLine ?? b.line + 1) + k} text={l} tone="ours" />)}
-            </div>
-
             {b.base && (
               <>
                 <div className="px-[5ch] pt-1 text-[9.5px] tracking-wider uppercase" style={{ color: "var(--text3)" }}>before either change</div>
@@ -563,13 +610,6 @@ function Body({ file, picks, labels, cursor, opened, editing, onCursor, onPick, 
                 </div>
               </>
             )}
-
-            <div className="px-[5ch] pt-1 text-[9.5px] tracking-wider uppercase" style={{ color: "var(--warning-ink)" }}>
-              theirs · {labels.theirs}
-            </div>
-            <div style={{ background: "color-mix(in srgb, var(--warning) 8%, transparent)", borderLeft: "2px solid color-mix(in srgb, var(--warning) 55%, transparent)" }}>
-              {b.theirs.map((l, k) => <Line key={k} n={(b.theirLine ?? b.line + 1) + k} text={l} tone="theirs" />)}
-            </div>
 
             {editing?.index === b.index ? (
               <div className="px-[5ch] py-2 flex flex-col gap-1.5">
@@ -587,10 +627,8 @@ function Body({ file, picks, labels, cursor, opened, editing, onCursor, onPick, 
               </div>
             ) : (
               <div className="px-[5ch] py-1.5 flex items-center gap-1.5 flex-wrap">
-                <Button tint="var(--primary-hover)" onClick={() => onPick(b.index, "ours")}><Cap k="1" />Keep ours</Button>
-                <Button tint="var(--warning)" onClick={() => onPick(b.index, "theirs")}><Cap k="2" />Take theirs</Button>
-                <Button onClick={() => onPick(b.index, "both")}><Cap k="3" />Both</Button>
-                <Button onClick={() => onPick(b.index, "theirs-first")}><Cap k="4" />Both ⇅</Button>
+                <Button onClick={() => pickHere(b.index, "both")}><Cap k="3" />Both, {labels.ours} first</Button>
+                <Button onClick={() => pickHere(b.index, "theirs-first")}><Cap k="4" />Both, {labels.theirs} first</Button>
                 <Button onClick={() => onEdit(b)}><Cap k="e" />Write it myself</Button>
                 {isCursor && <span className="text-[10px] ml-1" style={{ color: "var(--text3)" }}>n · p to move</span>}
               </div>
@@ -613,6 +651,26 @@ function Body({ file, picks, labels, cursor, opened, editing, onCursor, onPick, 
  * the commit is confirmed from here. The conflicted files are pinned to the
  * top because they are the ones a human decided.
  */
+function Sq({ tone }: { tone: "open" | "settled" }) {
+  return <FileBox q={tone} small />;
+}
+
+/** The one square a conflicted file is drawn as, in the map and in the list: a green box with a tick when settled, amber when open, a black ring when it is the one on screen. */
+function FileBox({ q, small }: { q: "settled" | "open" | "current"; small?: boolean }) {
+  const d = small ? 9 : 11;
+  const settled = q === "settled";
+  return (
+    <i aria-hidden className="inline-grid place-items-center shrink-0" data-file-box={q}
+      style={{ width: d, height: d, borderRadius: 2.5, color: "var(--success-ink)",
+        background: settled ? "color-mix(in srgb, var(--success) 22%, transparent)" : "color-mix(in srgb, var(--warning) 28%, transparent)",
+        boxShadow: settled ? "inset 0 0 0 1px color-mix(in srgb, var(--success) 60%, transparent)" : "inset 0 0 0 1px color-mix(in srgb, var(--warning) 50%, transparent)",
+        outline: q === "current" ? "2px solid var(--text)" : undefined, outlineOffset: q === "current" ? 0 : undefined }}>
+      {/* icon-floor-exempt: a tick inside an 11px tile, not a control */}
+      {settled && !small && <svg width={8} height={8} viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth={1.4} strokeLinecap="round" strokeLinejoin="round"><path d="M1.6 4.2 3.3 5.8 6.4 2.4" /></svg>}
+    </i>
+  );
+}
+
 function Review({ root, staged, files, busy, writeEnabled, act, ask, merge, step, onBack }: {
   root: string;
   staged: GitFileChange[];
@@ -651,7 +709,7 @@ function Review({ root, staged, files, busy, writeEnabled, act, ask, merge, step
                 /* Resolved to exactly what this branch already had, so it adds
                    nothing to the tree. Still a decision, and still in the
                    commit — saying "no change" beats leaving it off the list. */
-                : <span title="You resolved it to what this branch already had, so it changes nothing">unchanged</span>}
+                : <span data-tip="You resolved it to what this branch already had, so it changes nothing">unchanged</span>}
             </span>
           </div>
         ))}

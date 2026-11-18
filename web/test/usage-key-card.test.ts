@@ -53,7 +53,7 @@ describe("the last reading row", () => {
   });
   test("no reading says why, with no source chip", () => {
     expect(lastReading(null, NOW)).toEqual({ value: "No reading yet", tone: "off", source: null, age: null });
-    expect(lastReading(row({ available: false, note: "No worker turn on this PC yet." }), NOW).value).toBe("No worker turn on this PC yet.");
+    expect(lastReading(row({ available: false, note: "No worker turn on this PC yet." }), NOW).value).toBe("No reading yet");
   });
   test("a dollar total is a reading too", () => {
     expect(lastReading(row({ windows: [], spend: { usd: 7.07, window: "30 days" } }), NOW).value).toBe("$7.07 over 30 days");

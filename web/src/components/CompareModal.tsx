@@ -6,6 +6,7 @@
  * button trades them so "which side am I on" is a click, not a re-pick.
  */
 import { useEffect, useState } from "react";
+import { LaneStrip } from "./git/DotStrip.tsx";
 import { GitDialog, DialogError, DialogSkeleton } from "./GitDialog.tsx";
 import { UNREACHABLE } from "../lib/gitDialog.ts";
 import { api } from "../lib/api.ts";
@@ -86,7 +87,7 @@ export function CompareModal({ root, initialBase, initialOther, against, onClose
     : 0;
 
   return (
-    <GitDialog title="What differs between the two?" subtitle="Read-only. Nothing is moved, staged or written." tone="primary" width={760}
+    <GitDialog title={toTree ? `What changed on disk since ${base}?` : other ? `What does ${other} have that ${base} lacks?` : "What differs between the two?"} subtitle="Read-only. Nothing is moved, staged or written." tone="primary" width={760}
       cancelLabel="Close" onClose={onClose} initialFocus="none"
       reason={r?.ok && busy ? "Comparing…" : undefined}>
       <div className="flex items-start gap-2">
@@ -109,15 +110,16 @@ export function CompareModal({ root, initialBase, initialOther, against, onClose
 
       {r?.ok ? (
         <>
+          {!toTree && <LaneStrip ahead={r.ahead!.length} behind={r.behind!.length} other={other} base={base} />}
           <div className="mt-4 flex items-center gap-3 flex-wrap">
             {!toTree && <>
-            <span className="text-[11.5px] px-2 py-1 rounded-lg tabular-nums" style={{ background: "color-mix(in srgb, var(--success) 12%, transparent)", color: "var(--success-ink)" }} title="commits {other} has that {base} doesn't">
+            <span className="text-[11.5px] px-2 py-1 rounded-lg tabular-nums" style={{ background: "color-mix(in srgb, var(--success) 12%, transparent)", color: "var(--success-ink)" }} data-tip="commits {other} has that {base} doesn't">
               ↑ {r.ahead!.length} ahead
             </span>
-            <span className="text-[11.5px] px-2 py-1 rounded-lg tabular-nums" style={{ background: "color-mix(in srgb, var(--warning) 12%, transparent)", color: "var(--warning-ink)" }} title="commits {base} has that {other} doesn't">
+            <span className="text-[11.5px] px-2 py-1 rounded-lg tabular-nums" style={{ background: "color-mix(in srgb, var(--warning) 12%, transparent)", color: "var(--warning-ink)" }} data-tip="commits {base} has that {other} doesn't">
               ↓ {r.behind!.length} behind
             </span></>}
-            <span className="text-[11px] px-2 py-1 rounded-lg tabular-nums" style={{ background: "color-mix(in srgb, var(--info) 12%, transparent)", color: "var(--info-ink)" }} title="lines changed between the two tips">
+            <span className="text-[11px] px-2 py-1 rounded-lg tabular-nums" style={{ background: "color-mix(in srgb, var(--info) 12%, transparent)", color: "var(--info-ink)" }} data-tip="lines changed between the two tips">
               {r.diff!.length} file{r.diff!.length === 1 ? "" : "s"}, {total} line{total === 1 ? "" : "s"}
             </span>
             {busy && <span className="text-[10px] t-dim2 ml-auto">comparing…</span>}
@@ -129,7 +131,7 @@ export function CompareModal({ root, initialBase, initialOther, against, onClose
               <div className="space-y-0.5">
                 {r.behind!.map((c) => (
                   <div key={c.hash} className="flex items-center gap-2 px-2 py-1 rounded-md text-[11px]" style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)" }}>
-                    <span className="shrink-0 text-[9.5px] px-1 py-px rounded" style={{ background: "color-mix(in srgb, var(--warning) 14%, transparent)", color: "var(--warning-ink)" }} title={`{base} has this, {other} doesn't`}>↓</span>
+                    <span className="shrink-0 text-[9.5px] px-1 py-px rounded" style={{ background: "color-mix(in srgb, var(--warning) 14%, transparent)", color: "var(--warning-ink)" }} data-tip={`{base} has this, {other} doesn't`}>↓</span>
                     <span className="shrink-0 tabular-nums font-mono" style={{ color: "var(--primary-hover)" }}>{c.shortHash}</span>
                     <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text)" }}>{c.subject}</span>
                     <span className="shrink-0 text-[9.5px] t-dim2">{c.author}</span>
@@ -137,7 +139,7 @@ export function CompareModal({ root, initialBase, initialOther, against, onClose
                 ))}
                 {r.ahead!.map((c) => (
                   <div key={c.hash} className="flex items-center gap-2 px-2 py-1 rounded-md text-[11px]" style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)" }}>
-                    <span className="shrink-0 text-[9.5px] px-1 py-px rounded" style={{ background: "color-mix(in srgb, var(--success) 14%, transparent)", color: "var(--success-ink)" }} title={`{other} has this, {base} doesn't`}>↑</span>
+                    <span className="shrink-0 text-[9.5px] px-1 py-px rounded" style={{ background: "color-mix(in srgb, var(--success) 14%, transparent)", color: "var(--success-ink)" }} data-tip={`{other} has this, {base} doesn't`}>↑</span>
                     <span className="shrink-0 tabular-nums font-mono" style={{ color: "var(--primary-hover)" }}>{c.shortHash}</span>
                     <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text)" }}>{c.subject}</span>
                     <span className="shrink-0 text-[9.5px] t-dim2">{c.author}</span>

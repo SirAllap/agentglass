@@ -40,7 +40,7 @@ export function SessionSwitcher({ anchor, current, sessions, engine, prefix, onS
         <MenuRow key={s.id} onClick={() => { onClose(); if (s.name !== current) onSwitch(s.name); }}
           icon={s.name === current ? <span aria-hidden className="rounded-full" style={{ width: 6, height: 6, background: "var(--primary)" }} /> : null}
           hint={s.windows === 1 ? "1 window" : `${s.windows} windows`}
-          title={s.locked ? `${s.name} is protected from being ended` : undefined}>
+          data-tip={s.locked ? `${s.name} is protected from being ended` : undefined}>
           <span className="inline-flex items-center gap-1.5" style={s.name === current ? { fontWeight: 600, color: "var(--text)" } : undefined}>
             {s.name}{s.locked && <LockIcon size={ICON.xs} />}
           </span>
@@ -52,7 +52,7 @@ export function SessionSwitcher({ anchor, current, sessions, engine, prefix, onS
       <MenuRule />
       <div className="px-2.5 py-1.5 flex flex-col gap-1.5 text-[10.5px]" style={{ color: "var(--text3)" }}>
         <div className="flex items-center gap-2">
-          <span className="font-semibold" style={{ color: "var(--text)" }} title={engine
+          <span className="font-semibold" style={{ color: "var(--text)" }} data-tip={engine
             ? "agentglass's own tmux, the Pane engine. Its prefix, config and restore are in Settings, Pane engine."
             : "The tmux on this machine: your ~/.tmux.conf and your bindings. The Pane engine settings do not touch it."}>
             {engine ? "agentglass tmux" : "Your tmux"}
@@ -61,7 +61,7 @@ export function SessionSwitcher({ anchor, current, sessions, engine, prefix, onS
           <Button size="compact" tone="quiet" className="ml-auto" onClick={() => { onClose(); openSettings("tmux"); }}><GearIcon size={ICON.xs} />Change</Button>
         </div>
         {onUseTmuxBar && (
-          <span title="The strip steps aside so you are never looking at two window lists">
+          <span data-tip="The strip steps aside so you are never looking at two window lists">
             <Checkbox checked={false} onChange={() => { onClose(); onUseTmuxBar(); }}>Show tmux's own status line</Checkbox>
           </span>
         )}

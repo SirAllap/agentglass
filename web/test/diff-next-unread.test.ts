@@ -35,7 +35,7 @@ test("unreadCount counts only what is on the list", () => {
 
 test("the view binds n to it and the list foot offers it", async () => {
   const src = await Bun.file(new URL("../src/components/diff/DiffPage.tsx", import.meta.url)).text();
-  expect(src).toMatch(/e\.key === "n"\) \{ e\.preventDefault\(\); goNextUnread\(\)/);
+  expect(src).toMatch(/e\.key === "n" && !embedded\) \{ e\.preventDefault\(\); goNextUnread\(\)/);
   expect(src).toContain("Next unread");
   expect(src).toMatch(/unread of \$\{shown\.length\}/);
 });

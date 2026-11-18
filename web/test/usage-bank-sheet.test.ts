@@ -117,7 +117,7 @@ describe("the age beside the number", () => {
 });
 
 describe("a cell has a width the fold can charge", () => {
-  const chip = src.slice(src.indexOf("function PlanChip("), src.indexOf("export function TopBar"));
+  const chip = src.slice(src.indexOf("function PlanChip("), src.indexOf("export const TopBar = memo("));
   it("caps the percent and the dollars at what 49px leaves them", () => {
     expect(chip.match(/maxWidth: "2\.05em"/g)?.length).toBe(2);
     expect(chip.match(/truncate/g)?.length).toBe(2);

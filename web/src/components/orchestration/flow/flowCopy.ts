@@ -282,10 +282,10 @@ export const FLOW_MENU: readonly FlowMenuEntry[] = [
   { act: "open", label: "Open details", key: "Enter", needs: "always", does: "selects the block", danger: false },
   { act: "engine", label: "Change engine…", needs: "always", does: "the engine row" },
   { act: "model", label: "Change model…", needs: "always", does: "the model row" },
-  { act: "after", label: "Add a step after", needs: "none", why: "The chain is six stops, and a rule changes who runs a stop rather than adding one.", does: "the next empty slot" },
+  { act: "after", label: "Add a step after", needs: "always", why: "It is not on the path yet: put it on the path first.", does: "opens a new step right after this one" },
   { act: "general", label: "Use the general setting", needs: "project", why: "This is already the general setting.", does: "drops this project's own value" },
   { act: "copy", label: "Copy settings as text", needs: "always", does: "for a task or a doc" },
-  { act: "remove", label: "Remove step", needs: "none", why: "The six stops stay. Turn a rule off, or pick another engine for the stop.", does: "asks first", danger: true },
+  { act: "remove", label: "Remove step", needs: "always", why: "The last step cannot be removed.", does: "takes this step off the path; asks first", danger: true },
 ];
 
 /** Whether a menu entry is off for a block: a row it cannot show is not offered. */

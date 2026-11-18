@@ -10,7 +10,7 @@ const HUE: Record<FlagTone, string> = { muted: "var(--text3)", warn: "var(--warn
 const style = (hue: string) => ({ "--tint": hue }) as CSSProperties;
 
 export function FlagTag({ tone, title, children }: { tone: FlagTone; title?: string; children: ReactNode }) {
-  return <span className="mc-tag" style={style(HUE[tone])} title={title}>{children}</span>;
+  return <span className="mc-tag" style={style(HUE[tone])} data-tip={title}>{children}</span>;
 }
 
 /** The dialog's body when there is nothing to list yet: a sentence, or the error. */

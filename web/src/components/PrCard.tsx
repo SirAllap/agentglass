@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { PrSummary } from "../../../shared/types.ts";
 import { ICON } from "../lib/iconSize.ts";
+import { BellIcon, GroupIcon } from "./settingsNavIcons.tsx";
 import {
   ArrowRightIcon, BranchIcon, ClockIcon, CommentIcon, CopyIcon, CrossIcon, DoneIcon, EditIcon, EyeIcon, FlagIcon, FolderIcon, LayersIcon, LinkIcon,
   ListIcon, LockIcon, MergeIcon, MoreIcon, NoteIcon, PinIcon, PullRequestIcon, RefreshIcon, SparkleIcon, TagIcon, WarningIcon,
@@ -21,13 +22,14 @@ import { kFormat, type CardView, type PrimaryId, type StripIcon, type Tone } fro
 import { isTrunkBranch } from "../lib/prStack.ts";
 import type { CardAction } from "./TriageBoard.tsx";
 import type { CardFace } from "../lib/cardReviewers.ts";
+import type { ReviewTarget } from "../lib/reviewTarget.ts";
 import { tipAttr, type TipSpec } from "../lib/tip.ts";
 import { cellTip, faceTip, idTip, labelsTip, noCardTip, noTrackerTip, notesTip, readOnlyTip, ringTip, ticketTip } from "../lib/prCardTips.ts";
-import { chipAria, chipText, stackCounts, type RowTone, type StackRow } from "../lib/prStackChip.ts";
+import { chipAria, chipText, forkMark, loneNote, stackCounts, type RowTone, type StackRow } from "../lib/prStackChip.ts";
 import { syncCardView, type SyncCardStep, type SyncMark } from "../lib/prSyncCards.ts";
 import { splitTitle } from "../lib/prCardZones.ts";
 import { readingAge } from "../lib/prCardBlock.ts";
-import { externalUrl } from "../lib/externalUrl.ts";
+import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 import { dataInk } from "../lib/contrast.ts";
 import { openCard } from "../lib/openCard.ts";
 import type { TaskLink } from "../lib/taskLink.ts";
@@ -59,12 +61,16 @@ export interface StackView {
   list: { row: StackRow; title: string; word: string; tone: RowTone }[];
   /** The previous open member, when this card builds on one: the base chip becomes `#n`. */
   prev: { number: number; branch: string } | null;
+  /** Open pull requests that target this one: more than one makes it the root of a fork. */
+  children: number[];
+  /** The other pull requests on this card's tier. */
+  siblings: number[];
   /** One sentence for a stack that is broken (a merged or missing base); empty when whole. */
   broken: string;
 }
 
 /** The gutter rail: a numbered node beside the card, a line to the next one. */
-export interface RailView { pos: number; down: boolean }
+export interface RailView { pos: number; down: boolean; to?: number | null }
 
 export interface NotesChipView { tone: "error" | "warning" | "ok" | "dim"; text: string; title: string }
 
@@ -75,6 +81,8 @@ export interface PrCardProps {
   cv: CardView;
   card: PrSummary["card"] | undefined;
   task: TaskLink | null;
+  /** Which tracker's tab the ticket chip opens: "jira", or null for the ClickUp tab `openCard` lands on. The board resolves it; the card only presses. */
+  ticketTracker?: "jira" | null;
   /** The pull request is open: a card marked done under it gets the amber dot. */
   prOpen: boolean;
   age: string;
@@ -82,6 +90,10 @@ export interface PrCardProps {
   stripNote?: string;
   /** The review itself on GitHub, when the verdict has an address. */
   reviewUrl?: string;
+  /** What the verdict is worth opening: null when a review was only asked for, not given. */
+  reviewTarget?: ReviewTarget | null;
+  /** Open that review inside this app. Without it the cell falls back to `reviewUrl`. */
+  onOpenReview?: (target: ReviewTarget) => void;
   /** What the notes tag says in its tooltip; the count is `cv.tail.notes`. */
   notesChip: NotesChipView | null;
   /** The event line's tooltip: the sentence, the test that failed, the days of quiet. */
@@ -96,6 +108,14 @@ export interface PrCardProps {
   onSyncRetry?: () => void;
   dim?: boolean;
   selected?: boolean;
+  /** Picked for a bulk action on the board (not `selected`, which is "docked beside it"). */
+  picked?: boolean;
+  /** Anything on the board is picked: a click on the card picks it instead of opening it. */
+  anyPicked?: boolean;
+  /** The strip icon becomes the card's checkbox. `shift` asks for a range inside the lane. */
+  onPick?: (shift: boolean) => void;
+  /** The bell tag in the strip: what this pull request's "Tell me when…" is on, e.g. "Green +1". */
+  watchTag?: { text: string; aria: string } | null;
   lit?: boolean;
   /** The stack chip is under the pointer on this or another card of the chain. */
   chain?: "on" | "me";
@@ -109,6 +129,8 @@ export interface PrCardProps {
   onOpen: () => void;
   onOpenFull?: () => void;
   onOpenNotes?: () => void;
+  /** The open-threads tag: straight to the unresolved threads in the Conversation. */
+  onOpenThreads?: () => void;
   onPin: () => void;
   onAct: (what: CardAction) => void;
   onMenu: (at: { x: number; y: number }) => void;
@@ -141,6 +163,7 @@ function Faces({ faces, more, size, moreNames }: { faces: CardFace[]; more: numb
 
 function Ring({ cv }: { cv: CardView }) {
   const { ring } = cv;
+  /* A check still running is a clock in the middle, even under an approval: the tick says finished, and the ring beside it says it is not. */
   const C = 2 * Math.PI * 24;
   const n = ring.green + ring.red + ring.running;
   const segs: ReactNode[] = [];
@@ -162,7 +185,7 @@ function Ring({ cv }: { cv: CardView }) {
           : <circle cx="28" cy="28" r="24" fill="none" stroke="var(--border2, var(--border))" strokeWidth="5"
               strokeDasharray={ring.kind === "reading" ? undefined : "2 6"} strokeLinecap="round" className={ring.kind === "reading" ? "animate-pulse" : undefined} />}
       </svg>
-      <span aria-hidden className="agx-cd-ring-i">{STRIP_ICON[cv.strip.icon](20)}</span>
+      <span aria-hidden className="agx-cd-ring-i">{STRIP_ICON[ring.kind === "checks" && ring.running > 0 && ring.red === 0 && cv.strip.icon === "ok" ? "clock" : cv.strip.icon](20)}</span>
       {ring.kind === "reading"
         ? <span aria-hidden className="agx-sk" style={{ width: 40, height: 10 }} />
         : <span className="agx-cd-rc">{ring.caption}</span>}
@@ -234,14 +257,29 @@ export function PrCard(props: PrCardProps) {
   /* ---- strip ---- */
   const strip = (
     <div ref={stripRef} className="agx-cd-h" data-tip={props.stripNote ? tip({ name: cv.strip.text, text: props.stripNote }) : cut ? tip(cv.strip.text) : undefined}>
-      <span aria-hidden className="flex shrink-0">{STRIP_ICON[cv.strip.icon](ICON.sm)}</span>
+      {props.onPick ? (
+        <button type="button" role="checkbox" aria-checked={!!props.picked} aria-label={`Select #${p.number}`} className="agx-cd-pick" data-pick={p.number}
+          onClick={(e) => { e.stopPropagation(); props.onPick!(e.shiftKey); }}
+          onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") e.stopPropagation(); }}>
+          <span aria-hidden className="agx-cd-gl flex">{STRIP_ICON[cv.strip.icon](ICON.sm)}</span>
+          <span aria-hidden className="agx-cd-bx"><svg width={ICON.xs} height={ICON.xs} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 6.3l2.3 2.2 4.7-5" /></svg></span>
+        </button>
+      ) : <span aria-hidden className="flex shrink-0">{STRIP_ICON[cv.strip.icon](ICON.sm)}</span>}
       {reading ? <span aria-hidden className="agx-cd-sk" /> : <span className="agx-cd-v">{cv.strip.text}</span>}
       {/* After the sentence, not before it: the verdict starts at the same edge on every card, and the count reads as its tail. */}
       {cv.unread && (
         <span className="agx-cd-tag" data-ink="strip" style={{ "--c": "var(--accent, var(--primary))" } as CSSProperties} data-tip={tip(cv.unread.title)}>{cv.unread.text}</span>
       )}
+      {cv.mergeLock && (
+        <span className="agx-cd-tag" data-merge-lock="" style={{ "--c": "var(--warning)" } as CSSProperties} aria-label={`Merge locked. ${cv.mergeLock}`}
+          data-tip={tip({ name: "Merge locked", text: cv.mergeLock })}>
+          <LockIcon size={ICON.xs} />Locked
+        </span>
+      )}
       {cv.strip.threads && (
-        <span className="agx-cd-tag" style={{ "--c": "var(--warning)" } as CSSProperties} data-tip={tip({ name: "Open threads", text: cv.strip.threads.title })}>
+        <span className="agx-cd-tag" style={{ "--c": "var(--warning)", cursor: props.onOpenThreads ? "pointer" : undefined } as CSSProperties}
+          data-tip={tip({ name: "Open threads", text: cv.strip.threads.title })}
+          onClick={props.onOpenThreads ? stop(() => props.onOpenThreads!()) : undefined}>
           <CommentIcon size={ICON.xs} />{cv.strip.threads.text}
         </span>
       )}
@@ -252,7 +290,16 @@ export function PrCard(props: PrCardProps) {
           onFocus={() => props.onChain(members)} onBlur={() => props.onChain(null)}
           onClick={(e) => { e.stopPropagation(); setPop((v) => !v); }}>
           <LayersIcon size={ICON.xs} />{chipText(stack.rows)}
+          {forkMark(stack.children) && <span data-fork="">· {forkMark(stack.children)}</span>}
         </button>
+      )}
+      {stack && !props.rail && loneNote(stack.prev?.number ?? null, stack.siblings) && (
+        <span className="agx-cd-sk-lone" data-lone="">{loneNote(stack.prev!.number, stack.siblings)}</span>
+      )}
+      {props.watchTag && (
+        <span className="agx-cd-tag" data-ink="strip" data-watch-tag="" style={{ "--c": "var(--primary)" } as CSSProperties} aria-label={props.watchTag.aria} data-tip={tip(props.watchTag.aria)}>
+          <BellIcon size={ICON.xs} /><span>{props.watchTag.text}</span>
+        </span>
       )}
       {!reading && <Faces faces={cv.stripFaces.faces} more={cv.stripFaces.more} size={20} />}
     </div>
@@ -271,6 +318,8 @@ export function PrCard(props: PrCardProps) {
   );
 
   /* ---- ticket row ---- */
+  const ticketTracker = props.ticketTracker ?? null;
+  const ticketWhere = ticketTracker === "jira" ? "Jira" : "Tasks";
   const cardId = card ? (card.customId ?? card.id) : undefined;
   const link = card ? externalUrl(card.url) : undefined;
   const { stale, said } = card ? readingAge(card.at) : { stale: false, said: "" };
@@ -290,9 +339,10 @@ export function PrCard(props: PrCardProps) {
     const who = (card.people ?? []).map((x) => x.name).join(", ");
     ticket = (
       <span className="agx-cd-cg">
-        <button type="button" className="agx-cd-tk" onClick={stop(() => openCard(card.customId || card.id, card.customId))}
-          aria-label={`Open ${cardId} in Tasks. ${card.status}${card.priority ? `, ${card.priority} priority` : ""}`}
-          data-tip={tip({ ...ticketTip({ id: cardId, status: card.status, priority: card.priority, color: card.statusColor }, hasCopy), ...(who ? { text: `${card.status}${card.priority ? ` · ${card.priority} priority` : ""}. On ${who}.` } : null) })}>
+        <button type="button" className="agx-cd-tk" data-tracker={ticketTracker ?? undefined}
+          onClick={stop(() => openCard(card.customId || card.id, card.customId, ticketTracker ?? undefined))}
+          aria-label={`Open ${cardId} in ${ticketWhere}. ${card.status}${card.priority ? `, ${card.priority} priority` : ""}`}
+          data-tip={tip({ ...ticketTip({ id: cardId, status: card.status, priority: card.priority, color: card.statusColor }, hasCopy, ticketTracker), ...(who ? { text: `${card.status}${card.priority ? ` · ${card.priority} priority` : ""}. On ${who}.` } : null) })}>
           <FlagIcon size={ICON.xs} />{cardId}
         </button>
         {odd && <i aria-hidden className="agx-cd-odd" data-tip={tip({ name: card.status, text: "The card says this while the pull request is still open." })} />}
@@ -305,8 +355,10 @@ export function PrCard(props: PrCardProps) {
   } else if (cv.tracker === "id" && task) {
     ticket = (
       <span className="agx-cd-cg">
-        <button type="button" className="agx-cd-tk" onClick={stop(() => openCard(task.query, task.label))}
-          aria-label={`Open ${task.label} in Tasks. Not found on your boards`} data-tip={tip(idTip(task.label))}>
+        <button type="button" className="agx-cd-tk" data-tracker={ticketTracker ?? undefined}
+          onClick={stop(() => openCard(task.query, task.label, ticketTracker ?? undefined))}
+          aria-label={`Open ${task.label} in ${ticketWhere}. Not found ${ticketTracker === "jira" ? "on the Jira board" : "on your boards"}`}
+          data-tip={tip(idTip(task.label, ticketTracker))}>
           <FlagIcon size={ICON.xs} />{task.label}
         </button>
         <span className="agx-cd-tag" style={{ "--c": "var(--text4)" } as CSSProperties} data-tip={tip({ name: "Card not found", text: "This id is not on the boards saved here." })}><span>not found</span></span>
@@ -314,11 +366,9 @@ export function PrCard(props: PrCardProps) {
     );
   } else if (cv.tracker === "loading") {
     ticket = <span aria-hidden className="flex items-center gap-1.5"><span className="agx-sk" style={{ width: 80, height: 16 }} /><span className="agx-sk" style={{ width: 60, height: 16 }} /></span>;
-  } else if (cv.tracker === "no-card") {
-    ticket = <span className="agx-cd-tk" data-none="1" tabIndex={0} data-tip={tip(noCardTip())}><LinkIcon size={ICON.xs} />No card</span>;
-  } else if (cv.tracker === "no-tracker") {
-    ticket = <span className="agx-cd-tk" data-none="1" tabIndex={0} data-tip={tip(noTrackerTip())}><LinkIcon size={ICON.xs} />No tracker</span>;
   }
+  /* "no-card" and "no-tracker" draw nothing: the user cannot fill them from here, and
+     the approved states mockup collapses a field like that (Empty, collapses). */
   const trio = cv.tracker === "card" && card && cardId ? (
     <span className="agx-cd-ccs">
       {copyBtn("id", "Copy card ID", <CopyIcon size={ICON.xs} />, cardId)}
@@ -372,17 +422,26 @@ export function PrCard(props: PrCardProps) {
   const reviewBody = reading ? skeleton : (
     <span className="agx-cd-rowv">
       {rv.faces.length > 0 && <Faces faces={rv.faces} more={rv.more} size={16} />}
+      {rv.bot && <GroupIcon name="bot" size={ICON.sm} />}
       <span className="agx-cd-vl">{rv.word}</span>
     </span>
   );
-  const reviewTip: TipSpec = props.reviewUrl
-    ? { ...cellTip("Review", rv.title), hint: { key: "Click", text: "Open the review itself on GitHub" } }
+  const target = props.reviewTarget ?? null;
+  const reviewHint = target?.lane === "bot" ? "Open the bot's review under Bots" : "Open the review in the conversation";
+  /* Asked and not answered is not a review: no button, and no GitHub address to fall back to either. */
+  const canOpenReview = !!target && !!(props.onOpenReview || props.reviewUrl);
+  const openReview = () => {
+    if (props.onOpenReview) props.onOpenReview(target!);
+    else if (props.reviewUrl) openExternal(props.reviewUrl);
+  };
+  const reviewTip: TipSpec = canOpenReview
+    ? { ...cellTip("Review", rv.title), hint: { key: "Click", text: reviewHint } }
     : cellTip("Review", rv.title);
-  const reviewCell = props.reviewUrl
+  const reviewCell = canOpenReview
     ? (
       <button type="button" className="agx-cd-cell agx-cd-cell-btn" data-tone={rv.tone} data-tip={tip(reviewTip)}
-        aria-label={`Review: ${rv.word}. Open the review on GitHub`}
-        onClick={stop(() => window.open(props.reviewUrl, "_blank", "noopener"))}>
+        aria-label={`Review: ${rv.word}. ${reviewHint}`}
+        onClick={stop(openReview)}>
         <span className="agx-cd-lb">Review</span>{reviewBody}
       </button>
     )
@@ -411,7 +470,7 @@ export function PrCard(props: PrCardProps) {
   const t = cv.tail;
   const evl = (
     <div className="agx-cd-evl">
-      <span className="agx-cd-et" data-tip={tip(props.eventTip)}><span className="agx-cd-ett">↳ {cv.event.empty ? "No review activity yet" : cv.event.text}</span><span className="agx-cd-eta">· {age}</span></span>
+      <span className="agx-cd-et" data-tip={tip(props.eventTip)}><span className="agx-cd-ett">↳ {cv.event.empty ? "Quiet so far" : cv.event.text}</span><span className="agx-cd-eta">· {age}</span></span>
       {t.notes && props.notesChip && (
         <button type="button" className="agx-cd-tag" data-notes-chip={props.notesChip.tone} aria-label={`${props.notesChip.text}. Open the notes`}
           style={{ "--c": NOTES_INK[props.notesChip.tone] } as CSSProperties}
@@ -435,7 +494,7 @@ export function PrCard(props: PrCardProps) {
   const footer = (
     <div className="agx-cd-f" onClick={(e) => e.stopPropagation()}>
       <div className="agx-cd-f-l">
-        <Button size="hit" tone={PRIMARY_TONE[pr.tone]} data-tip={tip({ name: pr.lock ? "Read-only" : pr.label, text: pr.title })}
+        <Button size="hit" tone={PRIMARY_TONE[pr.tone]} data-tip={tip({ name: pr.held ? "Merge locked" : pr.lock ? "Read-only" : pr.label, text: pr.title })}
           disabled={pr.disabled || (mutating && locked)} pending={working} onClick={act(pr.id)}>
           {!working && (pr.lock ? <LockIcon size={ICON.sm} /> : PRIMARY_ICON[pr.id](ICON.sm))}
           {working ? "Working…" : pr.label}
@@ -455,7 +514,16 @@ export function PrCard(props: PrCardProps) {
             {sv.action.label}
           </Button>
         ) : sec.id ? (
-          <Button size="hit" tone="plain" data-tip={tip({ name: sec.label, text: sec.title })} disabled={locked || working} onClick={act(sec.id)}>{sec.label}</Button>
+          /* Update is the sync glyph and the count, capped at three digits: a
+             branch thousands of commits behind pushed the word and a long
+             number out of the slot. The exact count stays in the tip. */
+          sec.id === "update" && sec.behind !== undefined ? (
+            <Button size="hit" tone="plain" label={sec.label} data-tip={tip({ name: `${sec.behind.toLocaleString()} commits behind`, text: sec.title })} disabled={locked || working} onClick={act(sec.id)}>
+              <RefreshIcon size={ICON.sm} />{sec.behind > 999 ? "999+" : sec.behind}
+            </Button>
+          ) : (
+            <Button size="hit" tone="plain" data-tip={tip({ name: sec.label, text: sec.title })} disabled={locked || working} onClick={act(sec.id)}>{sec.label}</Button>
+          )
         ) : null}
       </div>
       <div className="agx-cd-icb">
@@ -508,15 +576,20 @@ export function PrCard(props: PrCardProps) {
   );
 
   const body = (
-    <div ref={props.cardRef} onClick={props.onOpen} role="button" tabIndex={0} data-pr={p.number}
-      onDoubleClick={(e) => { if (props.onOpenFull && !(e.target as HTMLElement).closest("button, a")) props.onOpenFull(); }}
+    <div ref={props.cardRef} onClick={props.onOpen} role="button" tabIndex={0} data-pr={p.number} data-pr-card={p.number}
+      /* While anything is picked a press anywhere on the card picks it (shift: a range) and opens nothing. */
+      onClickCapture={(e) => { if (props.anyPicked && props.onPick) { e.stopPropagation(); e.preventDefault(); props.onPick(e.shiftKey); } }}
+      onDoubleClick={(e) => { if (props.onOpenFull && !props.anyPicked && !(e.target as HTMLElement).closest("button, a")) props.onOpenFull(); }}
       aria-label={cv.aria} aria-haspopup="menu"
       data-tone={cv.tone} data-kind={cv.kind}
       data-dim={props.dim ? "1" : undefined} data-lit={props.lit ? "1" : undefined} data-selected={props.selected ? "1" : undefined}
+      data-picked={props.picked ? "1" : undefined}
       data-busy={working ? "1" : undefined} data-sync={sv?.running ? "running" : undefined} data-chain={props.chain}
       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); props.onMenu({ x: e.clientX, y: e.clientY }); }}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
+        /* While anything is picked, Enter and Space pick the card too, the same as a press. */
+        if (props.anyPicked && props.onPick && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); props.onPick(e.shiftKey); return; }
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); props.onOpen(); }
         /* Shift+F10 and the menu key open the menu where the card is, for a keyboard that has no right button. */
         else if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) { e.preventDefault(); menuAt(e.currentTarget, 24, 24); }

@@ -48,7 +48,10 @@ describe("the list rail", () => {
 
   it("folds, and is remembered folded", () => {
     expect(src).toContain('const RAIL_KEY = "agentglass.clickup.listRail";');
-    expect(src).toContain("width: railOpen ? railW : 34");
+    // Folded is the rail's 34: by hand (`railOpen`), or on its own on the Jira board (`railFull` covers both, and a peek).
+    expect(src).toContain("width: railFull ? railW : RAIL_FOLDED_W");
+    expect(src).toContain("const railFull = railDocked || railPeek;");
+    expect(src).toContain("const railDocked = railOpen && !(railAuto && !railPinned);");
   });
 
   it("opens by default, including for somebody who has never set it", () => {

@@ -37,8 +37,8 @@
  * Ceilings, chosen: open shadow roots and same-origin frames are searched
  * only when the document itself has no match (so a "Save" in the page hides a
  * "Save" in a component), and a plain CSS selector reaches neither, as CSS
- * does not; closed shadow roots and cross-origin frames are not reachable at
- * all; role attributes other than `name` (`level`, `checked`, `pressed`)
+ * does not, except for a guide step (`deep`, see FIND); closed shadow roots
+ * and cross-origin frames are not reachable at all; role attributes other than `name` (`level`, `checked`, `pressed`)
  * are refused rather than ignored; the name is observe's, not Chromium's
  * accessible name, so a name built from aria-labelledby or an <input
  * type=submit>'s value is not one — `label=` and `text=` reach those — and it
@@ -128,6 +128,23 @@ export const ON_SCREEN = `(n) => {
     const cs = getComputedStyle(n);
     return cs.display !== "none" && cs.visibility !== "hidden";
   }`;
+
+/** What to do with N matches, as page-script source (pasted into ONE, run in
+ *  tests as-is): "none", "one" (act), or "many" (refuse). Only a CSS selector
+ *  on a verb that reads (`lenient`) may take the first of several; a locator
+ *  or an id names ONE thing, so the first of many is never what was meant. */
+export const MATCH_VERDICT = `((count, lenientCss) => count === 0 ? "none" : count === 1 || lenientCss ? "one" : "many")`;
+
+/** How many candidates a "matched N elements" refusal names. */
+export const MANY_SAMPLES = 3;
+
+/** The refusal for a selector that matched more than one element: the count
+ *  and the first three candidates (each "id tag text", from the page's last
+ *  observe), then what to do. */
+export function manySentence(sel: string, count: number, samples: readonly string[] = []): string {
+  const named = samples.slice(0, MANY_SAMPLES);
+  return `selector matched ${count} elements${named.length ? " — " + named.join(", ") : ""}: narrow ${sel} to one, or use one of the ids`;
+}
 
 /**
  * The page half: a parsed locator in, `{kind: "found", all, hidden, near}` or
@@ -275,8 +292,12 @@ export const FIND = `((spec) => {
     .slice(0, 5);
   return { kind: "found", all, hidden, near };
   };
+  /* deep: "all" searches every root at once (a guide's field may be a wrapper
+     in the page and the editable in a frame); true lets a plain CSS selector
+     fall back to the roots too, as a guide step's does. */
+  if (spec.deep === "all") return search((${ROOTS})(document));
   let r = search(null);
-  if (r.kind === "found" && !r.all.length && !r.hidden.length && (spec.css === undefined || isId)) {
+  if (r.kind === "found" && !r.all.length && !r.hidden.length && (spec.css === undefined || isId || spec.deep === true)) {
     const more = (${ROOTS})(document);
     if (more.length > 1) r = search(more);
   }

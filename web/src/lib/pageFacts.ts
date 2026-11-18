@@ -9,7 +9,8 @@ import type { HeaderChip } from "./settingsNav.ts";
  * only adds a word or a chip to a state that is already shown.
  */
 export type PageFacts = {
-  volume?: "Quiet" | "Normal" | "Loud";
+  /** News pop-ups, as the Notifications chip says it. */
+  news?: "on" | "off";
   tmuxVersion?: string;
   taskSources?: number;
   importableSites?: number;
@@ -35,7 +36,7 @@ export function pageChips(id: string, chips: HeaderChip[], f: PageFacts): Header
   const swap = (from: string, text: string) => { const i = out.findIndex((c) => c.text === from); if (i >= 0) out[i] = { ...out[i]!, text }; };
   switch (id) {
     case "notifications":
-      if (f.volume) swap("On", `${f.volume} volume`);
+      if (f.news) swap("On", `News pop-ups ${f.news}`);
       break;
     case "tmux":
       if (f.tmuxVersion) swap("tmux ready", `tmux ${f.tmuxVersion}`);

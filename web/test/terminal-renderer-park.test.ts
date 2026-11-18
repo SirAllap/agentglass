@@ -55,7 +55,8 @@ swap("localStorage", {
 store.set("agentglass.term.webgl", "canvas");
 
 const panel = await import("../src/components/TerminalPanel.tsx");
-const { attachRenderer, parkRenderer, PARK_RENDERER_MS } = panel as unknown as {
+const { attachRenderer, parkRenderer, PARK_RENDERER_MS, RECENT_RENDERERS_KEPT } = panel as unknown as {
+  RECENT_RENDERERS_KEPT: number;
   attachRenderer: (s: unknown) => void;
   parkRenderer: (s: unknown) => void;
   PARK_RENDERER_MS: number;
@@ -88,21 +89,31 @@ describe("the canvas renderer follows the shell on and off screen", () => {
     expect(loaded.length).toBe(1);
   });
 
-  test("unmounting disposes it, and gives the canvases back", async () => {
-    const { s } = fakeSess();
-    attachRenderer(s);
-    let disposed = 0;
-    s.canvasAddon = { dispose: () => { disposed++; } };
+  test("a parked shell keeps its renderer; only one evicted from the recent set is disposed", async () => {
+    const mk = () => {
+      const { s } = fakeSess();
+      const o = s as unknown as Record<string, unknown>;
+      o.holder = { parentElement: null };
+      o.webglAddon = null;
+      attachRenderer(s);
+      let disposed = 0;
+      s.canvasAddon = { dispose: () => { disposed++; } };
+      return { s, disposed: () => disposed };
+    };
+    const shells = Array.from({ length: RECENT_RENDERERS_KEPT + 1 }, mk);
 
-    parkRenderer(s);
-    // Not immediately: a pane being moved between slots unmounts and remounts
-    // inside the same frame, and disposing there would thrash the atlas.
-    expect(disposed).toBe(0);
-    expect(s.canvasAddon).not.toBeNull();
+    // Park the oldest, then 12 more: it falls out of the 12 most recent.
+    for (const { s } of shells) parkRenderer(s);
 
+    // Evicted: disposed right away, canvases handed back.
+    expect(shells[0].disposed()).toBe(1);
+    expect(shells[0].s.canvasAddon).toBeNull();
+    // The 12 most recent keep theirs, even after the park delay.
     await sleep(PARK_RENDERER_MS + 150);
-    expect(disposed).toBe(1);
-    expect(s.canvasAddon).toBeNull();
+    for (const { s, disposed } of shells.slice(1)) {
+      expect(disposed()).toBe(0);
+      expect(s.canvasAddon).not.toBeNull();
+    }
   });
 
   test("coming straight back keeps the renderer it already had", async () => {

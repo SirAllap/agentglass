@@ -27,7 +27,7 @@ export function AgentTrustRow({ root }: { root: string }) {
     if (r?.ok) { setOn(!on); setError(null); } else setError(r?.error ?? "the server did not answer");
   };
   return (
-    <Toggle label="Let my agents change settings without asking"
+    <Toggle settingId="agents.changeWithoutAsking" label="Let my agents change settings without asking"
       agentNever="decides whether an agent's risky change waits for the owner at all: an agent never turns it on"
       hint={error ?? (root
         ? "Applies to this project only: off here, its agents still ask even where another project is on. Secrets are never theirs either way."

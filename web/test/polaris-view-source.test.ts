@@ -14,7 +14,7 @@ const src = (p: string) => readFileSync(join(import.meta.dir, "..", "src", p), "
 const view = src("components/polaris/PolarisView.tsx");
 const css = src("components/polaris/polarisView.css");
 const paneSrc = src("components/orchestration/OrchestrationPane.tsx");
-const polarisPageSrc = src("components/polaris/PolarisPane.tsx");
+const polarisPageSrc = src("components/settings/pages/PolarisPage.tsx");
 const modalSrc = src("components/SettingsModal.tsx");
 const openSrc = src("lib/openSettings.ts");
 
@@ -48,7 +48,7 @@ describe("the drawing sits at the top of the page's one scroller", () => {
     // test states the rest); a sticky drawing taller than that scrollport
     // covers the doors it was meant to leave visible.
     expect(view.indexOf('className="agx-pol-panel"')).toBeGreaterThan(view.indexOf('className="agx-pol-pinned"'));
-    expect(polarisPageSrc).toContain("<PolarisView root={root} />");
+    expect(polarisPageSrc).toContain("<PolarisView root={sc.root} />");
   });
   test("one scroll region: the panel is the last block, not a second scroller", () => {
     expect(css).not.toMatch(/\.agx-pol-panel \{[^}]*overflow-y:\s*auto/);
@@ -57,11 +57,11 @@ describe("the drawing sits at the top of the page's one scroller", () => {
 });
 
 describe("one draft, one save", () => {
-  test("Save changes and Discard act on the draft, not on every click", () => {
-    expect(view).toContain("Save changes");
-    expect(view).toContain("Discard");
+  test("a change saves at once with Undo, loosening asks first; no Save/Discard bar", () => {
+    expect(view).not.toContain("Save changes");
+    expect(view).not.toContain("const discard = () =>");
     expect(view).toContain("const commit = async (allowed: readonly DoorId[]) =>");
-    expect(view).toContain("const discard = () =>");
+    expect(view).toContain("autoRef.current = () => {");
     expect(view).not.toMatch(/onToggle=\{\(next\) => void save/);
   });
   test("it has a page of its own in Settings > Agents, and Orchestration no longer mounts it", () => {
@@ -69,7 +69,7 @@ describe("one draft, one save", () => {
     expect(paneSrc).not.toContain("<PolarisView");
     expect(paneSrc).not.toContain("<PolarisSlot");
     expect(paneSrc).not.toContain("<PolarisCard");
-    expect(modalSrc).toContain('{show("polaris") && <PolarisPane />}');
+    expect(modalSrc).toContain('show("polaris") && <PolarisPage />');
   });
   test("an old polaris link lands on that page, not on Orchestration", () => {
     expect(openSrc).not.toContain('polaris: "orchestration"');

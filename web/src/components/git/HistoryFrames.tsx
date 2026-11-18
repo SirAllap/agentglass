@@ -129,7 +129,7 @@ export function Aside({ children }: { children: ReactNode }) {
 export const Fact = ({ k, v, mono, wide }: { k: string; v?: string; mono?: boolean; wide?: boolean }) => !v ? null : (
   <div className="flex gap-3 text-[11px] min-w-0">
     <span className={`${wide ? "w-20" : "w-12"} shrink-0`} style={{ color: "var(--text3)" }}>{k}</span>
-    <span className="min-w-0 break-words" title={v} style={{ color: "var(--text2)", fontFamily: mono ? MONO : undefined }}>{v}</span>
+    <span className="min-w-0 break-words" data-tip={v} style={{ color: "var(--text2)", fontFamily: mono ? MONO : undefined }}>{v}</span>
   </div>
 );
 

@@ -17,16 +17,26 @@ export type GitQuestion = {
   /** A sentence ending in "?" for a confirm; a short label for a prompt. */
   title: string;
   /** One plain line under the title, newlines kept. */
-  body?: string;
+  body?: ReactNode;
   node?: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
   /** Destructive: starts on Cancel, Enter does not confirm, red button. */
   danger?: boolean;
+  /** Starts on Cancel and Enter does not confirm, though nothing is red. */
+  cancelFocus?: boolean;
   /** The git the answer runs. Only where the catalogue states it. */
   command?: string;
   /** Nothing (no reflog, no trash) brings it back: says so under the command. */
   irreversible?: boolean;
+  /** What the answer throws away, listed in the body (files, in plain names). */
+  lost?: string[];
+  lostLine?: string;
+  /** An agent prepared it: the red button is held for a second. */
+  preparedBy?: string;
+  confirmIcon?: ReactNode;
+  /** Delete-branch drawing: commits shared with another ref hollow, the ones only here red. */
+  dots?: { shared: number; onlyHere: number; name: string };
   input?: { label?: string; initial?: string; placeholder?: string };
 };
 
@@ -79,13 +89,13 @@ export function GitQuestionDialog({ pending }: { pending: Pending | null }) {
   }
 
   const isPrompt = !!pending.input;
-  const v = confirmVariant({ danger: pending.danger, hasInput: isPrompt, command: pending.command, irreversible: pending.irreversible });
+  const v = confirmVariant({ danger: pending.danger, hasInput: isPrompt, command: pending.command, irreversible: pending.irreversible, cancelFocus: pending.cancelFocus, preparedBy: pending.preparedBy });
   const answer = () => pending.resolve(isPrompt ? text.trim() : true);
   const cancel = () => pending.resolve(isPrompt ? null : false);
   const label = pending.confirmLabel ?? (pending.danger ? "Delete" : "Ok");
   return (
     <GitDialog title={pending.title} subtitle={pending.body ? <span className="whitespace-pre-wrap">{pending.body}</span> : undefined}
-      tone={v.tone} danger={pending.danger} command={pending.command} cannotUndo={v.cannotUndo}
+      tone={v.tone} danger={pending.danger} lost={pending.lost} lostLine={pending.lostLine} hold={!!pending.danger} preparedBy={pending.preparedBy} dots={pending.dots} confirmIcon={pending.confirmIcon} command={pending.command} cannotUndo={v.cannotUndo}
       confirmLabel={label} cancelLabel={pending.cancelLabel} onConfirm={answer} confirmDisabled={isPrompt && !text.trim()}
       reason={pending.danger ? undefined : isPrompt && !text.trim() ? "Type a value first." : `Press ${label} to go ahead.`}
       initialFocus={v.focus} enterConfirms={v.enterConfirms} onClose={cancel}>

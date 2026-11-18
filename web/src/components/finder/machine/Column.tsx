@@ -137,7 +137,7 @@ export function Column({ enter, fill, dir: folderPath, title, filterSignal, widt
       {/* The column that has the keyboard wears a bar on top; a colour alone would not survive a theme that has no accent to spare. */}
       <div aria-hidden className="absolute left-0 right-0 top-0" style={{ height: 3, background: focused ? "var(--primary)" : "transparent", zIndex: 2 }} />
       <div role="separator" aria-orientation="vertical" aria-label={`Resize ${title}`} aria-valuenow={Math.round(width)} tabIndex={-1}
-        title="Drag to resize, double-click to fit"
+        data-tip="Drag to resize, double-click to fit"
         className="absolute top-0 bottom-0 agx-col-edge" style={{ right: 0, width: 6, cursor: "col-resize", zIndex: 3, touchAction: "none" }}
         onDoubleClick={fit}
         onPointerDown={(e) => {
@@ -154,17 +154,17 @@ export function Column({ enter, fill, dir: folderPath, title, filterSignal, widt
           else if (e.key === "Enter" || e.key === "0") { e.preventDefault(); e.stopPropagation(); fit(); }
         }} />
       <header className="flex items-center gap-1 shrink-0" style={{ minHeight: 31, padding: "5px 5px 4px 12px", borderBottom: LINE, background: hover ? "color-mix(in srgb, var(--primary) 7%, transparent)" : undefined }}>
-        <b className="flex-1 min-w-0 flex text-[12px]" title={folderPath} aria-label={title} style={{ color: titleColor(focused), fontWeight: 700 }}><MiddleText text={title} /></b>
+        <b className="flex-1 min-w-0 flex text-[12px]" data-tip={folderPath} aria-label={title} style={{ color: titleColor(focused), fontWeight: 700 }}><MiddleText text={title} /></b>
         {loading && spin && <span role="status" aria-label="Loading" className="agx-spin shrink-0" style={{ marginRight: 4 }} />}
-        <button className={btn} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Refresh (F5)" aria-label="Refresh" onClick={onRefresh}><StrataIcon set="act" name="refresh" size={ICON.md} /></button>
+        <button className={btn} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} data-tip="Refresh (F5)" aria-label="Refresh" onClick={onRefresh}><StrataIcon set="act" name="refresh" size={ICON.md} /></button>
         <button className={btn} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} aria-label={(recent?.dir ?? prefs.sortDir) === "asc" ? "Ascending — click to reverse" : "Descending — click to reverse"}
-          title={(recent?.dir ?? prefs.sortDir) === "asc" ? "Ascending — click to reverse" : "Descending — click to reverse"} onClick={() => onSort(recent?.key ?? prefs.sortKey)}>
+          data-tip={(recent?.dir ?? prefs.sortDir) === "asc" ? "Ascending — click to reverse" : "Descending — click to reverse"} onClick={() => onSort(recent?.key ?? prefs.sortKey)}>
           <StrataIcon set="act" name={(recent?.dir ?? prefs.sortDir) === "asc" ? "arrow-up-narrow-wide" : "arrow-down-wide-narrow"} size={ICON.md} />
         </button>
-        <button className={btn} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Sort options" aria-label="Sort options" aria-haspopup="menu" onClick={open}><StrataIcon set="act" name="sliders-horizontal" size={ICON.md} /></button>
-        <button className={btn} aria-pressed={finding} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", background: finding ? "color-mix(in srgb, var(--primary) 16%, transparent)" : undefined }} title="Filter this pane (Ctrl+F)" aria-label="Filter this pane"
+        <button className={btn} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} data-tip="Sort options" aria-label="Sort options" aria-haspopup="menu" onClick={open}><StrataIcon set="act" name="sliders-horizontal" size={ICON.md} /></button>
+        <button className={btn} aria-pressed={finding} style={{ width: HIT, height: HIT, color: "var(--primary-ink)", background: finding ? "color-mix(in srgb, var(--primary) 16%, transparent)" : undefined }} data-tip="Filter this pane (Ctrl+F)" aria-label="Filter this pane"
           onClick={toggleFilter}><StrataIcon set="act" name="funnel" size={ICON.md} /></button>
-        {onClosePane && <button className={btn} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} title="Close this pane" aria-label="Close this pane" onClick={onClosePane}><StrataIcon set="act" name="x" size={ICON.md} /></button>}
+        {onClosePane && <button className={btn} style={{ width: HIT, height: HIT, color: "var(--primary-ink)" }} data-tip="Close this pane" aria-label="Close this pane" onClick={onClosePane}><StrataIcon set="act" name="x" size={ICON.md} /></button>}
       </header>
       {finding && <FilterField inputRef={input} value={filter} total={state?.total ?? display.rows.length} title={title} onChange={onFilter} onDone={() => { onFilter(""); onFinding(false); }}
         nav={{ results: display.rows.length, selected: selItem !== null, onSpace, onDown: () => { const r = display.rows.find((x) => x.name === selName) ?? display.rows[0]; if (r && r.name !== selName) onPick(r); }, onActivate: () => { const r = display.rows.find((x) => x.name === selName) ?? display.rows[0]; if (r) onOpen(r); } }} />}
@@ -195,11 +195,11 @@ export function Column({ enter, fill, dir: folderPath, title, filterSignal, widt
             const dir = isFolder(r);
             const badge = r.name === selName && showsBadge(true, focused);
             return (
-              <div key={r.name} role="option" data-row={r.name} data-folder={dir && !r.locked ? "" : undefined} draggable={!r.locked && !(edit && edit.was === r.name)} aria-selected={sel} aria-disabled={r.locked || undefined} title={r.why ?? r.name}
+              <div key={r.name} role="option" data-row={r.name} data-folder={dir && !r.locked ? "" : undefined} draggable={!r.locked && !(edit && edit.was === r.name)} aria-selected={sel} aria-disabled={r.locked || undefined} data-tip={r.why ?? r.name}
                 onMouseDown={noRange} {...rowPointer("columns", r, { onPick, onOpen, onTab, onReveal, onFocusChild, onSlow, onSlowCancel, filtered: filter !== "", trash: inTrash(folderPath) })}
                 className="agx-fm-row flex items-center gap-2 px-2.5 mx-1 rounded-md cursor-pointer"
                 style={{ opacity: cut?.has(r.name) ? CUT_OPACITY : undefined, height: rowH, color: r.locked ? "var(--text4)" : "var(--text)", ...rowPaint(rowTone(sel, focused), r.name === selName) }}>
-                <span data-icon className="shrink-0 flex">{!r.locked && !dir && isThumbable(r.name) ? <Thumb path={joinPath(folderPath, r.name)} size={ROW_THUMB} radius={3} fallback={<RowIcon row={r} dir={folderPath} />} /> : <RowIcon row={r} dir={folderPath} />}</span>
+                <span data-icon className="shrink-0 flex">{!r.locked && !dir && isThumbable(r.name) ? <Thumb path={joinPath(folderPath, r.name)} name={r.name} mtime={r.mtime} bytes={r.bytes} size={ROW_THUMB} radius={3} fallback={<RowIcon row={r} dir={folderPath} />} /> : <RowIcon row={r} dir={folderPath} />}</span>
                 {edit && edit.was === r.name ? <InlineName key="ren" edit={edit} rowH={rowH - 4} icon={null} /> : <NameCell name={rowLabel(r.name)} />}
                 {dir ? (
                   <>

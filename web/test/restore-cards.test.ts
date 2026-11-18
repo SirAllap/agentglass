@@ -25,6 +25,15 @@ describe("the banner", () => {
     expect(plain.resumeLabel).toBeNull();
     expect(plain.text).not.toContain("agent");
   });
+  test("a desk already put away is not announced again, and only the windows put away drop out", () => {
+    expect(restoredBanner([w("@1", { restored: true, restoredDismissed: true })]), "all put away").toBeNull();
+    const b = restoredBanner([
+      w("@1", { restored: true, restoredDismissed: true }),
+      w("@2", { restored: true, restoredAt: 7 }),
+    ])!;
+    expect(b.windows).toBe(1);
+    expect(b.text).toContain("1 window restored");
+  });
 });
 
 describe("age", () => {
@@ -52,6 +61,8 @@ describe("the card over the window in front", () => {
   test("a dead pane says how it ended, how long ago, and where Restart opens", () => {
     const c = paneCard(w("@1", { dead: true, exit: 2, diedAt: now - 4 * 60_000 }), "orbit", now)!;
     expect(c).toMatchObject({ kind: "dead", title: "This process exited with status 2", primary: "Restart here", secondary: "Close window" });
+    expect(paneCard(w("@1", { dead: true, exit: 0, signal: 9 }), null, now)!.title).toBe("This process was killed (signal 9, often the out-of-memory guard)");
+    expect(paneCard(w("@1", { dead: true, exit: 0, signal: 15 }), null, now)!.title).toBe("This process was killed by signal 15");
     expect(c.body).toBe("AI01 stopped 4 min ago. The text above is what it left. Restart opens a fresh shell in orbit.");
   });
   test("a dead pane wins over a stale restored mark", () => {

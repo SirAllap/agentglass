@@ -26,7 +26,7 @@ const sha = (n: number) => String(n).repeat(40).slice(0, 40);
 
 const row = (over: Partial<ManifestRow> = {}): ManifestRow => ({
   sha: sha(1), subject: "ORBIT-1042 make the tab strip follow the pane", time: Math.floor((NOW - 3 * 3_600_000) / 1000),
-  ticket: "ORBIT-1042", inBuild: true, verdict: null, at: null, kind: null, note: null, group: "toTest", ...over,
+  ticket: "ORBIT-1042", steps: [], inBuild: true, verdict: null, at: null, kind: null, note: null, group: "toTest", ...over,
 });
 
 /** The same row after the filter has tagged it with its project. */
@@ -222,6 +222,19 @@ describe("states", () => {
     expect(h).not.toContain(">Tested<");
   });
 
+  test("a row with steps hides the no-steps chip and the empty box", () => {
+    const h = html({ openRow: sha(1), project: view({ rows: [ref({ steps: [{ kind: "run", text: "run it", command: "make test" }] })] }) });
+    expect(h).not.toContain("no steps — ask the builder");
+    expect(h).not.toContain("did not write the steps");
+    expect(h).toContain("Test it, then sign off with a note");
+  });
+
+  test("an open row with no steps explains it and asks for the steps", () => {
+    const h = html({ openRow: sha(1) });
+    expect(h).toContain("did not write the steps");
+    expect(h).toContain("Write the steps yourself, or a note for the builder");
+  });
+
   test("an unsigned row carries the no-steps chip, a signed one does not", () => {
     expect(html()).toContain("no steps — ask the builder");
     const signed = html({ project: view({ rows: [ref({ verdict: "tested", at: NOW, kind: "person" })] }) });
@@ -334,7 +347,7 @@ describe("the project filter", () => {
     const h = html({ project: projectView([orbit, queue], queueRoot), summary: two, scope: queueRoot });
     expect(h).toContain("ORBIT-1074 queue middle");
     expect(h).not.toContain("ORBIT-1075 orbit newer");
-    expect(h).toContain('aria-selected="true" title="/home/acme/queue">queue<');
+    expect(h).toContain('aria-selected="true" data-tip="/home/acme/queue">queue<');
   });
 
   test("the window remembers its project and falls back to All when it is closed", () => {
@@ -372,7 +385,7 @@ describe("controls keep their place", () => {
 
   test("the note field is drawn on an unsigned row, with the rule's sentence", () => {
     const h = html({ openRow: sha(1) });
-    expect(h).toContain("Test it, then sign off with a note");
+    expect(h).toContain("Write the steps yourself, or a note for the builder");
     expect(h).toContain("Pick Tested or Failed first");
   });
 

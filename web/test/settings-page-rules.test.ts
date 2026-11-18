@@ -27,6 +27,7 @@
  * "Settings pages") is what measures the rendered page.
  */
 import { describe, expect, test } from "bun:test";
+import { modalSource } from "./settingsSource.ts";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
@@ -39,7 +40,7 @@ const strip = (s: string) => s
   .replace(/^\s*\/\/.*$/gm, "");
 
 const css = read(join(SRC, "index.css")).replace(/\/\*[\s\S]*?\*\//g, "");
-const modal = read(join(COMPONENTS, "SettingsModal.tsx"));
+const modal = modalSource();
 const kit = strip(read(join(COMPONENTS, "SettingsKit.tsx")));
 const rowSrc = strip(read(join(COMPONENTS, "SettingRow.tsx")));
 
@@ -125,7 +126,9 @@ function pageSource(id: string): string {
     if (marks[i]![1] !== id) continue;
     const from = marks[i]!.index!;
     // A block ends where the next page's block starts.
-    const to = marks.slice(i + 1).find((m) => m[1] !== id)?.index ?? modal.length;
+    // The last page's block ends where the page blocks do (`pageBlocks` closes its fragment), not at the end of the file.
+    const end = modal.indexOf("\n    </>\n  );", from);
+    const to = marks.slice(i + 1).find((m) => m[1] !== id)?.index ?? (end > from ? end : modal.length);
     text += modal.slice(from, to);
   }
   const MODAL = join(COMPONENTS, "SettingsModal.tsx");
@@ -168,7 +171,7 @@ function controlProps(src: string): string[] {
 /** The defect classes, as source patterns. */
 const METRICS: Record<string, (src: string) => number> = {
   /** The old box, whose `* + *` borders drew the doubled lines. */
-  "old-box": (s) => (s.match(/agx-settings-section|agx-settings-rows|<Section\b/g) ?? []).length,
+  "old-box": (s) => (s.match(/agx-settings-section|agx-settings-rows|<Section\b(?![^>]*\bid=)/g) ?? []).length,
   /** An eyebrow used as a heading inside a card. */
   "eyebrow": (s) => (s.match(/panel-eyebrow/g) ?? []).length,
   /** Text cut with an ellipsis. A machine string (a path, a command, a binary
@@ -189,7 +192,7 @@ const METRICS: Record<string, (src: string) => number> = {
 };
 
 /** Held at zero: the pages already built from the kit. */
-const MIGRATED = ["connections", "engines", "orchestration", "clickup", "jira", "prefs", "appearance", "notifications", "rail", "keys", "terminal", "diff", "tasks", "browser", "understudy", "review-prompts", "saved-replies", "about", "privacy", "tmux", "plugins", "remote", "log", "onboarding", "git"];
+const MIGRATED = ["connections", "orchestration", "clickup", "jira", "appearance", "notifications", "keys", "terminal", "diff", "tasks", "browser", "understudy", "about", "privacy", "plugins", "remote", "log", "git"];
 
 const RATCHET_PATH = join(import.meta.dir, "settings-ratchet.txt");
 const ceilings = new Map<string, number>();
@@ -204,7 +207,9 @@ describe("every settings page", () => {
     const missing = tabIds.filter((t) => !new RegExp(`\\{show\\("${t.id}"\\) &&`).test(modal)).map((t) => t.id);
     // A tab with no block of its own is reached through another page (an
     // alias). Named here so a new one is a decision, not an accident.
-    expect(missing.sort()).toEqual([]);
+    // These three were folded into Commands & replies and About (shared/uiActions.ts SETTINGS_PAGE_ALIASES); their tabs stay for search and old links.
+    const ALIAS_ONLY = ["prefs", "rail", "onboarding", "review-prompts", "saved-replies", "budgets", "devices", "tmux"]; // budgets, devices, tmux: their old blocks are gone; the alias map sends them to Engines & usage, Remote & devices and Advanced.
+    expect(missing.filter((id) => !ALIAS_ONLY.includes(id)).sort()).toEqual([]);
   });
 
   test("migrated pages carry none of the defect classes", () => {
@@ -248,6 +253,9 @@ describe("the one divider", () => {
     expect(bordered).toEqual([
       ".agx-settings-col .agx-scard",
       ".agx-scard-body > .agx-settings-row + .agx-settings-row::before,\n.agx-scard-body > .agx-fold-body + .agx-settings-row::before,\n.agx-scard-body > .agx-row-more + .agx-settings-row::before,\n.agx-scard-head + .agx-scard-body > .agx-settings-row:first-child::before",
+      // A legacy card inside a shell Section is flattened into it: its border is switched off, and a second one keeps one divider.
+      "[data-settings-page] [data-section-kind] .agx-scard",
+      "[data-settings-page] [data-section-kind] .agx-scard + .agx-scard",
     ]);
   });
   test("no new sibling-of-anything border rule", () => {
@@ -336,10 +344,10 @@ describe("the shared blocks", () => {
     // query would be a page that opted out.
     const wide = atRuleBodies(css, "@media (min-width: 1760px)").filter((b) => b.includes(".agx-settings-page"));
     expect(wide).toHaveLength(1);
-    const page = ruleBody(wide[0]!, ".agx-settings-page {");
-    expect(page).toContain("grid-template-columns: minmax(0, 1fr) 224px");
-    expect(page).toContain("justify-content: start");
-    expect(page).not.toContain("justify-content: center");
+    // No second track: the old index's 224 px column outlived the index and sat empty on the
+    // right, so every centred page sat 121 px left of the middle. The shell's group centres itself.
+    expect(wide[0]!).not.toContain("224px");
+    expect(wide[0]!).not.toContain("justify-content: center");
   });
   test("the Agents page uses the window like every other page from 1760px", () => {
     // Its wrappers (the hero, the pair) kept its cards out of the page's flow,
@@ -354,14 +362,6 @@ describe("the shared blocks", () => {
     const narrow = atRuleBodies(css, "@media (min-width: 1180px)").join("\n");
     expect(ruleBody(narrow, ".agx-settings-col .agx-agents-hero {")).toContain("minmax(0, 1fr) 344px");
     expect(ruleBody(narrow, ".agx-agents-pair {")).toContain("minmax(0, 1fr) minmax(0, 1fr)");
-  });
-  test("the stable flow places the cards a display:contents wrapper hands to the grid", () => {
-    // The Agents page's wrappers have no box from 1760px, so the grid's items
-    // are their children; the script walked `col.children` and pinned the one
-    // wrapper that has no box, leaving every card unplaced in 1px rows.
-    const flow = read(join(SRC, "components", "useStableFlow.ts"));
-    expect(flow).toContain("const kids = flowKids(col);");
-    expect(flow).toContain('getComputedStyle(h).display === "contents"');
   });
   test("the Agents page's Watching card keeps its own height beside the taller preview", () => {
     // The hero is a two-column grid whose right column is a live preview; a

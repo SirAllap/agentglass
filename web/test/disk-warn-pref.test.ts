@@ -7,6 +7,7 @@
  * thing to hold: exactly N % free is not under N, and off names nothing.
  */
 import { afterAll, beforeEach, describe, expect, it } from "bun:test";
+import { modalSource } from "./settingsSource.ts";
 import { globalStubs } from "./stubGlobal.ts";
 
 const stubGlobal = globalStubs();
@@ -90,8 +91,8 @@ describe("which mounts the badge names", () => {
 });
 
 describe("the def an agent reaches it through", () => {
-  it("is a level 2 low-class setting on Window & startup, a number that defaults to 10", () => {
-    expect(def().page).toBe("prefs");
+  it("is a level 2 low-class setting on Data & privacy, a number that defaults to 10", () => {
+    expect(def().page).toBe("privacy");
     expect(def().section).toBe("Disk space");
     expect(def().level).toBe(2);
     expect(def().default).toBe(10);
@@ -131,19 +132,19 @@ describe("the def an agent reaches it through", () => {
 });
 
 describe("the row that draws it", () => {
-  it("is in the generated index, on Window & startup, bound to the def", () => {
+  it("is in the generated index, on Data & privacy, bound to the def", () => {
     const row = SETTINGS_ROWS.find((r) => r.settingId === "prefs.diskWarn")!;
-    expect(row).toMatchObject({ pane: "prefs", section: "Disk space", label: "Warn when free disk is under" });
-    expect(R.isMigrated("prefs", "Disk space")).toBe(true);
+    expect(row).toMatchObject({ pane: "privacy", section: "Disk space", label: "Warn when free disk is under" });
+    expect(R.isMigrated("privacy", "Disk space")).toBe(true);
   });
 
   it("only that section of the page is migrated: the display size and start at login are the window's own", () => {
-    expect(R.MIGRATED.prefs).toEqual(["Disk space"]);
-    expect(R.isMigrated("prefs", "Size and startup")).toBe(false);
+    expect(R.MIGRATED.privacy).toEqual(["Disk space"]);
+    expect(R.isMigrated("privacy", "What is on disk")).toBe(false);
   });
 
   it("the row writes through the def and re-reads when an agent changes it", async () => {
-    const src = await read("components/SettingsModal.tsx");
+    const src = modalSource();
     expect(src).toContain('setting("prefs.diskWarn").set(');
     expect(src).toContain("useSyncExternalStore(subscribeSettings, diskWarnPct");
     expect(src).toContain("DISK_WARN_CHOICES.map(");
@@ -153,5 +154,18 @@ describe("the row that draws it", () => {
     const { readPrefs } = await import("../src/lib/paneState.ts");
     P.setDiskWarnPct(20);
     expect(readPrefs().diskWarnPct).toBe(20);
+  });
+});
+
+describe("low-disk badge refresh", () => {
+  it("re-samples the disk when the window regains focus, with no timer", async () => {
+    const src = await Bun.file(new URL("../src/components/MachinePanel.tsx", import.meta.url)).text();
+    expect(src).toContain("useRefreshOnFocus(true, sampleDisk)");
+    expect(src).not.toMatch(/setInterval/);
+    /* The call site alone passes with an empty hook: the hook itself must listen for focus and call the sampler. */
+    const hook = await Bun.file(new URL("../src/lib/useRefreshOnFocus.ts", import.meta.url)).text();
+    expect(hook).toContain('addEventListener("focus"');
+    expect(hook).toContain("saved.current()");
+    expect(hook).not.toMatch(/setInterval/);
   });
 });

@@ -30,23 +30,23 @@ export function GapRow({ gap, busy, error, onExpand }: {
       <span className="sticky left-0 inline-flex items-center gap-1 px-3">
         {small ? (
           <button type="button" disabled={busy} onClick={() => onExpand("all")} className={BTN} style={style}
-            title={`Show the ${n} hidden line${n === 1 ? "" : "s"}`}>
+            data-tip={`Show the ${n} hidden line${n === 1 ? "" : "s"}`}>
             <CaretIcon size={ICON.xs} />{n} hidden line{n === 1 ? "" : "s"}
           </button>
         ) : (
           <>
             {gap.down && (
-              <button type="button" disabled={busy} onClick={() => onExpand("down")} className={BTN} style={style} title={label("down")} aria-label={label("down")}>
+              <button type="button" disabled={busy} onClick={() => onExpand("down")} className={BTN} style={style} data-tip={label("down")} aria-label={label("down")}>
                 <CaretIcon size={ICON.xs} />{n == null ? "Show lines below" : ""}
               </button>
             )}
             {gap.up && (
-              <button type="button" disabled={busy} onClick={() => onExpand("up")} className={BTN} style={style} title={label("up")} aria-label={label("up")}>
+              <button type="button" disabled={busy} onClick={() => onExpand("up")} className={BTN} style={style} data-tip={label("up")} aria-label={label("up")}>
                 <span style={{ display: "inline-flex", transform: "rotate(180deg)" }}><CaretIcon size={ICON.xs} /></span>
               </button>
             )}
             {n != null && (
-              <button type="button" disabled={busy} onClick={() => onExpand("all")} className={BTN} style={style} title={`Show all ${n} hidden lines`}>
+              <button type="button" disabled={busy} onClick={() => onExpand("all")} className={BTN} style={style} data-tip={`Show all ${n} hidden lines`}>
                 {n} hidden lines
               </button>
             )}

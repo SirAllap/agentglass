@@ -3,7 +3,7 @@ import { ContextMenu } from "../../ContextMenu.tsx";
 import { useMenuAt } from "../../tasks/TaskMenu.tsx";
 import { Caret, Ctl, Eyebrow } from "./ListControls.tsx";
 import { MenuRowBtn } from "./MenuParts.tsx";
-import { groupChoices, thenChoices, withGroup } from "./toolbarModel.ts";
+import { groupChoices, OUTLINES, outlineOf, thenChoices, withGroup } from "./toolbarModel.ts";
 import type { JiraListFilters } from "./model.ts";
 
 function Pick<T extends string>({ label, tip, value, options, onPick }: {
@@ -23,16 +23,23 @@ function Pick<T extends string>({ label, tip, value, options, onPick }: {
   );
 }
 
-/** Group by, and the second split inside each group. Area is offered only where the board has epics. */
-export function GroupControl({ filters, onFilters, hasAreas }: {
-  filters: JiraListFilters; onFilters: (patch: Partial<JiraListFilters>) => void; hasAreas: boolean;
+/** Group by, and the second split inside each group. Area is offered only where the board has epics.
+ *  Board draws its own rows as Swimlanes; the outline presets are a List-view idea, so Board does not offer them. */
+export function GroupControl({ filters, onFilters, hasAreas, assigned = false, board = false }: {
+  filters: JiraListFilters; onFilters: (patch: Partial<JiraListFilters>) => void; hasAreas: boolean; assigned?: boolean; board?: boolean;
 }) {
+  const outlines = board ? [] : OUTLINES;
   return (
     <span className="inline-flex items-center shrink-0" style={{ gap: 8 }} data-testid="jira-group-control">
-      <Eyebrow>Group</Eyebrow>
-      <Pick<GroupBy> label="Group" tip="Group the cards by" value={filters.group} options={groupChoices(hasAreas)} onPick={(by) => onFilters(withGroup(by))} />
-      <Eyebrow>Then</Eyebrow>
-      <Pick<ThenBy> label="Then" tip="Then split each group by" value={filters.thenGroup} options={thenChoices(filters.group, hasAreas)} onPick={(thenGroup) => onFilters({ thenGroup })} />
+      {outlines.map((o) => (
+        <Ctl key={o.id} pressed={outlineOf(filters) === o.id} tip={`Every card ${o.label.toLowerCase()}`} onClick={() => onFilters(o.pick)}>{o.label}</Ctl>
+      ))}
+      <span className="agx-jl-gpick inline-flex items-center" style={{ gap: 8 }}>
+        <Eyebrow>Group</Eyebrow>
+        <Pick<GroupBy> label="Group" tip="Group the cards by" value={filters.group} options={groupChoices(hasAreas, assigned)} onPick={(by) => onFilters(withGroup(by))} />
+        <Eyebrow>Then</Eyebrow>
+        <Pick<ThenBy> label="Then" tip="Then split each group by" value={filters.thenGroup} options={thenChoices(filters.group, hasAreas)} onPick={(thenGroup) => onFilters({ thenGroup })} />
+      </span>
     </span>
   );
 }

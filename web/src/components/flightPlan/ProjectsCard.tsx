@@ -88,7 +88,7 @@ export function ProjectsCard({ rows, selected, onSelect, enabled, onWrote, momen
           const name = projectName(r.root);
           return (
             <div key={r.root} className="ps-prj" data-sel={sel || undefined}>
-              <button type="button" role="radio" aria-checked={sel} className="ps-prj-pick" onClick={() => onSelect(r.root)} title={r.root}>
+              <button type="button" role="radio" aria-checked={sel} className="ps-prj-pick" onClick={() => onSelect(r.root)} data-tip={r.root}>
                 <span className="ps-prj-nm">{name}</span>
                 {r.on ? <ModeBadge strip={r.strip} /> : <span className="ps-badge ps-prj-off" data-tone="none">Off</span>}
                 <span className="ps-prj-seat" data-none={r.seat === null && r.on ? "" : undefined}>{!r.on ? "Not used here" : r.seat === null ? <><LockIcon size={ICON.xs} />No seat</> : r.seat === "" ? "Seat not read" : r.seat}</span>
@@ -97,12 +97,12 @@ export function ProjectsCard({ rows, selected, onSelect, enabled, onWrote, momen
               </button>
               <div className="ps-prj-mom" role="group" aria-label={`Flight plan and Preflight moments for ${name}`}>
                 <button type="button" role="switch" aria-checked={r.on} aria-label={`Use Flight plan in ${name}`} className="ps-mom ps-onoff" data-on={r.on || undefined}
-                  title={r.on ? "Flight plan is on here. Turn it off to leave this project out." : "Flight plan is off here. Turn it on to use it."} onClick={() => void setOn(r.root, !r.on)}>{r.on ? "On" : "Off"}</button>
+                  data-tip={r.on ? "Flight plan is on here. Turn it off to leave this project out." : "Flight plan is off here. Turn it on to use it."} onClick={() => void setOn(r.root, !r.on)}>{r.on ? "On" : "Off"}</button>
                 {MOMENTS.map(([k, w]) => {
                   const on = v?.on.includes(k) ?? false;
                   return (
                     <button key={k} type="button" className="ps-mom" aria-pressed={on} data-own={v?.own ? "" : undefined} disabled={!v || !r.on}
-                      title={v?.own ? `${w}: this project's own choice` : `${w}: follows the default`} onClick={() => void m.flip(r.root, k)}>{w}</button>
+                      data-tip={v?.own ? `${w}: this project's own choice` : `${w}: follows the default`} onClick={() => void m.flip(r.root, k)}>{w}</button>
                   );
                 })}
               </div>

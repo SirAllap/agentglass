@@ -280,7 +280,7 @@ describe("the hand-off control in the panel", () => {
   });
 
   it("shows the ClickUp page in Settings only for a connected ClickUp", () => {
-    expect(SETTINGS).toContain('{show("clickup") && cu && <ClickUpPane />}');
+    expect(SETTINGS).toContain('{show("clickup") && cu && <ClickUpPage />}');
   });
 });
 

@@ -162,7 +162,7 @@ export function ShellConsole({ command, cwd, onClose }: {
           copy button is the way out for someone who would rather run it in
           their own terminal, which is a preference worth respecting. */}
       <div className="flex items-center gap-2 px-2.5 py-1.5" style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)" }}>
-        <code className="flex-1 min-w-0 truncate text-[11px]" style={{ color: "var(--text)" }} title={command}>{command}</code>
+        <code className="flex-1 min-w-0 truncate text-[11px]" style={{ color: "var(--text)" }} data-tip={command}>{command}</code>
         <button
           onClick={() => { void navigator.clipboard?.writeText(command).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }); }}
           className="shrink-0 text-[10px] px-2 py-0.5 rounded"

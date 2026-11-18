@@ -6,6 +6,9 @@ import { subscribeLantern, lanternRows, lanternChairs, refreshLantern } from "..
 import type { LanternRow } from "../LanternView.tsx";
 import type { AgentSchedule } from "../LanternSchedule.tsx";
 import { forgottenPorts, type Forgotten } from "../../lib/portsForgotten.ts";
+import { subscribeGates, listGates, pollGatesNow } from "../../lib/gateStore.ts";
+import { settingsRequests, settingsRequestsChanged } from "../../lib/settingsRequests.ts";
+import { useVisibleInterval } from "../../lib/visibleInterval.ts";
 import { pickerProjects } from "../../lib/agentRulesView.ts";
 
 /*
@@ -82,31 +85,30 @@ export function useAgents(active: boolean): AgentsData {
       setSeat(r); setCheckedAt(Date.now()); setError(!r.ok && r.error ? r.error : "");
     }).catch(() => { if (live.current) setError("could not read the orchestrator"); });
   }, [effective]);
-  const readAsks = useCallback(() => {
-    api.gatePending().then((r) => { if (live.current) setGates(r.gates ?? []); }).catch(() => {});
-    api.settingsRequests().then((r) => { if (live.current) setRequests(r.ok ? r.requests : []); }).catch(() => {});
-  }, []);
   const readPorts = useCallback(() => { api.machinePorts().then((r) => { if (live.current) setPorts(forgottenPorts(r.ports)); }).catch(() => {}); }, []);
   const readSchedules = useCallback(() => {
     api.agentSchedules().then((r) => { if (live.current && r.ok && r.result) setSchedules(r.result.schedules); }).catch(() => {});
   }, []);
 
+  useEffect(() => { if (active) readSeat(); }, [active, readSeat]);
+  useVisibleInterval(readSeat, 15_000, active);
+  /* Asks arrive as `gate` and `settings-requests` frames (useLive.ts) into their own stores; this
+     reads those stores, with one fetch on open and one on return to a hidden window instead of a
+     5 s poll. A frame lost in a reconnect is caught by that return fetch. */
   useEffect(() => {
     if (!active) return;
-    readSeat(); const t = setInterval(readSeat, 15_000);
-    return () => clearInterval(t);
-  }, [active, readSeat]);
-  useEffect(() => {
-    if (!active) return;
-    readAsks(); const t = setInterval(readAsks, 5_000);
-    return () => clearInterval(t);
-  }, [active, readAsks]);
-  useEffect(() => {
-    if (!active) return;
-    readPorts(); readSchedules();
-    const a = setInterval(readPorts, 60_000), b = setInterval(readSchedules, 30_000);
-    return () => { clearInterval(a); clearInterval(b); };
-  }, [active, readPorts, readSchedules]);
+    const sync = () => { if (live.current) { setGates(listGates()); setRequests([...settingsRequests.list()]); } };
+    const fetchBoth = () => { void pollGatesNow(); void settingsRequestsChanged(); };
+    const onShow = () => { if (!document.hidden) fetchBoth(); };
+    sync(); fetchBoth();
+    const a = subscribeGates(sync), b = settingsRequests.subscribe(sync);
+    document.addEventListener("visibilitychange", onShow);
+    return () => { a(); b(); document.removeEventListener("visibilitychange", onShow); };
+  }, [active]);
+  /* No server event for ports or schedules yet: polled, but only while visible. */
+  useEffect(() => { if (active) { readPorts(); readSchedules(); } }, [active, readPorts, readSchedules]);
+  useVisibleInterval(readPorts, 60_000, active);
+  useVisibleInterval(readSchedules, 30_000, active);
   /* Read once per open: whether the screen can see agents at all (first-run step one). */
   useEffect(() => {
     if (!active) return;
@@ -130,7 +132,7 @@ export function useAgents(active: boolean): AgentsData {
     [ports, effective],
   );
 
-  const reload = useCallback(() => { void refreshLantern(); readSeat(); readAsks(); readPorts(); readSchedules(); }, [readSeat, readAsks, readPorts, readSchedules]);
+  const reload = useCallback(() => { void refreshLantern(); readSeat(); void pollGatesNow(); void settingsRequestsChanged(); readPorts(); readSchedules(); }, [readSeat, readPorts, readSchedules]);
 
   return {
     scope: effective, setScope, projects, rows, scoped, seat: effective === ALL ? null : seat, gates, requests, forgotten, schedules, hooksReady, checkedAt, error, reload,

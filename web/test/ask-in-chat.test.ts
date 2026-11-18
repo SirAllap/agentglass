@@ -68,7 +68,7 @@ describe("where the section lives in the panel", () => {
     expect(/\buse[A-Z]\w*\(/.exec(ask.slice(at))?.[0] ?? "none").toBe("none");
   });
   it("is its own section, not a child of the ClickUp one", () => {
-    expect(ask).toContain('<SidebarSection title="Ask for review">');
+    expect(ask).toMatch(/<SidebarSection title="Ask for review"[ >]/);
     expect(ask).not.toContain('title="ClickUp"');
     const sidebar = bodyOf("PrSidebar");
     expect(sidebar).toContain("<AskInChat d={d} root={root} />");

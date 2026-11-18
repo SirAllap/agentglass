@@ -12,6 +12,7 @@
  * offers the retry, which is the only action there is: the chunk is one request
  * away and the reason it failed is usually already over.
  */
+import { StateError } from "./tasks/BoardState.tsx";
 import React from "react";
 import { useCoverHold } from "../lib/cover.ts";
 
@@ -28,19 +29,14 @@ class ChunkBoundary extends React.Component<Props, State> {
   render() {
     if (!this.state.failed) return <React.Fragment key={this.state.attempt}>{this.props.children}</React.Fragment>;
     return (
-      <div className="h-full flex flex-col items-center justify-center gap-3 text-[12px] t-dim2">
-        <div>{this.props.label} could not be loaded.</div>
-        <button
-          type="button"
-          className="agx-btn px-3 py-1.5 text-[12px]"
-          // A new key remounts the subtree, which retries the import. React
-          // caches a REJECTED lazy component, so the retry has to be a fresh
-          // element rather than the same one rendered again.
-          onClick={() => this.setState((s) => ({ failed: false, attempt: s.attempt + 1 }))}
-        >
-          Try again
-        </button>
-      </div>
+      <StateError
+        title={`${this.props.label} could not be loaded`}
+        cause="Its code did not arrive, so the panel could not open. Nothing was lost."
+        // A new key remounts the subtree, which retries the import. React
+        // caches a REJECTED lazy component, so the retry has to be a fresh
+        // element rather than the same one rendered again.
+        onRetry={() => this.setState((s) => ({ failed: false, attempt: s.attempt + 1 }))}
+      />
     );
   }
 }

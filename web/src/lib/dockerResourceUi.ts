@@ -32,6 +32,22 @@ export const SHAPES: Record<ShapeKey, { word: string; tone: string }> = {
 };
 export interface Worn { shape: ShapeKey; word: string }
 
+/**
+ * "built …", from a Unix-seconds number (per-image `created`, from
+ * `system df -v`) or docker's own relative string (`CreatedSince`). 0, a
+ * negative number or `NaN` all mean docker did not actually say — never a
+ * literal "1970" or "NaN" on screen, which is what interpolating a bad
+ * timestamp straight into a date gives you.
+ */
+export function imageBuiltLabel(created: number | string | null | undefined): string {
+  if (typeof created === "number") {
+    if (!Number.isFinite(created) || created <= 0) return "build date unknown";
+    return `built ${new Date(created * 1000).toISOString().slice(0, 10)}`;
+  }
+  const s = (created ?? "").trim();
+  return s ? `built ${s}` : "build date unknown";
+}
+
 export function imageShape(i: ImageItem): Worn {
   if (i.goneNow) return { shape: "safe", word: "worktree gone" };
   const shape: ShapeKey = i.kind === "dang" ? "dang" : i.kind === "idle" ? "idle" : "use";

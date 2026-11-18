@@ -1,7 +1,7 @@
 // "After a PR is merged": the choices and the decisions behind the Settings section.
 import { describe, expect, test } from "bun:test";
 import {
-  BRIEFS_HELP, CLEANUP_KIND_ROWS, addPattern, briefsOf, bulkLine, checkBriefsDir, withBriefsDir, cleanupModes, daysOf, daysState, filterProjects, includeOf, isCustom, modeOf, nowLine, projectName, repoSlug, retryPlan, runPlan,
+  BRIEFS_HELP, CLEANUP_KIND_ROWS, addPattern, briefsOf, bulkLine, checkBriefsDir, withBriefsDir, teardownOf, checkTeardownScript, withTeardownScript, cleanupModes, daysOf, daysState, filterProjects, includeOf, isCustom, modeOf, nowLine, projectName, repoSlug, retryPlan, runPlan,
   readPick, saveLine, showList, showSearch, stillThere, tickState, toggleRoot, toggleShown, valuesOf, withKind, writePick, writePlan, MODE_BADGE,
   type ProjectValues, type Writer,
 } from "../src/lib/cleanupSettings.ts";
@@ -294,5 +294,22 @@ describe("other folders", () => {
     const c = code(SRC);
     expect(c).toContain('write("cleanup.otherFolders", next)');
     expect(c).toMatch(/include\.includes\("worktree"\)[^]*aria-label="Other folders"/);
+  });
+});
+
+describe("the teardown script", () => {
+  test("read from and written back into the stored body, nothing else changes", () => {
+    expect(teardownOf({ teardownScript: "scripts/teardown.sh", briefsDir: "x" })).toBe("scripts/teardown.sh");
+    expect(teardownOf(null)).toBe("");
+    expect(teardownOf({ teardownScript: 5 })).toBe("");
+    const body = { briefsDir: "~/orbit-notes/briefs", teardownScript: "", transientMarkers: ["-ci-"] };
+    expect(withTeardownScript(body, "scripts/teardown.sh")).toEqual({ ...body, teardownScript: "scripts/teardown.sh" });
+    expect(withTeardownScript(undefined, "a.sh")).toEqual({ teardownScript: "a.sh" });
+  });
+  test("the check mirrors the server: repo-relative, no leading / or ~, no .., at most 256, no NUL", () => {
+    expect(checkTeardownScript("  ")).toEqual({ ok: true, path: "" });
+    expect(checkTeardownScript(" scripts/teardown.sh ")).toEqual({ ok: true, path: "scripts/teardown.sh" });
+    for (const bad of ["/abs/x.sh", "~/x.sh", "~x", "../x", "a/../b", "a\0b", "x".repeat(257)]) expect(checkTeardownScript(bad).ok).toBe(false);
+    expect(checkTeardownScript("x".repeat(256)).ok).toBe(true);
   });
 });

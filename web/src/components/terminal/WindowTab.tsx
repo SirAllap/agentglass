@@ -17,14 +17,22 @@ import { ExpandIcon, PinIcon } from "../../lib/glyphIcons.tsx";
 import { ICON, MIN_BOX } from "../../lib/iconSize.ts";
 import { sharedPhase } from "../../lib/sharedPhase.ts";
 import type { WindowMark } from "../../lib/windowMark.ts";
+import { seatGlyphTone } from "../../lib/seatGlyph.ts";
+import { roleTabIcon, workerIconColour, workerTabTip, type NamedAgentRow } from "../../lib/workerTab.ts";
+import { roleIcon } from "../orchestration/flow/roleIcon.tsx";
 import { CloseButton } from "../CloseButton.tsx";
 import { CTRL_H, EDGE, tintEdge } from "../workspace/Chrome.tsx";
-import { WindowMarkIcon } from "./WindowMarkIcon.tsx";
+import { WindowMarkIcon, SeatMarkIcon } from "./WindowMarkIcon.tsx";
 
 export interface WindowTabProps {
   w: TmuxWindow;
   active: boolean;
   mark: WindowMark;
+  /** The project this window's seat orchestrates, when `w.seat` is set — the
+   *  tooltip reads "Orchestrator of <project>". Unused otherwise. */
+  seatProject?: string;
+  /** The policy-started worker this tab runs, when it is one: its role glyph leads the name. */
+  worker?: NamedAgentRow | null;
   /** The Alt / prefix number to draw inside the tab, or null. */
   no: number | null;
   /** The tab is being carried, or is where the carried one would land. */
@@ -46,13 +54,15 @@ export interface WindowTabProps {
 }
 
 const BOX = "bg-transparent outline-none text-[11.5px]";
-const BOX_STYLE = { color: "var(--text)", height: 20, borderRadius: 5, border: tintEdge("var(--primary)", 100), paddingInline: 4 } as const;
+const BOX_STYLE = { color: "var(--text)", height: MIN_BOX, borderRadius: 5, border: tintEdge("var(--primary)", 100), paddingInline: 4 } as const;
 
 export function WindowTab({
-  w, active, mark, no, dragging, dropBefore, renaming, moving, clientCols, dnd,
+  w, active, mark, no, dragging, dropBefore, renaming, moving, clientCols, dnd, seatProject, worker,
   onSelect, onClose, onStartRename, onRename, onMove, onMenu,
 }: WindowTabProps) {
   const zoomed = w.flags.includes("Z");
+  const seatTone = seatGlyphTone(w.seat, mark.mark);
+  const role = worker ? roleTabIcon(worker.role) : null;
   return (
     <div
       {...dnd}
@@ -75,10 +85,12 @@ export function WindowTab({
       }}
       // No colour ramp: hover and the selected look measured 197-211 ms to
       // settle with `transition-colors`; a tab that is not hot yet reads as an ignored click.
-      className={`group relative flex items-center gap-1.5 pl-2 pr-1 shrink-0 rounded-lg text-[11.5px] cursor-pointer select-none ${active ? "" : "hover:bg-[var(--surface-inset)]"}`}
+      className={`group relative flex items-center gap-1.5 pl-2 pr-1 rounded-lg text-[11.5px] cursor-pointer select-none ${active ? "" : "hover:bg-[var(--surface-inset)]"}`}
       style={{
         height: CTRL_H.strip,
-        maxWidth: 200,
+        // As wide as the name needs: the tabs give way together (flex-shrink 1)
+        // once the row is full, down to this floor, and the strip scrolls past it.
+        minWidth: "6.5rem",
         color: active || mark.unread ? "var(--text)" : mark.mark === "restored" ? "var(--text3)" : "var(--text2)",
         background: active ? "var(--bg)" : undefined,
         border: active ? EDGE : tintEdge("var(--text)", 0),
@@ -92,7 +104,14 @@ export function WindowTab({
         <span className="shrink-0 min-w-3.5 h-3.5 px-0.5 rounded-md grid place-items-center text-[9.5px] font-semibold tabular-nums leading-none"
           style={{ background: "var(--text)", color: "var(--bg)" }}>{no}</span>
       )}
-      {mark.mark && <WindowMarkIcon mark={mark.mark} label={mark.title} />}
+      {worker && role ? null : seatTone
+        ? <SeatMarkIcon tone={seatTone} label={`Orchestrator of ${seatProject ?? "this project"}`} />
+        : mark.mark && <WindowMarkIcon mark={mark.mark} label={mark.title} />}
+      {worker && role && (
+        <span data-tip={workerTabTip(worker)} role="img" aria-label={workerTabTip(worker)} className="flex shrink-0" style={{ color: workerIconColour(worker, role, mark.mark === "needs-you") }}>
+          {roleIcon(role.id, ICON.xs)}
+        </span>
+      )}
       {moving ? (
         // The number it moves to: `prefix .` asks which, and the box is right
         // here on the tab it is asking about.
@@ -121,12 +140,14 @@ export function WindowTab({
           }}
           className={`${BOX} w-24`} style={BOX_STYLE} />
       ) : (
-        // Cut at 16 characters: one long name used to push every tab after it
-        // off the row. The whole name is in the tab's tooltip.
-        <span className={`inline-block max-w-[16ch] truncate ${mark.unread ? "font-semibold" : ""}`}>{w.name || "shell"}</span>
+        // A fixed 14-16 character cap cut every name on a row that was mostly
+        // empty. The name now takes the room it needs and is cut only when the
+        // row runs out (tabs shrink together) or past 28 characters, so one
+        // absurd name cannot eat the row. The whole name is on hover.
+        <span data-tip={w.name || "shell"} className={`min-w-0 max-w-[28ch] truncate ${mark.unread ? "font-semibold" : ""}`}>{w.name || "shell"}</span>
       )}
       {w.pinned && <span className="flex shrink-0" style={{ color: "var(--text4)" }} role="img" aria-label="pinned"><PinIcon size={ICON.xs} /></span>}
-      {zoomed && <span className="flex shrink-0" style={{ color: "var(--text4)" }} title="A pane in this window is zoomed"><ExpandIcon size={ICON.xs} /></span>}
+      {zoomed && <span className="flex shrink-0" style={{ color: "var(--text4)" }} data-tip="A pane in this window is zoomed"><ExpandIcon size={ICON.xs} /></span>}
       {/* A phone is watching a pane in this window. The only mark in the strip
           that is about a PERSON rather than the work: a phone joins as a grouped
           session, so whatever it does arrives looking like the machine did it by
@@ -135,7 +156,7 @@ export function WindowTab({
           different news in the same pixels. */}
       {w.phone && (
         <span className="inline-flex items-center shrink-0"
-          title={w.cols && clientCols
+          data-tip={w.cols && clientCols
             ? `Your phone is on a pane in this window — it is ${w.cols} columns and your terminal is ${clientCols}`
             : "Your phone is on a pane in this window"}>
           {/* A mark to notice rather than a target to hit.

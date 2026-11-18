@@ -8,7 +8,6 @@
 // `bold` is on we clone the chosen theme and append a rule that bolds them —
 // giving the same look on ANY theme. Themes' own italic/bold are always honored.
 import type { Highlighter, ThemeRegistrationRaw } from "shiki";
-import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
 import { onceOk } from "./onceOk.ts";
 
 // Lazy handle to the shiki module — imported once, shared by every helper, so
@@ -28,10 +27,15 @@ import { onceOk } from "./onceOk.ts";
  */
 const shiki = onceOk(() => import("shiki"));
 
+/** The regex engine is its own chunk (oniguruma-to-es, ~50 KB) that only the
+ *  first highlight needs, so it stays out of the entry chunk. */
+const regexEngine = onceOk(() => import("shiki/engine/javascript"));
+
 /** Same rule as `shiki` above, and the same reason: the highlighter is worth
  *  sharing, the failure to build one is not. */
 const highlighter = onceOk(() =>
-  shiki().then((m) => m.createHighlighter({ themes: [], langs: [], engine: createJavaScriptRegexEngine() })));
+  Promise.all([shiki(), regexEngine()]).then(([m, e]) =>
+    m.createHighlighter({ themes: [], langs: [], engine: e.createJavaScriptRegexEngine() })));
 
 /**
  * The one shared highlighter, tokenizing with shiki's **JavaScript** RegExp

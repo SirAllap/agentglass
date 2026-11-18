@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import type { ListStatus, ProviderTask } from "../../shared/providers.ts";
 import { NO_FILTERS, filterCards } from "../src/components/jira/list/model.ts";
 import {
-  breadcrumbOf, fetchOffered, footerCount, groupChoices, hitReason, showDoneLabel, siteSearchOffered, statusMenuOf, statusTrigger, thenChoices, togglePick, withGroup,
+  breadcrumbOf, fetchOffered, footerCount, groupChoices, hitReason, showDoneLabel, showNoSprintChip, siteSearchOffered, statusMenuOf, statusTrigger, thenChoices, togglePick, withGroup,
 } from "../src/components/jira/list/toolbarModel.ts";
 import { writesAsk, writesTitle, type BoardWrites } from "../src/components/tasks/WritesSwitch.tsx";
 
@@ -23,6 +23,18 @@ describe("the toolbar and the footer", () => {
     const c = { shown: 14, total: 19 } as never;
     expect(footerCount(c, false)).toBe("14 of 19");
     expect(footerCount(c, true)).toBe("14 of 19+");
+  });
+});
+
+describe("the compact header: fewer rows, same controls", () => {
+  test("the sprint chip and Workflow/sync sit inside the view-tabs row, not a bar of their own above it", async () => {
+    const list = await Bun.file(new URL("../src/components/jira/list/JiraListView.tsx", import.meta.url)).text();
+    expect(list).not.toContain("<JiraTopBar model={model} areaId={areaId} />");
+    expect(list).toContain('left={<JiraTopBar model={model} areaId={areaId} side="left" />}');
+    expect(list).toContain('right={<JiraTopBar model={model} areaId={areaId} side="right" />}');
+    const tabs = await Bun.file(new URL("../src/components/jira/list/JiraTabs.tsx", import.meta.url)).text();
+    expect(tabs).toContain("{left}");
+    expect(tabs).toContain("{right}");
   });
 });
 
@@ -47,6 +59,9 @@ describe("the chips row", () => {
   test("Group offers Area only on a board with epics; changing it resets Then", () => {
     expect(groupChoices(false).some((g) => g.value === "area")).toBe(false);
     expect(groupChoices(true).some((g) => g.value === "area")).toBe(true);
+    expect(groupChoices(true).some((g) => g.value === "project")).toBe(false);
+    expect(groupChoices(false).at(-1)?.value).toBe("agent");
+    expect(groupChoices(true, true).some((g) => g.value === "project")).toBe(true);
     expect(thenChoices("status", false).map((t) => t.value)).toEqual(["none"]);
     expect(withGroup("assignee" as never).thenGroup).toBe("none");
   });
@@ -54,6 +69,24 @@ describe("the chips row", () => {
     const cs = [card("1", "To do", { sprint: "Sprint 4" }), card("2", "To do", { sprint: "Sprint 3" }), card("3", "To do")];
     expect(filterCards(cs, { ...NO_FILTERS, sprintOnly: "Sprint 4" }).map((t) => t.id)).toEqual(["1"]);
     expect(filterCards(cs, { ...NO_FILTERS, sprintOnly: null }).length).toBe(3);
+  });
+  test("the assignee chip: a multi-select keeps a card holding any of the people picked", () => {
+    const cs = [
+      card("1", "To do", { people: [{ key: "acc-ada", name: "Ada Example", initials: "AE" }] }),
+      card("2", "To do", { people: [{ key: "acc-grace", name: "Grace Sample", initials: "GS" }] }),
+      card("3", "To do", { people: [{ key: "acc-lin", name: "Lin Tester", initials: "LT" }] }),
+    ];
+    expect(filterCards(cs, { ...NO_FILTERS, assigneePick: ["acc-ada", "acc-grace"] }).map((t) => t.id)).toEqual(["1", "2"]);
+    expect(filterCards(cs, { ...NO_FILTERS, assigneePick: [] }).length).toBe(3);
+  });
+  test("the assignee chip: a card on two of the picked people is kept once, not duplicated", () => {
+    const cs = [card("1", "To do", { people: [{ key: "acc-ada", name: "Ada Example", initials: "AE" }, { key: "acc-grace", name: "Grace Sample", initials: "GS" }] })];
+    expect(filterCards(cs, { ...NO_FILTERS, assigneePick: ["acc-ada", "acc-grace"] }).map((t) => t.id)).toEqual(["1"]);
+  });
+  test("the assignee chip: a person with no account id still matches by name", () => {
+    const cs = [card("1", "To do", { assignees: ["Lin Tester"] })];
+    expect(filterCards(cs, { ...NO_FILTERS, assigneePick: ["Lin Tester"] }).map((t) => t.id)).toEqual(["1"]);
+    expect(filterCards(cs, { ...NO_FILTERS, assigneePick: ["acc-nobody"] }).length).toBe(0);
   });
 });
 
@@ -88,7 +121,7 @@ describe("the write popover wording", () => {
 });
 
 const dir = "../src/components/jira/list/";
-const files = ["JiraToolbar", "JiraSearch", "JiraChips", "JiraFooter", "SearchSheet", "StatusMenu", "GroupControl", "FilterPanel", "ListControls", "MenuParts"];
+const files = ["JiraToolbar", "JiraSearch", "JiraFiltersMenu", "JiraDisplayMenu", "JiraFooter", "SearchSheet", "GroupControl", "ListControls", "MenuParts"];
 const texts: Record<string, string> = {};
 for (const f of files) texts[f] = await Bun.file(new URL(`${dir}${f}.tsx`, import.meta.url)).text();
 const writesSrc = await Bun.file(new URL("../src/components/tasks/WritesSwitch.tsx", import.meta.url)).text();
@@ -108,8 +141,8 @@ describe("the sources", () => {
     expect(iconBtn).toContain("aria-label={label}");
     expect(iconBtn).toContain("data-tip=");
   });
-  test("the search field is 32 high and its Escape clears before anything closes", () => {
-    expect(text.JiraSearch).toContain("height: 32");
+  test("the search field is as high as the buttons beside it and its Escape clears before anything closes", () => {
+    expect(text.JiraSearch).toContain("height: CTRL_H.regular");
     expect(text.JiraSearch).toMatch(/Escape" && q\)/);
   });
   test("the results sheet drops a stale answer", () => {
@@ -123,5 +156,17 @@ describe("the sources", () => {
     const w = writesSrc;
     expect(w).toContain("width: 320");
     expect(w).toContain("Allow changes to this board?");
+  });
+});
+
+describe("the no-sprint chip is not noise", () => {
+  test("a cross-space view or an epic has no board of its own: no chip", () => {
+    expect(showNoSprintChip(true, true)).toBe(false);
+  });
+  test("a context that did not load says nothing", () => {
+    expect(showNoSprintChip(false, false)).toBe(false);
+  });
+  test("a loaded board seen as a board keeps it", () => {
+    expect(showNoSprintChip(true, false)).toBe(true);
   });
 });

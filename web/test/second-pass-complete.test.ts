@@ -38,7 +38,9 @@ function serverFields(): string[] {
 
 /** The list the client carries across a refresh. */
 function clientFields(): string[] {
-  const src = read("src/lib/prMerge.ts");
+  // The list moved to shared/ when the phone started merging its pages with
+  // the same rule; this lock follows it rather than the file that re-exports it.
+  const src = read("../shared/prMerge.ts");
   const i = src.indexOf("const SECOND_PASS =");
   const decl = src.slice(i, src.indexOf("] as const", i));
   return [...decl.matchAll(/"([a-zA-Z]+)"/g)].map((m) => m[1]!);

@@ -51,8 +51,8 @@ beforeEach(() => { reads.__forgetSessionReads(); Object.assign(server, { repos: 
 afterAll(() => { reads.__forgetSessionReads(); });
 
 describe("the def", () => {
-  it("exists on the Review prompts page, in its own section, off by default", () => {
-    expect(def().page).toBe("review-prompts");
+  it("exists on the Commands & replies page, in its own section, off by default", () => {
+    expect(def().page).toBe("recipes");
     expect(def().section).toBe("Review sessions");
     expect(def().default).toBe("");
     expect(def().type).toBe("string");
@@ -83,8 +83,8 @@ describe("the def", () => {
 
   it("it is on the one page that stays otherwise unmigrated, not on the left-out ones", () => {
     expect(Object.keys(R.NOT_EXPOSED_ON_PURPOSE)).not.toContain(def().page);
-    expect(R.MIGRATED["review-prompts"]).toEqual(["Review sessions"]);
-    expect((R.NOT_YET_MIGRATED as readonly string[]).includes("review-prompts")).toBe(false);
+    expect(R.MIGRATED["recipes"]).toEqual(["Review sessions"]);
+    expect((R.NOT_YET_MIGRATED as readonly string[]).includes("recipes")).toBe(false);
   });
 
   it("says in words what none means", () => {
@@ -164,10 +164,10 @@ describe("the page", () => {
     expect(pane).toContain("Never the transcript or any tool output");
   });
 
-  it("changes it through the def, with the house select and switch, one toggle per allowed repository", () => {
+  it("changes it through the def, with the house select and switch, one row per allowed repository, with its Stop sharing", () => {
     expect(code).toContain('setting("plugins.sessionReads.repos").set(');
     expect(code).toContain("style={SELECT_BOX}");
-    expect(code).toMatch(/allowed\.map\(\(r\) => \(\s*<Toggle key=\{r\} on /);
+    expect(code).toMatch(/allowed\.map\(\(r\) => \(\s*<SettingRow key=\{r\} kind="control" label=\{r\}/);
     expect(code).not.toMatch(/localStorage/);
   });
 

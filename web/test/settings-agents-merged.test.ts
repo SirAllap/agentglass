@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { modalSource } from "./settingsSource.ts";
 import { resolvePane } from "../src/lib/openSettings.ts";
 import { SETTINGS_PAGES, SETTINGS_ROWS } from "../src/lib/settingsRows.gen.ts";
 
 const read = (p: string) => Bun.file(new URL(`../src/${p}`, import.meta.url)).text();
-const modal = await read("components/SettingsModal.tsx");
+const modal = modalSource();
 const gate = await read("components/agents/AgentsCards.tsx");
 const clickup = await read("components/ClickUpPane.tsx");
 const header = await read("components/SettingsPageHeader.tsx");
@@ -14,20 +15,20 @@ const page = (id: string) => SETTINGS_PAGES.find((p) => p.id === id);
 
 describe("Settings › Agents is one page", () => {
   test("one nav entry: Lantern is gone and its words are searchable on Agents", () => {
-    expect(page("hooks")?.label).toBe("Agents");
+    expect(page("hooks")?.label).toBe("Watching");
     expect(page("lantern")).toBeUndefined();
     expect(modal).not.toContain('id: "lantern", label: "Lantern"');
     expect(modal).not.toContain('show("lantern")');
-    const kw = /id: "hooks", label: "Agents", group: "Agents", kw: "([^"]*)"/.exec(modal)?.[1] ?? "";
+    const kw = /id: "hooks", label: "Watching", group: "Agents", kw: "([^"]*)"/.exec(modal)?.[1] ?? "";
     for (const word of ["lantern", "watching", "reminder", "orchestrator", "cache"]) expect(kw, word).toContain(word);
   });
 
   test("the blocks are in the mockup's order, down one column", () => {
     const body = modal.slice(modal.indexOf("function AgentsPage("), modal.indexOf("function SwitchButton("));
-    for (const block of ['title="Watching"', 'title="Sessions"', 'title="The orchestrator"', 'title="Connect your agents"', 'title="Danger zone"']) {
+    for (const block of ['title="Watching"', 'title="Session check-ins"', 'title="Hooks"', 'title="Danger zone"']) {
       expect(body, block).toContain(block);
     }
-    const order = ['title="Watching"', 'title="Sessions"', 'title="The orchestrator"', 'title="Connect your agents"', "<GateCard", "{skills}", 'title="Danger zone"'].map((x) => body.indexOf(x));
+    const order = ['title="Watching"', 'title="Session check-ins"', 'title="Hooks"', 'title="Gate"', "{skills}", 'title="Danger zone"'].map((x) => body.indexOf(x));
     expect(order.every((n) => n > -1)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     expect(clickup).toContain('title="Card skills"');
@@ -35,10 +36,14 @@ describe("Settings › Agents is one page", () => {
 
   test("every old id still has a row, and the old page's links land on Agents", () => {
     expect(resolvePane("lantern")).toBe("hooks");
-    for (const l of ["Watch the agents and notify me", "Ask sessions what they are working on", "Wake the orchestrator at least every", "How long the prompt cache stays warm", "Ask me before anything leaves this machine"]) {
+    for (const l of ["Watch the agents and notify me", "Ask sessions what they are working on"]) {
       expect(rowsOn("hooks"), l).toContain(l);
     }
-    expect(rowsOn("hooks")).toEqual(expect.arrayContaining(["Take the hooks back out", "Forget worker roles", "Worker CLIs and models"]));
+    // The gate has one home now: Permissions.
+    expect(rowsOn("perm")).toContain("Ask me before anything leaves this machine");
+    expect(rowsOn("hooks")).toContain("Take the hooks back out");
+    // Forget worker roles moved to the Workers page's Danger zone.
+    expect(rowsOn("workers")).toContain("Forget worker roles");
     // The pattern is a free-text row in the Card skills card, not a switch the index jumps into.
     expect(clickup).toContain('label="Card skills pattern"');
   });
@@ -73,16 +78,23 @@ describe("the merged page's controls", () => {
 
   test("the shared frame carries the scope statement, and the index reads its cards", () => {
     expect(header).toContain('className="agx-ph-scope"');
-    expect(modal).toContain('scope={navTab.id === "hooks" ?');
-    expect(modal).toContain("Every project on this machine.");
-    expect(modal).toContain("<SettingsToc");
+    expect(modal).toContain("scope={MACHINE_PAGES.has(navTab.id) ?");
+    expect(modal).toContain("{MACHINE_SCOPE.note}");
+    expect(modal).not.toContain("<SettingsToc");
+  });
+});
+
+describe("the orchestrator timing rows moved to Flow & review", () => {
+  test("wake and cache rows are bound there under their own ids", () => {
+    const rows = SETTINGS_ROWS.filter((r) => r.pane === "orchestration");
+    for (const id of ["seat.wakeHours", "lantern.cacheTtlMinutes"]) expect(rows.map((r) => r.settingId), id).toContain(id);
   });
 });
 
 describe("what the merged page says before and without a read", () => {
   test("every control on the page is bound in the index under its own id", () => {
     const ids = SETTINGS_ROWS.filter((r) => r.pane === "hooks").map((r) => r.settingId);
-    for (const id of ["lantern.watch", "lantern.watchMinutes", "lantern.nudge", "lantern.nudgeMinutes", "seat.wakeHours", "lantern.cacheTtlMinutes"]) {
+    for (const id of ["lantern.watch", "lantern.watchMinutes", "lantern.nudge", "lantern.nudgeMinutes"]) {
       expect(ids, id).toContain(id);
     }
   });

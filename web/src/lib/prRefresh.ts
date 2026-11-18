@@ -34,6 +34,9 @@ export function rowPatch(d: PrDetail) {
     reviewers: d.reviewers,
     // The card's verdict header reads this, not `reviewDecision`.
     ...(d.humanReview ? { humanReview: d.humanReview } : {}),
+    /* The Review cell's address, on the card as on the detail: a refresh that
+       dropped it sent the next press back to the top of a long lane. */
+    ...(d.botReview ? { botReview: d.botReview } : {}),
     /* The card's "N open" chip: resolving a thread in the detail left it saying
        "1 open" until the next list read (9.8 s against a stub GitHub). Pending
        own-review threads are not in the detail's list, so this can read one

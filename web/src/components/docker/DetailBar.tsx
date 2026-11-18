@@ -37,18 +37,18 @@ export function DetailBar({ c, bar }: { c: DockerContainer; bar: BarProps }) {
   const running = (c.state || "").toLowerCase() === "running";
   return (
     <div className="dk-dhd">
-      <span className="dk-tile" role="img" aria-label={KINDS[kind].word} title={KINDS[kind].word} style={{ "--tone": KINDS[kind].tone } as CSSProperties}><CubeIcon size={17} /></span>
+      <span className="dk-tile" role="img" aria-label={KINDS[kind].word} data-tip={KINDS[kind].word} style={{ "--tone": KINDS[kind].tone } as CSSProperties}><CubeIcon size={17} /></span>
       <div style={{ minWidth: 0 }}>
         <div className="t1">
-          <span title={c.name}>{displayName(c)}</span>
-          {health && tint && <Badge tint={tint} title={c.healthError ?? undefined}>{health === "unhealthy" ? <WarningIcon size={12} /> : <DoneIcon size={12} />}{health}</Badge>}
+          <span data-tip={c.name}>{displayName(c)}</span>
+          {health && tint && <Badge tint={tint} title={c.healthError ?? undefined}>{health === "unhealthy" ? <WarningIcon size={ICON.xs} /> : <DoneIcon size={ICON.xs} />}{health}</Badge>}
           {c.owner?.foreign && (
             <Badge tint="var(--merged-ink)" title={`Started from another checkout\n${ownerTitle(c.owner)}`}>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><BranchIcon size={ICON.xs} />{c.owner.worktree}</span>
             </Badge>
           )}
         </div>
-        <div className="t2" title={[c.name, c.image, c.owner?.worktree].filter(Boolean).join(" · ")}>
+        <div className="t2" data-tip={[c.name, c.image, c.owner?.worktree].filter(Boolean).join(" · ")}>
           {[c.name, c.image, c.owner?.worktree].filter(Boolean).join(" · ")}
         </div>
       </div>
@@ -62,7 +62,7 @@ export function DetailBar({ c, bar }: { c: DockerContainer; bar: BarProps }) {
         )}
         <ActionButton c={c} readOnly={readOnly} busy={busy} onVerb={onVerb} labelled />
         <button type="button" className="dk-chip" onClick={() => onMenuPick("shell")} disabled={!running || readOnly}
-          title={readOnly ? READ_ONLY_REASON : running ? "Open a shell in this container in the console below" : "Start the container first"}>
+          data-tip={readOnly ? READ_ONLY_REASON : running ? "Open a shell in this container in the console below" : "Start the container first"}>
           <TerminalIcon size={ICON.sm} />Shell
         </button>
         <MoreButton chip c={c} open={menu} onMenu={(el) => { anchor.current = el; setMenu(true); }} />

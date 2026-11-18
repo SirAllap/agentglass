@@ -67,6 +67,9 @@ beforeAll(async () => {
   });
   stubGlobal("location", { hostname: "localhost", origin: "http://localhost:4000" });
   stubGlobal("Notification", FakeNotification);
+  // The window out of sight: on screen an alert is an agentglass card, and the
+  // desktop popup this file measures is for the window nobody is looking at.
+  stubGlobal("document", { visibilityState: "hidden", hidden: true, hasFocus: () => false });
   sysNotify = await import("../src/lib/sysNotify.ts");
 });
 

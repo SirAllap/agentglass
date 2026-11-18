@@ -156,8 +156,9 @@ describe("the agent's side", () => {
 
   it("a write remembers the name the caller gave, for the chip to say", () => {
     const s = api();
-    s.set("diff.wrap", true, "orchestrator-agx");
-    s.set("diff.split", "inline");
+    // Write the opposite of what each holds now, so neither write is a no-op.
+    s.set("diff.wrap", diffPrefs.diffWrap() ? false : true, "orchestrator-agx");
+    s.set("diff.split", diffPrefs.diffSplit() ? "inline" : "split");
     const [a, b] = s.changes();
     expect(a!.as).toBe("orchestrator-agx");
     expect(b!.as).toBeUndefined();

@@ -110,6 +110,18 @@ export function toServerQuery(query: string, logins: ReadonlySet<string> = new S
 /** `me` / `@me`: the viewer, whom GitHub knows as `@me`; never a login to open a board for. */
 export const isMe = (v: string): boolean => /^@?me$/i.test(v);
 
+/**
+ * The box's words for what the viewer has already reviewed: GitHub's own
+ * qualifier, with the `@me` the rest of the box uses. A login in hand is
+ * spelled out, cleaned the way `closedQuery` cleans one.
+ */
+export const reviewedByQuery = (login?: string): string => {
+  const who = login?.replace(/[^\w.-]/g, "") || "@me";
+  /* Two tokens on purpose: one `reviewed-by:login` alone is a person's board
+     (`singleLogin`), and the ask is the OTHERS' pull requests this person reviewed. */
+  return `reviewed-by:${who} -author:${who}`;
+};
+
 /** The login a box is about: a person qualifier's value, or a bare word that is a known login. */
 export function personIn(query: string, logins: ReadonlySet<string> = new Set()): string | null {
   for (const t of query.trim().split(/\s+/).filter(Boolean)) {

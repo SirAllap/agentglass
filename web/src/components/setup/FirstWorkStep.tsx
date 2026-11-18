@@ -114,10 +114,10 @@ export function FirstWorkStep({ state, agent, onFrame, onCommit, onBack }: {
                 const lines = projectTileLines(p);
                 return (
                   <button type="button" key={p.root} className="setup-project" data-on={p.root === selected.root ? "1" : "0"}
-                    aria-pressed={p.root === selected.root} title={p.name}
+                    aria-pressed={p.root === selected.root} data-tip={p.name}
                     onClick={() => setPicked(p.root)}>
-                    <span className="setup-project-name" title={p.name}>{lines.name}</span>
-                    <span className="setup-project-branch" title={p.branch} aria-label={`branch ${p.branch}`}>
+                    <span className="setup-project-name" data-tip={p.name}>{lines.name}</span>
+                    <span className="setup-project-branch" data-tip={p.branch} aria-label={`branch ${p.branch}`}>
                       <Branch /> {lines.branch}
                     </span>
                     <span className="setup-project-worked">{lines.worked}</span>
@@ -136,16 +136,16 @@ export function FirstWorkStep({ state, agent, onFrame, onCommit, onBack }: {
               <span className="setup-group-why">· in {projectTileLines(selected).name}</span>
             </div>
             <p className="setup-run">
-              <code>{view.command}</code> in <code title={selected.root}>{tildify(selected.root)}</code>
-              {branch ? <> on <code title={selected.branch}>{branch}</code></> : null}
+              <code>{view.command}</code> in <code data-tip={selected.root}>{tildify(selected.root)}</code>
+              {branch ? <> on <code data-tip={selected.branch}>{branch}</code></> : null}
             </p>
             <p className="setup-hint setup-lock"><Lock /> {view.lock}</p>
           </div>
 
           <div className="setup-preview" aria-label="What the terminal will look like">
             <div className="setup-preview-bar">
-              <Term /> <span title={selected.name}>{projectTileLines(selected).name}</span>
-              {branch && <span className="setup-preview-branch" title={selected.branch}>· {branch}</span>}
+              <Term /> <span data-tip={selected.name}>{projectTileLines(selected).name}</span>
+              {branch && <span className="setup-preview-branch" data-tip={selected.branch}>· {branch}</span>}
               <span className="setup-grow" />
               <span className="setup-badge setup-badge-ok">opens here</span>
             </div>

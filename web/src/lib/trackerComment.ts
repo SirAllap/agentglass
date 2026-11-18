@@ -35,9 +35,9 @@ export async function clickupComment(task: ProviderTask, markdown: string): Prom
   } catch { return { ok: false, error: UNREACHABLE }; }
 }
 
-export async function jiraComment(task: ProviderTask, markdown: string, mentions: CommentMention[] = [], replyTo?: string): Promise<CommentResult> {
+export async function jiraComment(task: ProviderTask, markdown: string, mentions: CommentMention[] = [], replyTo?: string, repo?: string): Promise<CommentResult> {
   try {
-    const r = await api.jiraComment(task.customId ?? task.id, markdown, mentions, replyTo);
+    const r = await api.jiraComment(task.customId ?? task.id, markdown, mentions, replyTo, repo);
     return { ok: r.ok, error: r.error, unauthorised: r.unauthorised, task: r.task, detail: r.detail, more: r.more, partial: r.partial };
   } catch { return { ok: false, error: UNREACHABLE }; }
 }

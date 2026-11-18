@@ -150,7 +150,7 @@ describe("wiring that must stay", () => {
   test("hook points: the merge dock mounts the action for a merged or closed PR, the merge dialog carries the tick", async () => {
     const p = await panel, m = await merge;
     const dock = p.slice(p.indexOf("function PrDock("), p.indexOf("function MergeScope("));
-    expect(dock).toContain("{!open && <CleanupPrAction root={props.root} pr={d.number} state={d.state} />}");
+    expect(dock).toContain("{!open && <CleanupPrAction root={root} pr={d.number} state={d.state} />}");
     expect((p.match(/<CleanupPrAction /g) ?? []).length).toBe(1);
     expect(p).toContain("offerCleanup:");
     expect(p).toContain("choice.cleanup");
@@ -161,8 +161,29 @@ describe("wiring that must stay", () => {
 describe("nothing to clean is not a call to action", () => {
   test("the button exists only when the one shared rule offers it", async () => {
     const src = await Bun.file(new URL("../src/components/CleanupPrAction.tsx", import.meta.url).pathname).text();
-    expect(src).toContain('offerFor(stateOfPlan(plan, failed), "panel")');
-    expect(src).toContain("{offer.button && <button");
+    expect(src).toContain("const left = stateOfPlan(plan, failed);");
+    expect(src).toContain('offerFor(left, "panel")');
+    expect(src).toContain("{offer.button && bar.button && <button");
+  });
+});
+
+describe("an automatic cleanup of this PR speaks instead of the manual button", () => {
+  const action = Bun.file(new URL("../src/components/CleanupPrAction.tsx", import.meta.url)).text();
+  test("the bar takes its state from the Housekeeping entry and the mode, before any button", async () => {
+    const src = await action;
+    expect(src).toContain('barFor({ mode: mode ?? "off", run: onDisk(autoRunOf(auto), left), leftovers: offer.button }, "panel")');
+    expect(src).toContain("const auto = useAutoEntry(root, pr);");
+  });
+  test("no path draws the manual button while a run of this PR is in its own state", async () => {
+    const src = await action;
+    expect(src).toContain("{bar.text && !bar.wait && <span");
+    expect(src).not.toMatch(/\{offer\.button && <button/);
+  });
+  test("the board card reads the same entry, so it cannot say \"No leftovers\" while it runs", async () => {
+    const board = await Bun.file(new URL("../src/components/TriageBoard.tsx", import.meta.url)).text();
+    expect(board).toContain("const autoRun = onDisk(autoRunOf(useAutoEntry(root, p.number)), leftoverState);");
+    expect(board).toContain("leftoverState, cleaning, autoRun, unread");
+    expect(await Bun.file(new URL("../src/lib/prCardView.ts", import.meta.url)).text()).toContain("leftoverLine(o.leftoverState, !!o.cleaning, o.autoRun ?? null)");
   });
 });
 
@@ -285,7 +306,7 @@ describe("the button while the plan is read", () => {
   const dialog = Bun.file(new URL("../src/components/CleanupDialog.tsx", import.meta.url)).text();
   test("reading draws a skeleton and a failed read a muted chip, never an enabled button", async () => {
     const a = await action;
-    expect(a).toContain("{offer.skeleton && <i");
+    expect(a).toContain("{offer.skeleton && !bar.text && <i");
     expect(a).toContain("{offer.muted && offer.chip && <span");
     expect(a).toContain("disabled={busy || !!v.blocked}");
   });

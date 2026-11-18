@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { LAUNCH_MODES } from "../../shared/launchModes.ts";
 import type { AgentRule } from "../../shared/agentRules.ts";
 import {
-  LEARNED_SHOWN, agoWords, baseOrder, baseSummary, blockedBy, ruleCode, ruleIcon, ruleTitle, ruleTotals, ruleWhen, rowRequest, sourceChip,
+  LEARNED_SHOWN, agoWords, baseOrder, baseSummary, blockedBy, confirmAllow, narrowTitle, ruleCode, ruleIcon, ruleTitle, ruleTotals, ruleWhen, rowRequest, sourceChip,
   MODE_CHOICES, pickerProjects, isUnder, splitLearned, suggestionPhrase, titleOfMatch, WEEK,
 } from "../src/lib/agentRulesView.ts";
 
@@ -38,7 +38,7 @@ describe("what a rule is called", () => {
     expect(ruleCode(rule({ match: "", action: "launch.mode", project: "*" }))).toBe("permission mode");
     expect(ruleTitle(rule({ match: "", action: "launch.mode", project: "*" }))).toBe("Run without asking");
   });
-  test("the rules people meet first have house names, a longer command of one keeps it", () => {
+  test("a longer command of one keeps it", () => {
     expect(ruleTitle(rule({ match: "Bash(git push:*)" }))).toBe("Push code");
     expect(ruleTitle(rule({ match: "Bash(git push --force:*)" }))).toBe("Push code");
     expect(ruleTitle(rule({ match: "Bash(gh pr merge:*)" }))).toBe("Merge pull requests");
@@ -46,6 +46,14 @@ describe("what a rule is called", () => {
     expect(ruleTitle(rule({ match: "Bash(gh pr create:*)" }))).toBe("Open pull requests");
     expect(ruleTitle(rule({ match: "Bash(npm install:*)" }))).toBe("Install packages");
     expect(ruleTitle(rule({ match: "Bash(sudo:*)" }))).toBe("Run a script as root");
+  });
+  test("a learned rule that narrows a command is titled by what it adds", () => {
+    expect(narrowTitle(rule({ match: "Bash(git push origin master:*)" }))).toBe("Push to master");
+    expect(narrowTitle(rule({ match: "Bash(git push origin master --force:*)" }))).toBe("Push to master --force");
+    expect(narrowTitle(rule({ match: "Bash(git push --force:*)" }))).toBe("Push --force");
+    expect(narrowTitle(rule({ match: "Bash(gh pr merge 42 --squash:*)" }))).toBe("Merge pull requests: 42 --squash");
+    expect(narrowTitle(rule({ match: "Bash(git push:*)" }))).toBe("Push code");
+    expect(narrowTitle(rule({ match: "Bash(make lint:*)" }))).toBe("Run make lint");
   });
   test("a word that only starts like a house name is not that name", () => {
     expect(ruleTitle(rule({ match: "Bash(git pushover:*)" }))).toBe("Run git pushover");
@@ -73,12 +81,12 @@ describe("what a rule is called", () => {
 });
 
 describe("where a rule came from, and when", () => {
-  test("each origin has its own words; a base rule is a base rule whoever touched it last", () => {
+  test("each origin has its own words; a base rule says it reaches every project", () => {
     expect(sourceChip({ source: "chat" })).toMatchObject({ kind: "chat", label: "you said it in chat" });
     expect(sourceChip({ source: "first-seen" })).toMatchObject({ kind: "first", label: "seen for the first time" });
     expect(sourceChip({ source: "always-allow" })).toMatchObject({ kind: "always", label: "you pressed Always allow here" });
-    expect(sourceChip({ source: "base" })).toMatchObject({ kind: "plain", label: "base rule" });
-    expect(sourceChip({ source: "you" }, true).label).toBe("base rule");
+    expect(sourceChip({ source: "base" })).toMatchObject({ kind: "all", label: "all projects" });
+    expect(sourceChip({ source: "you" }, true)).toMatchObject({ kind: "all", label: "all projects" });
     expect(sourceChip({ source: "you" }).label).toBe("you set it");
   });
   test("ages in whole words, the way the design writes them", () => {
@@ -147,6 +155,15 @@ describe("the base set in one line", () => {
   test("an ask rule says it asks; a looser mode says so", () => {
     expect(baseSummary(base("ask"), "auto").rest).toBe("ask before git push, no merge, no release, run on its own.");
   });
+  test("six push rules keep their own words; true duplicates collapse with a count", () => {
+    const forms = ["git push origin main", "git push --force", "git push --tags", "git push --delete", "git push origin master", "git push"];
+    const six = forms.map((f) => rule({ match: `Bash(${f}:*)`, project: "*", setting: "never" }));
+    const s = baseSummary([...six, rule({ match: "Bash(gh pr merge:*)", project: "*", setting: "never" })], "default");
+    expect(s.count).toBe(7);
+    expect(s.rest).toBe("no git push origin main, no git push --force, no git push --tags, no git push --delete, no git push origin master, no push, no merge, ask before risky things.");
+    const dup = [rule({ match: "Bash(git push:*)", project: "*", setting: "never" }), rule({ match: "Bash(git push:*)", project: "other", setting: "never" })];
+    expect(baseSummary(dup, "default").rest).toBe("no push (2 kinds), ask before risky things.");
+  });
   test("one rule is singular", () => {
     expect(baseSummary([rule({ match: "Bash(sudo:*)", project: "*", setting: "never" })], "default").lead).toBe("1 base rule is on:");
   });
@@ -196,6 +213,13 @@ describe("a row's writes", () => {
   test("a base rule is written to every project", () => {
     expect(rowRequest(rule({ match: "Bash(git push:*)", project: "*" }), "never").root).toBe("*");
   });
+  test("Never to Allow asks again; Ask to Allow is one click", () => {
+    expect(confirmAllow("never", "allow")).toBe(true);
+    expect(confirmAllow("ask", "allow")).toBe(false);
+    expect(confirmAllow("allow", "allow")).toBe(false);
+    expect(confirmAllow(null, "allow")).toBe(false);
+    expect(confirmAllow("never", "ask")).toBe(false);
+  });
 });
 
 /*
@@ -223,7 +247,7 @@ describe("the section's controls", () => {
   });
   test("the rules are read every thirty seconds and not faster", () => {
     expect(SECTION).toContain("const REFRESH_MS = 30_000;");
-    expect(SECTION).toContain("setInterval(() => void load(), REFRESH_MS)");
+    expect(SECTION).toContain("useVisibleInterval(() => void load(), REFRESH_MS");
   });
   test("a card's list and the strip come from the pure decisions, not from a second copy", () => {
     expect(SECTION).toContain("growthBars(view.weekly, view.base.length, view.learned.length)");
@@ -231,6 +255,16 @@ describe("the section's controls", () => {
     expect(SECTION).toContain("baseOrder(base)");
     expect(SECTION).toContain("blockedBy(rule, root, held, nameOf)");
     expect(SECTION).toContain("isUnder(w, root)");
+  });
+  test("a learned row is titled by its match; the base rows keep the shared name", () => {
+    expect(SECTION).toContain("const title = opts.narrow ? narrowTitle(rule) : ruleTitle(rule);");
+    expect(SECTION).toContain("narrow: true");
+    expect(SECTION).toContain("row(rule, { base: true })");
+  });
+  test("Never to Allow asks inline, from the same predicate the decision has", () => {
+    expect(SECTION).toContain("if (confirmAllow(value, o.v)) setAsking(true);");
+    expect(SECTION).toContain("Keep Never");
+    expect(SECTION).toContain("setAsking(false); onPick(\"allow\")");
   });
 });
 

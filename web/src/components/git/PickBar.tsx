@@ -26,7 +26,7 @@ export function PickBar({ shas, branch, disabled, picking, onPick, onStage, onSq
       style={{ paddingRight: 12 + clear, borderTop: INSPECTOR_RULE, background: wash("--info", 6), color: "var(--text2)" }}>
       <span style={{ color: "var(--info)" }} className="shrink-0"><DockIcon name="pick" size={ICON.sm} /></span>
       <b className="shrink-0" style={{ color: "var(--text)" }}>{n} picked</b>
-      <span className="min-w-0 truncate" title={shas.join(", ")} style={{ color: "var(--text3)" }}>
+      <span className="min-w-0 truncate" data-tip={shas.join(", ")} style={{ color: "var(--text3)" }}>
         <span style={{ fontFamily: MONO }}>{pickedLabel(shas)}</span> — in graph order
       </span>
       <span className="flex-1" />

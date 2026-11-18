@@ -46,7 +46,8 @@ describe("the glass over a driven page", () => {
   test("is up while the agent is mid-ask, not for the linger, and takes the pointer", async () => {
     expect(presence).toContain('{glassUp && <div ref={glass} className="agx-presence-glass"');
     // The glass sat over a tab nobody was acting on for the whole 30 s linger, and ate the wheel.
-    expect(presence).toContain("return { held, up: held && acting };");
+    // The rule itself (held, acted, not Take over, not a handoff) is glassBlocks: see browser-handoff-glass.test.ts.
+    expect(presence).toContain("return { held, up: glassBlocks({ held, acting, paused: !!agent?.paused, handoff: agent?.handoff, guiding: guiding(agent) }) };");
     expect(presence).toContain("const held = !!agent && glassHeld({ live, done: agent.done, paused: agent.paused, working }, stilled);");
     expect(presence).toContain("setTimeout(() => setStilled(true), GLASS_QUIET_MS)");
     expect(presence).toMatch(/export const GLASS_QUIET_MS = 10_000;/);
@@ -113,12 +114,15 @@ describe("the overview as islands", () => {
     expect(island).toContain('const isWork = (k: AgentStateKey | undefined | null) => !!k && k !== "done" && k !== "waiting" && k !== "yours";');
     expect(overview).toContain("const work = isWork(g.state?.key);");
     expect(overview).toMatch(/\{work && <><span className="agx-isl-halo" aria-hidden \/>(<i className="agx-isl-sat[^>]*\/>){3}<\/>\}/);
-    expect(overview.match(/agx-isl-halo/g)!.length).toBe(1);
+    /* A container's island, and a lane's while the agent works in it (lane-pane-visible.test.ts). */
+    expect(overview.match(/agx-isl-halo/g)!.length).toBe(2);
+    expect(overview).toMatch(/\{l\.busy && <><span className="agx-isl-halo" aria-hidden \/>/);
   });
 
   test("the summary is a capsule of three counts, the way out is top right and the hint is at the bottom", () => {
-    expect(overview).toContain("<strong>{groups.length}</strong>");
-    expect(overview).toContain("<strong>{tabs.length}</strong>");
+    /* Lanes counted in (lane-pane-visible.test.ts). */
+    expect(overview).toContain("<strong>{sum.containers}</strong>");
+    expect(overview).toContain("<strong>{sum.tabs}</strong>");
     expect(overview).toContain('className="agx-isl-ib agx-isl-away" aria-label="Close" onClick={() => hide()}');
     expect(overview).toContain('<p className="agx-isl-hint" aria-hidden>esc to close</p>');
   });
@@ -126,7 +130,7 @@ describe("the overview as islands", () => {
   // The big dashed New tab tile is gone; the round + keeps the same click.
   test("a round + after the tabs opens a new tab, and no New tab tile is left", async () => {
     const css = await cssP;
-    expect(overview.match(/className="agx-isl-add" aria-label="New tab" title="New tab" onClick=\{\(\) => \{ setOpen\(false\); p\.onNew\((g\.profile)?\); \}\}/g)!.length).toBe(2);
+    expect(overview.match(/className="agx-isl-add" aria-label="New tab" data-tip="New tab" onClick=\{\(\) => \{ setOpen\(false\); p\.onNew\((g\.profile)?\); \}\}/g)!.length).toBe(2);
     expect(island).not.toContain("agx-isl-new");
     expect(css).not.toContain("agx-isl-new");
   });
@@ -266,7 +270,7 @@ describe("mission control: many containers", () => {
     expect(island).toMatch(/rank\(a\.g\) - rank\(b\.g\) \|\| a\.i - b\.i/);
     expect(island).toContain("const rank = (g: (typeof boxes)[number]) => (isWork(g.state?.key) ? 0 : g.held ? 1 : 2);");
     expect(island).toContain('className="agx-isl-find"');
-    expect(island).toContain('{busyAgents === agents.length ? "working"');
+    expect(island).toContain('{sum.busy === sum.agents ? "working"');
     expect(css).toMatch(/\.agx-isl-boxes\.is-dense \.agx-isl-thumb \{ height: 64px; \}/);
   });
 });

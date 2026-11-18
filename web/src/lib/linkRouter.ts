@@ -29,6 +29,9 @@ import { openExternal } from "./externalUrl.ts";
 import { openCard } from "./openCard.ts";
 import { openPr, prAnchorFromUrl } from "./openPrs.ts";
 import { api } from "./api.ts";
+import { wantBenchNext } from "./benchStore.ts";
+import { benchLinks, otherLinks, type OtherLinks } from "./termPrefs.ts";
+import { otherLinkSurface, openInBrowser } from "./otherLinks.ts";
 import { clickupSetup, clickupSetupNow } from "./clickupSetup.ts";
 import { trackerSetup, jiraSiteNow } from "./trackerSetup.ts";
 import { hasUrlCredentials } from "../../../shared/urlCredentials.ts";
@@ -153,6 +156,32 @@ export function hasCheckout(repo: string): boolean | Promise<boolean> {
   return entry.ok;
 }
 
+/**
+ * Where a link goes once the app has decided to show it: on the bench, or the
+ * view as always. Only a pull request or a card (Jira, ClickUp) clicked in a
+ * terminal, and only with the setting on. Pure.
+ */
+export function linkSurface(kind: LinkRoute["kind"], fromTerminal: boolean, onBench: boolean): "bench" | "view" {
+  return onBench && fromTerminal && (kind === "pr" || kind === "ref" || kind === "card" || kind === "jira") ? "bench" : "view";
+}
+
+/**
+ * Where a notification's "Open PR" / "Open card" goes first: the same setting
+ * as a terminal link, so the two never disagree about where a pull request
+ * opens. Anything else a notification opens (a pane, Git, a file) has no bench
+ * version and goes to its view. Pure.
+ */
+export function noteSurface(kind: string, onBench: boolean): "bench" | "view" {
+  return kind === "pr" || kind === "card" ? linkSurface(kind, true, onBench) : "view";
+}
+
+/** The tip on a notification's Open PR / Open card: where a press goes now. Pure. */
+export function noteSurfaceTip(kind: string, onBench: boolean, viewName: string): string {
+  return noteSurface(kind, onBench) === "bench" ? "Opens on the bench" : `Opens in ${viewName}`;
+}
+
+export { otherLinkSurface };
+
 export interface RouteDeps {
   /** A boolean when the answer is already known, a promise when it is not. */
   hasCheckout: (repo: string) => boolean | Promise<boolean>;
@@ -162,9 +191,17 @@ export interface RouteDeps {
   openPr: typeof openPr;
   openCard: typeof openCard;
   openExternal: typeof openExternal;
+  /** Asks that the next board request lands on the bench. */
+  wantBench: () => void;
+  benchLinks: () => boolean;
+  /** The "Open web links in" setting. */
+  otherLinks: () => OtherLinks;
+  /** Opens a new tab in the agentglass browser, in the view or on the bench. False when it could not (the caller falls back). */
+  openInBrowser: (url: string, where: "view" | "bench") => boolean;
 }
 const live: RouteDeps = {
-  hasCheckout, openPr, openCard, openExternal,
+  hasCheckout, openPr, openCard, openExternal, wantBench: wantBenchNext, benchLinks, otherLinks,
+  openInBrowser,
   jiraSite: () => {
     const now = jiraSiteNow();
     return now !== undefined ? now : trackerSetup().then((t) => t.jira?.site ?? null);
@@ -186,7 +223,7 @@ const live: RouteDeps = {
 export function openInApp(
   raw: string | null | undefined,
   e?: Click,
-  opts: { shortRef?: boolean; strict?: boolean } = {},
+  opts: { shortRef?: boolean; strict?: boolean; fromTerminal?: boolean } = {},
   deps: RouteDeps = live,
 ): boolean {
   if (wantsExternal(e, opts.strict)) return false;
@@ -199,7 +236,7 @@ export function openInApp(
     if (shaped) {
       void site.then((s) => {
         const j = classifyLink(raw, { ...opts, jiraSite: s });
-        if (j?.kind === "jira") deps.openCard(j.key, j.key, "jira");
+        if (j?.kind === "jira") { if (linkSurface("jira", !!opts.fromTerminal, deps.benchLinks()) === "bench") deps.wantBench(); deps.openCard(j.key, j.key, "jira"); }
         else if (j) deps.openExternal(j.url);
       });
       return true;
@@ -207,11 +244,17 @@ export function openInApp(
     site = null;
   }
   const r = classifyLink(raw, { ...opts, jiraSite: site });
-  if (!r || r.kind === "external") return false;
-  if (r.kind === "jira") { deps.openCard(r.key, r.key, "jira"); return true; }
+  if (r?.kind === "external") {
+    const where = otherLinkSurface(r.url, deps.otherLinks());
+    return where !== "default" && deps.openInBrowser(r.url, where);
+  }
+  if (!r) return false;
+  const bench = () => { if (linkSurface(r.kind, !!opts.fromTerminal, deps.benchLinks()) === "bench") deps.wantBench(); };
+  if (r.kind === "jira") { bench(); deps.openCard(r.key, r.key, "jira"); return true; }
   const inApp = r.kind === "card"
-    ? () => deps.openCard(r.query)
+    ? () => { bench(); deps.openCard(r.query); }
     : () => {
+      bench();
       const anchor = prAnchorFromUrl(r.url);
       deps.openPr(r.repo, r.number, r.kind === "ref" ? { fallback: r.url } : anchor ? { anchor } : {});
     };
@@ -231,9 +274,26 @@ export function openInApp(
   return true;
 }
 
+/**
+ * A link a notification carries. Inside the app when it can be (a Jira issue in
+ * Tasks, a pull request in its view), else the agentglass browser whatever
+ * "Open web links in" says — a note's link is read where the note was. The
+ * default browser only for what the agentglass browser refuses (another
+ * scheme, credentials in the address, a blocked host).
+ */
+export function openNoteLink(raw: string, deps: RouteDeps = live): void {
+  const inside: RouteDeps = { ...deps, otherLinks: () => (deps.otherLinks() === "bench" ? "bench" : "view") };
+  if (!openInApp(raw, undefined, {}, inside)) deps.openExternal(raw);
+}
+
 /** The terminal's handler: in the app when it can be, the browser otherwise. */
 export function followLink(raw: string, e?: Click): void {
-  if (!openInApp(raw, e)) openExternal(raw);
+  if (!openInApp(raw, e)) openExternal(raw, { machine: wantsExternal(e) });
+}
+
+/** A link clicked in a terminal: the same, and the "open on the bench" setting applies. */
+export function followTerminalLink(raw: string, e?: Click): void {
+  if (!openInApp(raw, e, { fromTerminal: true })) openExternal(raw, { machine: wantsExternal(e) });
 }
 
 /**
@@ -248,5 +308,5 @@ export function followLink(raw: string, e?: Click): void {
  */
 export const oscLinkHandler = {
   allowNonHttpProtocols: false,
-  activate(e: Click, uri: string): void { followLink(uri, e); },
+  activate(e: Click, uri: string): void { followTerminalLink(uri, e); },
 };

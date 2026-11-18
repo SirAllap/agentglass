@@ -169,7 +169,16 @@ describe("the screens, as source", () => {
     expect(P.PEOPLE_WAIT_MS).toBeGreaterThanOrEqual(200);
     expect(s).toContain("setRes(null); setQ(\"\"); }, [task.id]);");
     const pick = code("components/PeoplePick.tsx");
-    expect(pick).toContain("q.trim() && !p.onQuery");
+    expect(pick).toContain("remote={!!p.onQuery}");
+  });
+
+  test("the hand-over's card list filters, takes the top match on Enter and closes on Escape", () => {
+    const s = code("components/PrAskPicker.tsx");
+    expect(s).toContain('e.key === "Enter" && cand[0]');
+    expect(s).toContain('e.key === "Escape"');
+    expect(s).toContain("data-card-people");
+    // Escape in that box closes its list, not the hand-over dialog around it.
+    expect(code("components/workspace/PeoplePicker.tsx")).toContain('closest?.("[data-card-people]")');
   });
 
   test("the hand-off button sends one request and puts the answer in the card store", () => {

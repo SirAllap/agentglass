@@ -11,6 +11,7 @@
  * dismissable per version — told about v0.8.0, you do not need telling again
  * until v0.8.1.
  */
+import { intervalWhileVisible } from "../lib/visibleInterval.ts";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api } from "../lib/api.ts";
 import { subscribeUpdate, updateState, updateAvailable } from "../lib/updateStore.ts";
@@ -67,8 +68,8 @@ export function UpdateToast() {
       setNow(Date.now());
     };
     void tick();
-    const t = setInterval(tick, POLL_MS);
-    return () => clearInterval(t);
+    // Not while the window is hidden: the progress strip is unseen; coming back reads once.
+    return intervalWhileVisible(() => void tick(), POLL_MS);
   }, [running]);
 
   const start = useCallback(async () => {

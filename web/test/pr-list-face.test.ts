@@ -6,7 +6,7 @@
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "bun:test";
-import { LANES, fileInLane, lanesFor } from "../src/lib/prLanes.ts";
+import { LANES, fileInLane, lanesFor } from "../../shared/prLanes.ts";
 import { CHIP_FACETS, FACETS, reasonSentence, tagLabel } from "../src/lib/ghInbox.ts";
 import { cardMenu, walkIds } from "../src/lib/prCardMenu.ts";
 import type { PrSummary } from "../../shared/types.ts";

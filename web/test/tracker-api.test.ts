@@ -77,8 +77,8 @@ describe("a bare id is settled by prefix when both are connected", () => {
   it("a prefix only ClickUp has is ClickUp's", () => {
     expect(trackerFor(r, { clickup: cu("ORBIT-"), jira: jira("ACME") })?.id).toBe("clickup");
   });
-  it("a prefix both claim is nobody's", () => {
-    expect(trackerFor(r, { clickup: cu("ORBIT-"), jira: jira("ORBIT", "ACME") })).toBeNull();
+  it("a prefix both claim is Jira's, whose key the site listed itself", () => {
+    expect(trackerFor(r, { clickup: cu("ORBIT-"), jira: jira("ORBIT", "ACME") })?.id).toBe("jira");
   });
   it("a prefix neither claims is nobody's", () => {
     expect(trackerFor(r, { clickup: cu("ACME-"), jira: jira("PLAT") })).toBeNull();
@@ -108,7 +108,8 @@ describe("the repository's choice settles what the prefix cannot", () => {
   it("jira resolves the id the prefix gave to both, and clickup the other way", () => {
     expect(trackerFor(r, both, "jira")?.id).toBe("jira");
     expect(trackerFor(r, both, "clickup")?.id).toBe("clickup");
-    expect(trackerFor(r, both, "auto")).toBeNull();
+    // Auto is "Jira first": both claim it, and Jira's claim is a listed key.
+    expect(trackerFor(r, both, "auto")?.id).toBe("jira");
   });
   it("applies even when the prefix names the other one", () => {
     expect(trackerFor(r, { clickup: cu("ACME-"), jira: jira("ORBIT") }, "clickup")?.id).toBe("clickup");
@@ -211,7 +212,7 @@ describe("the chip and the merge form follow the owner", () => {
     expect(chipAction(r, alone)).toEqual({ in: "tasks", tracker: "jira" });
     // and the repository's choice settles what both claim
     const claimed = { clickup: cu("ORBIT-"), jira: jira("ORBIT") };
-    expect(chipAction(r, ownerSetup({ connected: true, prefix: "ORBIT-" }, view(claimed)))).toBeNull();
+    expect(chipAction(r, ownerSetup({ connected: true, prefix: "ORBIT-" }, view(claimed)))).toEqual({ in: "tasks", tracker: "jira" });
     expect(chipAction(r, ownerSetup({ connected: true, prefix: "ORBIT-" }, view(claimed, "clickup")))).toEqual({ in: "tasks" });
     expect(chipAction(r, ownerSetup({ connected: true, prefix: "ORBIT-" }, view(claimed, "jira")))).toEqual({ in: "tasks", tracker: "jira" });
   });

@@ -61,7 +61,7 @@ describe("saving", () => {
     expect(idle).not.toContain("<button");
   });
   test("the terminal's two write cards show it in their header and tell the page header", () => {
-    for (const card of ["LaunchPermissionsCard", "TerminalRunsOn"]) {
+    for (const card of ["LaunchPermissionsCard"]) { // Terminal runs on is an Advanced row now: it saves at once with an Undo toast
       const body = modal.slice(modal.indexOf(`function ${card}(`), modal.indexOf("\nfunction ", modal.indexOf(`function ${card}(`) + 10));
       expect(body, card).toContain('useSavePhase("terminal", busy, !!err)');
       expect(body, card).toContain("<SaveChip phase={phase} />");
@@ -71,8 +71,9 @@ describe("saving", () => {
     for (const [f, id] of [["SavedRepliesPane", "saved-replies"], ["RecipesPane", "recipes"], ["ReviewPromptsPane", "review-prompts"]]) {
       expect(read(`components/${f}.tsx`), f).toContain(`useReportSaving("${id}", busy)`);
     }
-    expect(read("components/RecipesPane.tsx")).toContain("noun=\"recipe\" onCancel={onCancel} busy={busy}");
-    expect(read("components/ReviewPromptsPane.tsx")).toContain("noun=\"prompt\" onCancel={onCancel} busy={busy}");
+    expect(read("components/RecipesPane.tsx")).toContain("onCancel={onCancel} />");
+    expect(read("components/RecipesPane.tsx")).toContain("busy={busy} onPrimary={() => onSave(r)}");
+    expect(read("components/ReviewPromptsPane.tsx")).toContain("busy={busy} onPrimary={() => onSave(r)}");
   });
 });
 
@@ -108,7 +109,7 @@ describe("a page that could not read what it shows", () => {
     expect(applyProblem(one, "jira", { chip: "Not reachable", title: "x" }).jira?.chip).toBe("Not reachable");
   });
   test("the shell draws it: nav mark, header chip and a Try again that runs the page's own retry", () => {
-    expect(modal).toContain("const marks = useMemo(() => withProblems(withNeeds(navMarks({");
+    expect(modal).toContain("const marks = useMemo(() => foldMarks(withProblems(withNeeds(navMarks({");
     expect(modal).toContain("<PageState.Provider value={pageState}>");
     expect(modal).toMatch(/problems\[navTab\.id\] \? <Button tone="primary" onClick=\{\(\) => retries\.current\[navTab\.id\]\?\.\(\)\}>Try again<\/Button>/);
     const nav = read("components/SettingsNav.tsx");
@@ -168,8 +169,9 @@ describe("a list with nothing in it", () => {
     expect(out).not.toContain("agx-le-blank");
   });
   test("the three list pages show it only when the whole list is empty, never for a filter", () => {
-    expect(read("components/SavedRepliesPane.tsx")).toContain("blank={replies?.length === 0 ? {");
-    expect(read("components/RecipesPane.tsx")).toContain("blank={list?.length === 0 ? {");
-    expect(read("components/ReviewPromptsPane.tsx")).toContain("blank={count === 0 && !hiddenList.length ? {");
+    // Each says it as a row, and a filter that matches nothing is a different row ("Nothing matches").
+    expect(read("components/SavedRepliesPane.tsx")).toContain("{replies?.length === 0 && (");
+    expect(read("components/RecipesPane.tsx")).toContain("{list?.length === 0 && (");
+    expect(read("components/ReviewPromptsPane.tsx")).toContain("{count === 0 && !hiddenList.length && (");
   });
 });

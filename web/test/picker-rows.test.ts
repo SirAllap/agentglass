@@ -5,7 +5,8 @@ import { describe, expect, test } from "bun:test";
    branch list, a rounded-lg beside a square one in the checkout list. They are the kit's
    `ListRow` now, so one row looks one way and the keyboard cursor and the chosen row are
    two different tints. This keeps the next picker from copying a row again. */
-const PICKERS = ["PeoplePick", "AssignPicker", "TrackerPeoplePick", "BasePicker", "CheckoutPicker", "Select"];
+// PeoplePick and CheckoutPicker draw their rows through PickerCard, which holds the ListRow.
+const PICKERS = ["AssignPicker", "TrackerPeoplePick", "PickerCard", "Select"];
 
 describe("picker rows are the kit's ListRow", () => {
   for (const name of PICKERS) {

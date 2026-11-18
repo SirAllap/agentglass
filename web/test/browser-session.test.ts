@@ -392,6 +392,23 @@ describe("the app opens where it was left", () => {
     expect(o.activeId).toBe(wiki.id);
   });
 
+  it("never opens in an agent's space, even when its page is all that is left", () => {
+    const agents = new Set(["mkt", "agentorbitbot"]);
+    const isAgent = (id: string) => id === "agentorbitbot";
+    const w = tab("https://en.wikipedia.org/wiki/Orbit", { profile: "agentorbitbot" });
+    saveSession("", [w], w.id);
+    const o = openingStrip(readSession(), agents, home, isAgent);
+    expect(o.profile).toBe("");
+    expect(o.activeId).toBe("");
+    // The worker's page is still there to address, behind the person's view.
+    expect(o.tabs.map((t) => t.url)).toEqual([w.url]);
+
+    store.clear();
+    const m = tab("https://docs.example.test/", { profile: "mkt" });
+    saveSession("agentorbitbot", [w, m], w.id);
+    expect(openingStrip(readSession(), agents, home, isAgent).profile).toBe("mkt");
+  });
+
   it("puts the page that was in front back in front", () => {
     const strip = [tab("https://home.example.test/"), tab("https://en.wikipedia.org/wiki/Orbit")];
     saveSession("", strip, strip[1]!.id);
@@ -423,7 +440,7 @@ describe("the panel never writes a strip it no longer has", () => {
     expect(at).toBeGreaterThan(-1);
     const effect = code.slice(code.lastIndexOf("useEffect(", at), code.indexOf("}, [", at) + 20);
     expect(effect).toContain("latest.current");
-    expect(effect).toMatch(/\}, \[scope\]\);/);
+    expect(effect).toMatch(/\}, \[\]\);/);
   });
 
   it("moves the space to the page in front when a close empties the one on screen", () => {
@@ -433,6 +450,6 @@ describe("the panel never writes a strip it no longer has", () => {
   });
 
   it("writes an open or a close at once, and to disk, not only after the debounce", () => {
-    expect(code).toMatch(/useEffect\(\(\) => \{ saveSession\(profile, tabs, activeId, scope\); flushStorage\(\); \}, \[profile, shape\]\)/);
+    expect(code).toMatch(/useEffect\(\(\) => \{ saveSession\(profile, tabs, activeId\); flushStorage\(\); \}, \[profile, shape\]\)/);
   });
 });

@@ -70,6 +70,13 @@ export function scopeLine(scope: DockerScope | undefined, shown: number): ScopeL
     };
 }
 
+/** The sidebar's line under the sections: what the list covers and what it leaves out. */
+export function scopeNote(scope: DockerScope | undefined): string | null {
+  if (!scope || scope.showingAll) return null;
+  const n = scope.hidden ?? 0;
+  return `Showing ${scope.project} and the worktrees it owns.${n ? ` ${n} container${n === 1 ? "" : "s"} from other projects ${n === 1 ? "is" : "are"} hidden.` : ""}`;
+}
+
 export interface NavCounts { need: number; containers: number; images: number; volumes: number; networks: number }
 
 export function navCounts(ov: DockerOverview | null): NavCounts | null {
@@ -89,6 +96,12 @@ const firstLine = (s: string, max = 60): string => {
   return l.length > max ? `${l.slice(0, max - 1)}…` : l;
 };
 
+/** An image pinned by digest reads like `docker ps`: no "sha256:", 12 hex characters. The full value stays in the row's hover tip. */
+export function shortImage(image: string): string {
+  const m = /^(?:sha256:)?([0-9a-f]{64})$/.exec(image);
+  return m ? m[1]!.slice(0, 12) : image;
+}
+
 /** The one line under a name: why it is sick, or what it is. */
 export function whyOf(c: DockerContainer): Why {
   const k = kindOf(c);
@@ -105,8 +118,8 @@ export function whyOf(c: DockerContainer): Why {
     case "dead": return { text: "dead · cannot start, remove it", tone: "warn" };
     case "stop": return { text: (c.status || "").replace(/^Exited \(-?\d+\) /, "stopped "), tone: "" };
     case "made": return { text: "created, never started", tone: "" };
-    case "paused": return { text: `paused · ${c.image}`, tone: "amb" };
-    default: return { text: c.image, tone: "" };
+    case "paused": return { text: `paused · ${shortImage(c.image)}`, tone: "amb" };
+    default: return { text: shortImage(c.image), tone: "" };
   }
 }
 
@@ -157,12 +170,43 @@ export interface GroupView {
   folded: boolean;
   /** The name with its checkout, for the places a chip would not fit. */
   label: string;
-  /** The checkout in stack mode, the stack in worktree mode. */
+  /** The checkout in stack mode, the branch in worktree mode. */
   chip: { text: string; foreign: boolean } | null;
+  /** The compose projects sharing this group, only when there is more than
+   *  one — two stacks can share a working_dir, and each still needs its own
+   *  name once the chip stops being a project name. */
+  projects: string[] | null;
 }
 
 const stacksOf = (cs: DockerContainer[], by: GroupBy): DockerStack[] =>
   needingFirst(by === "worktree" ? toWorktrees(cs) : toStacks(cs));
+
+/**
+ * The label, chip and per-project names for one stack, pulled out so the
+ * decision can be tested without a view around it.
+ *
+ * Stack mode's chip is the checkout a stack came from. Worktree mode's chip
+ * used to reuse that same field in reverse — the lead container's compose
+ * project — but a working_dir can host more than one compose project, and
+ * the first container's project is not the group's identity: the checkout's
+ * branch, read the way the rest of the app reads one, is.
+ */
+export function groupLabel(stack: DockerStack, groupBy: GroupBy): Pick<GroupView, "label" | "chip" | "projects"> {
+  if (groupBy === "stack") {
+    const chipText = stack.owner?.worktree && stack.owner.worktree !== NO_OWNER ? stack.owner.worktree : "";
+    return {
+      label: chipText ? `${stack.project} · ${chipText}` : stack.project,
+      chip: chipText ? { text: chipText, foreign: stack.foreign } : null,
+      projects: null,
+    };
+  }
+  const projects = [...new Set(stack.containers.map((c) => c.project).filter((p): p is string => !!p))].sort();
+  return {
+    label: stack.project,
+    chip: stack.owner?.branch ? { text: stack.owner.branch, foreign: false } : null,
+    projects: projects.length > 1 ? projects : null,
+  };
+}
 
 /** `open` is the remembered map (key: shown open), the same shape the panel always stored. */
 export function groupsView(all: DockerContainer[], o: {
@@ -173,15 +217,12 @@ export function groupsView(all: DockerContainer[], o: {
   return stacksOf(shown, o.groupBy).map((stack) => {
     const containers = needFirst(stack.containers);
     const remembered = stack.project in o.open ? !o.open[stack.project] : undefined;
-    const lead = containers[0]!;
-    const chipText = o.groupBy === "stack"
-      ? (stack.owner?.worktree && stack.owner.worktree !== NO_OWNER ? stack.owner.worktree : "")
-      : (lead.project ?? "");
+    const { label, chip, projects } = groupLabel(stack, o.groupBy);
     return {
       key: stack.project, stack, containers, summary: stackSummary(containers),
-      label: o.groupBy === "stack" && chipText ? `${stack.project} · ${chipText}` : stack.project,
+      label,
       folded: foldedByDefault(stack, { total: all.length, remembered, filtering }),
-      chip: chipText ? { text: chipText, foreign: o.groupBy === "stack" && stack.foreign } : null,
+      chip, projects,
     };
   });
 }

@@ -75,6 +75,9 @@ const view = (o: Partial<OrchestrationViewProps> = {}) =>
     onRoot() {}, onSave: async () => null, onScope() {}, onOpenEngines() {}, ...o,
   } as OrchestrationViewProps));
 
+/** Lot 7: safety and refused moved to Permissions > Workers, the same view drawn with that part. */
+const pview = (o: Partial<OrchestrationViewProps> = {}) => view({ part: "permWorkers", ...o });
+
 /** The markup of one row, from its anchor to the next. */
 const rowOf = (html: string, label: string): string => {
   const at = html.indexOf(`data-row="${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`);
@@ -117,19 +120,21 @@ describe("the page, in its other states", () => {
   test("the engine's name on the page is the table's, never typed into the page", () => {
     for (const { f, text } of FILES) for (const p of ["Claude Code", "OpenCode", "Hermes", "Codex"]) expect(text.includes(p), `${f} says ${p}`).toBe(false);
   });
-  test("a project with no setting of its own says so over the title, with one way to set it", () => {
-    const html = view({ root: "/work/orbit", scope: "global" });
-    const bar = html.slice(html.indexOf("data-scope-bar"), html.indexOf(`role="tablist"`));
-    expect(bar).toContain("Make it specific to orbit");
-    expect(bar).not.toContain("Use the general setting");
-    // The sentence the mockup puts in the banner over the title, not behind an info button in the bar.
-    expect(html).toContain("orbit uses the general setting");
+  test("a project that follows all projects is edited in place: no banner, no make-specific press", () => {
+    const html = view({ root: "/work/orbit", scope: "global", projects: ["/work/orbit"] });
+    expect(html).not.toContain("Make it specific to");
+    expect(html).not.toContain("uses the general setting");
+    expect(html).toContain('<span class="whitespace-nowrap">orbit</span><span aria-hidden="true" class="inline-flex opacity-70"><svg');
+    expect(html).not.toContain("Only orbit");
   });
-  test("a project with its own setting can go back to the general one", () => {
-    expect(view({ root: "/work/orbit", scope: "project" })).toContain("Use the general setting");
+  test("a project with its own setting has no old badge and no Use the general setting press", () => {
+    const html = view({ root: "/work/orbit", scope: "project", projects: ["/work/orbit"] });
+    expect(html).not.toContain("Use the general setting");
+    expect(html).not.toContain("has its own settings");
   });
   test("the scope bar insets like the cards under it", () => {
-    expect(view()).toMatch(/data-scope-bar="true" class="[^"]*agx-settings-x/);
+    // The page header holds the one control; the bar is a plain row now.
+    expect(view()).toMatch(/data-scope-bar="true"/);
   });
 });
 
@@ -140,22 +145,21 @@ describe("saving permissions", () => {
     expect(r.ok).toBe(false);
     const sentence = r.ok ? "" : r.error;
     expect(sentence).toContain("is wider than the most the main agent may allow");
-    const html = view({ notes: { envelope: sentence } });
-    const pane = html.slice(html.indexOf('id="agx-flow-safety"'));
+    const html = pview({ notes: { envelope: sentence } });
+    const pane = html.slice(html.indexOf('data-pane="safety"'));
     expect(pane).toContain(sentence.replace(/'/g, "&#x27;"));
-    expect(view()).not.toContain('role="alert"');
+    expect(pview()).not.toContain('role="alert"');
   });
-  test("one save bar for both sections, drawn only while something is unsaved", () => {
-    // A static render has no unsaved draft: the bar is the page's, drawn from `dirty`, not from the section.
-    expect(view()).not.toContain("data-savebar");
-    expect(PANE_SRC).toContain("{dirty && (");
-    expect(PANE_SRC).toContain('void save(withEnvelopes(policy, env), "envelope")');
-    expect(PANE_SRC.match(/Save these permissions/g)).toHaveLength(1);
-    expect(PANE_SRC).toContain(">Discard<");
+  test("permissions save at once with an Undo toast: no save bar, no Save button", () => {
+    expect(pview()).not.toContain("data-savebar");
+    expect(PANE_SRC).not.toContain("Save these permissions");
+    expect(PANE_SRC).not.toContain("{dirty && (");
+    expect(PANE_SRC).toContain('save(withEnvelopes(policyNow.current, to), "envelope")');
+    expect(PANE_SRC).toContain("pushSaveToast(");
   });
   test("the always-refused line is fixed and says what stays with a person", () => {
-    const html = view();
-    expect(html).toContain("Push, pull requests, another machine, sudo, rm and signals are never granted, whatever a role or a rule says.");
+    const html = pview();
+    expect(html).toContain("Only sudo and four git worktree commands");
     expect(html).toContain("Why this cannot be changed here");
   });
 });
@@ -177,22 +181,20 @@ describe("conditions with their strips, and the side sheet", () => {
 
 describe("Safety and limits", () => {
   const PANE = PANE_SRC;
-  const SAFE = (html: string) => html.slice(html.indexOf("Safety and limits"));
-  test("it is one disclosure, shut by default, that says defaults while nothing in it was changed", () => {
-    const html = view();
-    const at = html.indexOf("Safety and limits");
-    expect(at).toBeGreaterThan(-1);
-    const det = html.slice(html.lastIndexOf("<details", at), at);
-    expect(det).not.toContain(" open");
+  const SAFE = (html: string) => html.slice(html.indexOf("What a worker may do"));
+  test("the one table says defaults while nothing in it was changed", () => {
+    const html = pview();
+    expect(html.indexOf("What a worker may do")).toBeGreaterThan(-1);
     expect(SAFE(html)).toContain(">defaults<");
     expect(SAFE(html)).not.toContain(">changed<");
     const changed = base();
-    changed.limits = { ...changed.limits, maxWorkers: 5 };
-    expect(SAFE(view({ policy: changed }))).toContain(">changed<");
+    changed.workerDefault = { ...changed.workerDefault, docker: true };
+    changed.ceiling = { ...changed.ceiling, docker: true };
+    expect(SAFE(pview({ policy: changed }))).toContain(">changed<");
   });
   test("a stored policy with the server's key order still reads as defaults, and one added refusal does not", () => {
     const p = base();
-    p.workerDefault = { deny: [], commit: p.workerDefault.commit, network: p.workerDefault.network, docker: p.workerDefault.docker, write: p.workerDefault.write };
+    p.workerDefault = { deny: [], worktreeOps: p.workerDefault.worktreeOps, commit: p.workerDefault.commit, network: p.workerDefault.network, docker: p.workerDefault.docker, write: p.workerDefault.write };
     expect(safetyIsDefault(p)).toBe(true);
     p.workerDefault = { ...p.workerDefault, deny: ["docker compose down"] };
     expect(safetyIsDefault(p)).toBe(false);
@@ -210,38 +212,37 @@ describe("Safety and limits", () => {
     for (const k of ["workers", "most", "hands", "extra"] as const) expect(SAFETY[k].note, k).not.toContain("Example:");
     expect(SAFETY.always.hint).toMatch(/\. Example: /);
     for (const r of Object.values(LIMIT_RANGE)) expect(r.hint).toMatch(/\. Example: /);
-    const html = SAFE(view());
-    for (const t of ["What a worker may do by default", "The most the main agent may allow", "Limits", "Workers at once",
-      "Agents and the settings themselves", "Never in a worker&#x27;s hands", "Extra shell commands", "Docker for workers", "Never allowed"]) expect(html, t).toContain(t);
-    // Every limit carries its one line under the label.
-    for (const r of Object.values(LIMIT_RANGE)) {
-      expect(html, r.label).toContain(r.label);
-      expect(html, r.short).toContain(r.short);
-    }
-    // Docker is one switch, in Extra shell commands only: it is not a row of either envelope.
+    const html = SAFE(pview());
+    // The limits left for Roles & limits; the trust switches for Main agent; the Gate for Changes outside.
+    for (const t of ["What a worker may do", "Never in a worker&#x27;s hands", "Extra shell commands", "Fixed: never allowed", "Open until you close them"]) expect(html, t).toContain(t);
+    // One table, as the mockup draws it: a row per power, a Default and a Ceiling column; Docker and Worktree ops are one switch for both.
+    for (const k of ["write", "commit", "network", "docker", "worktreeOps"]) expect(html, k).toContain(`data-envelope-row="${k}"`);
+    for (const t of ["Default<small>a new worker starts with", "Ceiling<small>no role can go past this", "Docker, default", "Docker, ceiling", "Worktree ops, default"]) expect(html, t).toContain(t);
+    expect(html).not.toContain("Docker for workers");
     expect(html).not.toContain("At most: docker");
     expect(html).not.toContain("Default: docker");
     // Always refused and the save bar have their own places on the page: a card of their own and the bar that ends the column.
-    for (const t of ["Always refused", "Also refused here"]) expect(view(), t).toContain(t);
-    // The bar itself is drawn only while something is unsaved (see "one save bar" above).
-    expect(PANE_SRC).toContain("Save these permissions");
+    for (const t of ["Always refused", "Also refused here"]) expect(pview(), t).toContain(t);
+    // There is no save bar: a change is written at once (see "permissions save at once" above).
+    expect(PANE_SRC).not.toContain("Save these permissions");
   });
   test("a refusal under Save is written inside Safety and limits, where the control that asked is", () => {
     const sentence = "workerDefault is wider than the most the main agent may allow";
-    const html = view({ notes: { envelope: sentence } });
-    const at = html.indexOf('id="agx-flow-safety"');
+    const html = pview({ notes: { envelope: sentence } });
+    const at = html.indexOf('data-pane="safety"');
     expect(at).toBeGreaterThan(-1);
     expect(html.slice(at)).toContain(sentence);
     expect(PANE).toContain("note={notes.envelope || notes.limits}");
-    expect(PANE).toContain('onSeeRefused={() => setSection("refused")}');
+    expect(PANE).toContain("onSeeRefused={() => document.getElementById(\"agx-flow-refused\")");
   });
   test("every section is in the page behind its tab, so the browser's own find still reaches it", () => {
-    for (const id of ["agx-flow-safety", "agx-flow-refused"]) expect(view()).toContain(`id="${id}"`);
-    expect(view()).not.toContain('id="agx-flow-keys"');
+    expect(pview()).toContain('data-pane="safety"');
+    expect(pview()).toContain('id="agx-flow-refused"');
+    expect(pview()).not.toContain('id="agx-flow-keys"');
   });
   test("a refusal from the save in Always refused is printed there, not only under Safety", () => {
     const sentence = "workerDefault is wider than the most the main agent may allow";
-    const html = view({ notes: { envelope: sentence } });
+    const html = pview({ notes: { envelope: sentence } });
     const at = html.indexOf('id="agx-flow-refused"');
     expect(at).toBeGreaterThan(-1);
     expect(html.slice(at)).toContain(sentence);
@@ -296,15 +297,16 @@ describe("the hero, and the three safety levels", () => {
     expect(card).not.toContain("agx-flow-hero-meter");
   });
   test("three levels, one marked Now, each listing write, commit and network; docker has its own switch", () => {
-    const html = view();
+    const html = pview();
     for (const id of ["cautious", "balanced", "open"]) {
       const card = levelCard(html, id);
       for (const line of ["Write files", "Commit", "Network"]) expect(card, id).toContain(line);
       expect(card, id).not.toContain("Docker");
     }
-    // A fresh policy is between the levels (own copy, no commit): no card is on, and one line says what is.
-    for (const id of ["cautious", "balanced", "open"]) expect(levelCard(html, id)).toContain('aria-pressed="false"');
-    expect(html).toContain("No level matches.");
+    // A fresh policy builds and commits in its own copy, offline: that is Balanced, and only Balanced is on.
+    expect(levelCard(html, "balanced")).toContain('aria-pressed="true"');
+    for (const id of ["cautious", "open"]) expect(levelCard(html, id)).toContain('aria-pressed="false"');
+    expect(html).not.toContain("Custom: ");
   });
   test("the path is one row that never wraps, whatever the flow holds", () => {
     // Six blocks, as a project that placed QA-only on the path has: still one row, and the row scrolls instead of wrapping.
@@ -326,7 +328,7 @@ describe("the hero, and the three safety levels", () => {
   test("the duplicate rows are gone: the levels are the worker default, and the ceiling keeps its own", () => {
     const pane = FILES.find((x) => x.f === "flow/FlowSections.tsx")!.text;
     expect(pane).not.toContain('prefix="" env={env.workerDefault}');
-    expect(pane).toContain('prefix="At most: "');
+    expect(pane).toContain("<EnvelopeTable");
   });
 });
 
@@ -364,18 +366,22 @@ describe("the hero's three numbers, from what has been read", () => {
 });
 
 describe("the one line that says what the envelope is now", () => {
-  test("no double comma, and no missing one, for any of the eight envelopes", () => {
-    const env = (write: "none" | "worktree", commit: boolean, network: boolean, docker: boolean) => ({ write, commit, network, docker, deny: [] });
+  const env = (write: "none" | "worktree", commit: boolean, network: boolean, docker: boolean) => ({ write, commit, network, docker, deny: [] });
+  test("the sentence names the nearest level and what differs", () => {
+    expect(nowSentence(env("none", true, false, false))).toBe("Custom: Cautious, with commit on");
+    expect(nowSentence(env("none", false, true, false))).not.toContain("No level matches");
+  });
+  test("fewest differing fields wins, a tie goes to the more cautious level, docker is ignored", () => {
+    expect(nowSentence(env("worktree", false, false, false))).toBe("Custom: Cautious, with write on"); // Cautious and Balanced both differ once
+    expect(nowSentence(env("none", false, true, false))).toBe("Custom: Cautious, with network on");
+    expect(nowSentence(env("none", true, true, false))).toBe("Custom: Open, with write off");
+    expect(nowSentence(env("worktree", true, true, true))).toBe("Custom: Open"); // a level, docker aside
+  });
+  test("no double comma for any of the sixteen envelopes", () => {
     for (const write of ["none", "worktree"] as const) for (const commit of [true, false]) for (const network of [true, false]) for (const docker of [true, false]) {
       const line = nowSentence(env(write, commit, network, docker));
-      expect(line, line).not.toContain(",,");
-      expect(line, line).not.toContain(" ,");
-      expect(line, line).toMatch(/^Now: [^,]+, [^,]+, [^,]+(, may run docker)?\. No level matches\.$/);
+      expect(line, line).toMatch(/^Custom: (Cautious|Balanced|Open)(, with (write|commit|network) (on|off)(, (write|commit|network) (on|off))*)?$/);
     }
-  });
-  test("the sentence says what is on, in the page's words", () => {
-    expect(nowSentence({ write: "worktree", commit: false, network: false, docker: false, deny: [] }))
-      .toBe("Now: workers write in their own copy, cannot commit locally, cannot reach the network. No level matches.");
   });
 });
 
@@ -384,11 +390,13 @@ describe("pinned pointer card, one name, compact top, configure icon", () => {
   test("the hero sits above the tab bar, the presets behind its own chip, and the scrolling region holds only the sections", () => {
     const html = view({});
     const bar = html.indexOf("data-scope-bar"), hero = html.indexOf("data-hero");
-    const tabs = html.indexOf('role="tablist"'), scroll = html.indexOf("agx-flow-cfgscroll");
+    const scroll = html.indexOf('data-section="session"');
+    // Lot 7: the tab bar left with Safety and Always refused; the scrolling region follows the hero directly.
+    const tabs = scroll;
     expect(bar).toBeGreaterThan(-1);
     expect(hero).toBeGreaterThan(bar);
+    expect(html).not.toContain('role="tablist"');
     expect(tabs).toBeGreaterThan(hero);
-    expect(tabs).toBeLessThan(scroll);
     // The presets are not in the page body: a chip in the hero opens the sheet, and nothing is drawn until it does.
     expect(html).not.toContain('data-presets="true"');
     expect(html).toContain("data-presets-chip");
@@ -396,7 +404,7 @@ describe("pinned pointer card, one name, compact top, configure icon", () => {
     expect(PANE_SRC.match(/<PresetCards/g)).toHaveLength(1);
     expect(PANE_SRC).toContain("{presetsOpen && (");
     expect(PANE_SRC).toContain("onOpenPresets={() => setPresetsOpen((on) => !on)}");
-    expect(html.slice(html.indexOf("</section>", hero), tabs)).not.toMatch(/<(section|p|h\d)\b/);
+    // The hero sits inside the page's Flow section now, so what follows it is that section's own markup.
   });
   test("the hint strip and the gap are gone", () => {
     const html = view({});

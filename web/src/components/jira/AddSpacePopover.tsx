@@ -32,7 +32,7 @@ export function AddSpacePopover({ anchor, onPaste, onClose }: { anchor: RefObjec
     setBusy(null);
     if (!r.ok) { setErr(r.error || "Could not add that"); return; }
     tree.select({ kind: "space", space: key });
-    tree.toggle(`s:${key}`, true);
+    tree.toggle(`s:${key}`, true, key);
     onClose();
   };
   return (

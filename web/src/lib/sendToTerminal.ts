@@ -22,9 +22,9 @@ export function windowNameFor(title: string): string {
 }
 
 /** Start (or reuse) a session of the default engine in `cwd` with `prompt`. `title` names the work and the window. */
-export async function sendToTerminal(cwd: string, prompt: string, title: string, kind?: string, mode?: LaunchMode): Promise<IssueResult> {
+export async function sendToTerminal(cwd: string, prompt: string, title: string, kind?: string, mode?: LaunchMode, subject = ""): Promise<IssueResult> {
   // No engine named: the server starts the person's default (agentticket.ts issueArgv).
-  return requestTermIssue(cwd, windowNameFor(title), prompt, true, false, title, "", "", true, kind ?? "", mode);
+  return requestTermIssue(cwd, windowNameFor(title), prompt, true, false, title, "", "", true, kind ?? "", mode, "", subject);
 }
 
 /** Continue a Claude session from its transcript in a window of its own (only Claude has this). */

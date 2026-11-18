@@ -3,7 +3,7 @@ import { FLASH_MS, flashScript } from "../src/lib/browserDrive.ts";
 import { describe, expect, test } from "bun:test";
 import {
   glassHeld, pageOf,
-  LOG_MAX, steadyStep, STEADY_INIT, CANDIDATE_MS, MIN_SHOW_MS, activityReducer, actionOf, agentLabel, doneMayMark, agentState, boxState, lookAt, pointerAt, tabState, IDLE_RELEASE_MS, ago, flashPlan, isActVerb, lapKeyframes, pausedRefusal, presenceLabel, travelMs, type Activity,
+  LOG_MAX, steadyStep, STEADY_INIT, CANDIDATE_MS, MIN_SHOW_MS, activityReducer, actionOf, agentLabel, doneMayMark, agentState, boxState, lookAt, pointerAt, guideRectIn, guideScale, guidePaneWidth, guideOffscreen, bubbleOf, tabState, IDLE_RELEASE_MS, ago, flashPlan, isActVerb, lapKeyframes, pausedRefusal, presenceLabel, travelMs, type Activity,
 } from "../src/lib/browserAgentActivity.ts";
 
 const begin = (s: Activity, tab = "t1", agent = "orbit-ci") => activityReducer(s, { type: "begin", tab, agent });
@@ -122,9 +122,9 @@ describe("the panel is wired to it", () => {
 
 describe("taking a tab over", () => {
   const panel = readFileSync(new URL("../src/components/BrowserPanel.tsx", import.meta.url), "utf8");
-  test("a paused tab refuses before anything reaches the page", () => {
+  test("a paused tab (or one in handoff) refuses before anything reaches the page", () => {
     const h = panel.slice(panel.indexOf("setBrowserAskHandler((ask) => {"), panel.indexOf("setBrowserAskHandler(null)"));
-    const refuse = h.indexOf("pausedRefusal(");
+    const refuse = h.indexOf("agentAskRefusal(");
     expect(refuse).toBeGreaterThan(-1);
     expect(refuse).toBeLessThan(h.indexOf("const serve = "));
     expect(h.slice(refuse - 300, refuse + 200)).toContain("client: clientId()");
@@ -252,6 +252,52 @@ describe("where the pointer lands", () => {
   });
   test("an unzoomed guest is taken as it is", () => {
     expect(pointerAt({ x: 10, y: 20, w: 40, h: 10, vw: 800 }, 800)).toEqual({ x: 27, y: 23 });
+  });
+});
+
+describe("where the guide ring sits", () => {
+  test("a page zoomed to 1.5 in a 1200 px pane: the rect grows by 1.5", () => {
+    expect(guideRectIn({ x: 100, y: 40, w: 60, h: 20, vw: 800 }, 1200)).toEqual({ x: 150, y: 60, w: 90, h: 30 });
+  });
+  test("the pane is resized: the same page rect lands in the new pane's pixels", () => {
+    const r = { x: 100, y: 40, w: 60, h: 20, vw: 1000 };
+    expect(guideRectIn(r, 1000)).toEqual({ x: 100, y: 40, w: 60, h: 20 });
+    expect(guideRectIn(r, 500)).toEqual({ x: 50, y: 20, w: 30, h: 10 });
+  });
+  test("scrolled out of view: the caption says which way, and stops saying it when it is back", () => {
+    const step = { n: 1, say: "Press Save", waitClick: false, at: 0 };
+    expect(guideOffscreen({ x: 0, y: 700, w: 10, h: 10, vh: 600 })).toBe("down");
+    expect(guideOffscreen({ x: 0, y: -40, w: 10, h: 30, vh: 600 })).toBe("up");
+    expect(guideOffscreen({ x: 0, y: 590, w: 10, h: 30, vh: 600 })).toBe(null);
+    expect(bubbleOf(step, true, "down").note).toBe("Scroll down to see it \u2193");
+    expect(bubbleOf(step, true, "up").note).toBe("Scroll up to see it \u2191");
+    expect(bubbleOf(step, true, null).note).toBeUndefined();
+  });
+  test("page px to pane px: the zoom, at the old pane width and the new one", () => {
+    for (const zoom of [0.67, 1, 1.5]) {
+      for (const pane of [1388, 948]) {
+        const vw = pane / zoom;
+        expect(guideScale(pane, vw)).toBeCloseTo(zoom, 6);
+        const r = guideRectIn({ x: 643, y: 448, w: 40, h: 20, vw }, pane);
+        expect(r.x).toBeCloseTo(643 * zoom, 6);
+        expect(r.y).toBeCloseTo(448 * zoom, 6);
+      }
+    }
+    expect(guideScale(0, 948)).toBe(1);
+    expect(guideScale(948, undefined)).toBe(1);
+  });
+  test("a window resize: the pane width measured now wins over a stale cached one", () => {
+    /* Measured: window 1440x900 to 1100x760, pane 1388 to 948, the cached width
+       still 1388, and the ring drawn at 918 for a target at 643 (1388/948 = 1.465). */
+    const pane = guidePaneWidth(948, 1388);
+    expect(pane).toBe(948);
+    expect(guideRectIn({ x: 643, y: 448, w: 40, h: 20, vw: 948 }, pane)).toEqual({ x: 643, y: 448, w: 40, h: 20 });
+    expect(guidePaneWidth(undefined, 1388)).toBe(1388);
+    expect(guidePaneWidth(0, 1388)).toBe(1388);
+  });
+  test("no page width, or no pane yet: as it is", () => {
+    expect(guideRectIn({ x: 1, y: 2, w: 3, h: 4 }, 1200)).toEqual({ x: 1, y: 2, w: 3, h: 4 });
+    expect(guideRectIn({ x: 1, y: 2, w: 3, h: 4, vw: 800 }, 0)).toEqual({ x: 1, y: 2, w: 3, h: 4 });
   });
 });
 
@@ -427,4 +473,12 @@ describe("an agent that went quiet lets go of its tab", () => {
     const src = readFileSync(new URL("../src/components/browser/BrowserIsland.tsx", import.meta.url), "utf8");
     expect(src).toContain("g.list.filter((t) => g.states[t.id])");
   });
+});
+
+test("a guide's start names who guides, over an earlier agent on the tab", async () => {
+  const { activityReducer } = await import("../src/lib/browserAgentActivity.ts");
+  const before = { t1: { agent: "agent", working: 0, paused: false, log: [] } };
+  const after = activityReducer(before, { kind: "guide", tab: "t1", phase: "start", say: "Post the note", agent: "orbit-a" });
+  expect(after.t1!.agent).toBe("orbit-a");
+  expect(after.t1!.guide?.on).toBe(true);
 });

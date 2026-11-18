@@ -14,7 +14,7 @@ const ICON_OF: Record<RefChip["kind"], string> = { current: "branch", branch: "b
 /** One ref, drawn as in the approved Log: a ringed mono chip with the kind's icon, the name clipped last. */
 export function RefPill({ hue, icon, title, children }: { hue: string; icon: string; title?: string; children: ReactNode }) {
   return (
-    <span title={title} className="inline-flex items-center gap-1 px-1.5 rounded-md min-w-0 text-[11.5px] leading-none"
+    <span data-tip={title} className="inline-flex items-center gap-1 px-1.5 rounded-md min-w-0 text-[11.5px] leading-none"
       style={{ height: CTRL_H.compact, fontFamily: MONO, color: hue, background: "var(--bg)",
         boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${hue} 24%, transparent)` }}>
       <DockIcon name={icon} size={ICON.xs} />

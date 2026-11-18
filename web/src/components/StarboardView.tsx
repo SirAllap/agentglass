@@ -222,7 +222,7 @@ export function StarboardView({
         </div>
         <div className="sb-feed sb-slot" data-glyph="live" data-tip={sbTip("feed")} tabIndex={0}>
           {scope.worker
-            ? <WorkerLive name={scope.worker} />
+            ? <WorkerLive name={scope.worker} active={active} />
             : <Feed events={scopedEvents} filter={filter} sessionProvider={sessionProvider} onSelect={onSelectEvent} onClearFilter={onClearFilter} />}
         </div>
         <div className="sb-bot">

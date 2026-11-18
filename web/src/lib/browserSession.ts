@@ -266,7 +266,10 @@ export interface Opening { profile: string; tabs: BrowserTab[]; activeId: string
  * `known` is the container list, `home` mints the one fresh tab for a browser
  * with nothing to restore.
  */
-export function openingStrip(saved: SavedSession | null, known: ReadonlySet<string>, home: (profile: string) => BrowserTab): Opening {
+export function openingStrip(
+  saved: SavedSession | null, known: ReadonlySet<string>, home: (profile: string) => BrowserTab,
+  agent: (profileId: string) => boolean = () => false,
+): Opening {
   /*
    * No session yet — a fresh install, or a profile that has never opened this
    * browser. Asleep like every other restored tab (see below): a real
@@ -279,7 +282,7 @@ export function openingStrip(saved: SavedSession | null, known: ReadonlySet<stri
    */
   if (!saved) { const t = home(""); return { profile: "", tabs: [t], activeId: t.id }; }
   // Everything was closed on purpose last time: restore nothing, invent nothing.
-  if (!Object.keys(saved.byProfile).length) return { profile: saved.current, tabs: [], activeId: "" };
+  if (!Object.keys(saved.byProfile).length) return { profile: agent(saved.current) ? "" : saved.current, tabs: [], activeId: "" };
   /*
    * A CONTAINER THAT NO LONGER EXISTS BRINGS NOTHING BACK.
    *
@@ -303,7 +306,19 @@ export function openingStrip(saved: SavedSession | null, known: ReadonlySet<stri
    * it: a closed Default came back as "Default · 1 tab" beside the container
    * that was really open. Open in a space that has pages instead.
    */
-  const profile = setFor(saved, saved.current) ? saved.current : (Object.keys(saved.byProfile).find(reachable) ?? saved.current);
+  /*
+   * …AND NEVER IN AN AGENT'S SPACE.
+   *
+   * The person closed their own pages, a worker's stayed, and the next launch
+   * opened in the worker's container: "agent:<name> · You are here" on the
+   * person's pane, and `--shared` following it. The person's view is the
+   * person's own containers; with none of them holding a page, it is an
+   * empty Default and the agents' pages stay addressable behind it.
+   */
+  const theirsToOpen = (id: string) => reachable(id) && !(id && agent(id));
+  const profile = setFor(saved, saved.current) && theirsToOpen(saved.current)
+    ? saved.current
+    : (Object.keys(saved.byProfile).find(theirsToOpen) ?? (agent(saved.current) ? "" : saved.current));
   const set = setFor(saved, profile);
   // The one in front keeps its remembered name too, and only its `asleep`
   // differs. Built with `newTab` it came back nameless and the strip read

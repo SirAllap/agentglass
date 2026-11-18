@@ -216,8 +216,8 @@ function PartView({ node: n, ctx }: { node: CanvasNode; ctx: Ctx }) {
       {(step !== undefined || title || hint) && (
         <div className="bd-hd">
           {step !== undefined && <span className="bd-step">{int(step, 1, 99, 1)}</span>}
-          {title && <span className="bd-hd-title" title={title}>{title}</span>}
-          {hint && <span className="bd-hint" title={hint}>{hint}</span>}
+          {title && <span className="bd-hd-title" data-tip={title}>{title}</span>}
+          {hint && <span className="bd-hint" data-tip={hint}>{hint}</span>}
         </div>
       )}
       <PartBox.Provider value={box}>
@@ -242,9 +242,9 @@ function PartView({ node: n, ctx }: { node: CanvasNode; ctx: Ctx }) {
 function TokenChip({ node: n, ctx, cell, sealed }: { node: CanvasNode; ctx: Ctx; cell?: { col: number; row: number }; sealed?: boolean }) {
   const label = str(n.label) ?? "";
   const at: CSSProperties = cell ? { gridColumn: cell.col + 1, gridRow: cell.row + 1 } : {};
-  if (sealed) return <span ref={ctx.refFor(n.id)} className="bd-frozen" role="img" aria-label={label} title={label} style={at} />;
+  if (sealed) return <span ref={ctx.refFor(n.id)} className="bd-frozen" role="img" aria-label={label} data-tip={label} style={at} />;
   return (
-    <span ref={ctx.refFor(n.id)} className="bd-tok" role="img" aria-label={label} title={label} data-canvas-loop={ctx.loops.has(n.id) ? "pulse" : undefined}
+    <span ref={ctx.refFor(n.id)} className="bd-tok" role="img" aria-label={label} data-tip={label} data-canvas-loop={ctx.loops.has(n.id) ? "pulse" : undefined}
       style={{ ...toneVar(toneOf(n.tone, "accent")), ...at }}>
       <span className="bd-tok-t">{label}</span>
       <span className="bd-tok-b" aria-hidden><b /><b /><b /></span>
@@ -425,7 +425,7 @@ export function ItemView({ node: n, ctx, refCb }: { node: CanvasNode; ctx: Ctx; 
       data-rank={rank === undefined ? "false" : "true"} aria-current={n.selected === true ? "true" : undefined}
       {...pressProps(n.action as CanvasAction | undefined, ctx, [title, meta, badge].filter(Boolean).join(", "))}>
       {rank !== undefined && <span className="bd-row-rank">{int(rank, 1, 999, 1)}</span>}
-      <div className="bd-row-t" title={title}>{title}</div>
+      <div className="bd-row-t" data-tip={title}>{title}</div>
       <div className="bd-row-m">
         <span>{meta}</span>
         {badge && <span className="bd-pill" data-tone={toneOf(n.badgeTone, "default")}>{badge}</span>}
@@ -438,7 +438,7 @@ export function LampView({ node: n, refCb }: { node: CanvasNode; refCb: (el: HTM
   const label = str(n.label), on = n.on !== false;
   return (
     <span ref={refCb} className="bd-lamp" data-on={on ? "true" : "false"} style={toneVar(toneOf(n.tone, "success"))} role="img"
-      aria-label={label ? `${label}: ${on ? "on" : "off"}` : on ? "on" : "off"} title={label ? `${label}: ${on ? "on" : "off"}` : on ? "on" : "off"}>
+      aria-label={label ? `${label}: ${on ? "on" : "off"}` : on ? "on" : "off"} data-tip={label ? `${label}: ${on ? "on" : "off"}` : on ? "on" : "off"}>
       <i aria-hidden />{label && <span>{label}</span>}
     </span>
   );
@@ -551,7 +551,7 @@ export function boardLeaf(n: CanvasNode, ctx: Ctx, refCb: (el: HTMLElement | nul
     case "badge":
       return <span ref={refCb} className="bd-pill" data-tone={toneOf(n.tone, "muted")} style={{ alignSelf: "flex-start" }}>{str(n.text)}</span>;
     case "token":
-      return <span ref={refCb} className="bd-tok" role="img" aria-label={str(n.label)} title={str(n.label)} style={{ ...toneVar(toneOf(n.tone, "accent")), width: 58, height: SLOT_H, alignSelf: "flex-start" }}>
+      return <span ref={refCb} className="bd-tok" role="img" aria-label={str(n.label)} data-tip={str(n.label)} style={{ ...toneVar(toneOf(n.tone, "accent")), width: 58, height: SLOT_H, alignSelf: "flex-start" }}>
         <span className="bd-tok-t">{str(n.label)}</span><span className="bd-tok-b" aria-hidden><b /><b /><b /></span>
       </span>;
     default:

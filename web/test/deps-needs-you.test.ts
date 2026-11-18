@@ -146,6 +146,6 @@ describe("a command the rows cut short", () => {
     const html = renderToStaticMarkup(React.createElement(ToolRow, {
       row: toolRow(row("claude", "missing", { install })), open: true, onToggle: () => {}, onCopy: () => {},
     }));
-    expect(html).toContain(`title="${install}"`);
+    expect(html).toContain(`data-tip="${install}"`);
   });
 });

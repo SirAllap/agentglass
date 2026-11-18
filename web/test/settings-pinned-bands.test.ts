@@ -83,7 +83,6 @@ describe("every pinned band stops pinning in a small window", () => {
       ".agx-flow .agx-rule-foot",
       ".agx-flow-savebar[data-savebar]",
       ".agx-split-side",
-      ".agx-toc",
     ]);
   });
 
@@ -111,7 +110,6 @@ describe("every pinned band stops pinning in a small window", () => {
     const at = css.indexOf("@media (max-height: 440px)");
     expect(at).toBeGreaterThan(-1);
     const block = css.slice(at, css.indexOf("\n}\n", at) + 3);
-    expect(block).toContain(".agx-settings-page > .agx-toc { position: static; }");
     expect(block).toContain(".agx-ph-sum { display: none; }");
     // Both offsets go with the band, or a scrolled-to card lands under air.
     expect(block).toContain("--agx-band: 0px");

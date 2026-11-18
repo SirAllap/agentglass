@@ -23,8 +23,8 @@ describe("withFreshRepo", () => {
     expect(withFreshRepo(list, null)).toBe(list);
   });
 
-  test("the beat is a few seconds, not the server's 15 s cache", () => {
-    expect(PILL_POLL_MS).toBeGreaterThanOrEqual(2000);
-    expect(PILL_POLL_MS).toBeLessThanOrEqual(5000);
+  test("the beat is a backstop behind the git push, not the server's 15 s cache", () => {
+    expect(PILL_POLL_MS).toBeGreaterThanOrEqual(5000);
+    expect(PILL_POLL_MS).toBeLessThanOrEqual(20000);
   });
 });

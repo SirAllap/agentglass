@@ -50,4 +50,11 @@ describe("overviewVerdict", () => {
     expect(overviewVerdict({ ...v, ready: false, why: "Conflicts with main", conflicted: true }).text).toBe("Conflicts with main. Resolve it here or hand it to a terminal.");
     expect(overviewVerdict({ ...v, ready: false, why: "Waiting on mara-k." }).tone).toBe("warn");
   });
+  /* acme/orbit #322: a dependency bump nobody was asked to review, with review
+   * not required. The banner said "Approved by reviewers" though nobody had. */
+  test("acme/orbit #322: one approver, nobody approved with review not required, never 'approved' unasked", () => {
+    expect(overviewVerdict({ ...v, approvedBy: ["mara-k"], checksPassed: 10 }).text).toBe("Approved by mara-k, 10 checks green, no conflicts.");
+    expect(overviewVerdict({ ...v, approvedBy: [], checksPassed: 10 }).text).toBe("No review required, 10 checks green, no conflicts.");
+    expect(overviewVerdict({ ...v, approvedBy: [], checksPassed: 10 }).text).not.toMatch(/approved/i);
+  });
 });

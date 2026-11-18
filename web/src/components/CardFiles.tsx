@@ -21,6 +21,7 @@ import { HIT, ICON } from "../lib/iconSize.ts";
 import { fmtAgo } from "../lib/format.ts";
 import { claimZoom } from "../lib/zoomOwner.ts";
 import { EDGE, LINE } from "./workspace/Chrome.tsx";
+import { StateCollapse } from "./tasks/BoardState.tsx";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 
@@ -267,22 +268,22 @@ export function FileViewer({ files, at, setAt, openLink = true, playUrl = playab
           <span className="ml-auto flex items-center gap-1.5 shrink-0">
             {/* The viewer's own zoom, said out loud so nobody wonders whether it is
                 the app's: it says what it is doing and 0 puts it back. */}
-            <button onClick={() => zoomBy(1 / 1.25)} disabled={zoom <= ZOOM_MIN} title="Zoom out (−)"
+            <button onClick={() => zoomBy(1 / 1.25)} disabled={zoom <= ZOOM_MIN} data-tip="Zoom out (−)" aria-label="Zoom out"
               className="agx-btn px-2 py-0.5 rounded disabled:opacity-30" style={{ border: EDGE, color: "var(--text2)" }}>−</button>
-            <button onClick={reset} title="Fit to the window (0)"
+            <button onClick={reset} data-tip="Fit to the window (0)"
               className="agx-btn px-2 py-0.5 rounded tabular-nums" style={{ border: EDGE, color: zoom === 1 ? "var(--text3)" : "var(--text)" }}>
               {zoom === 1 ? "fit" : `${Math.round(zoom * 100)}%`}
             </button>
-            <button onClick={() => zoomBy(1.25)} disabled={zoom >= ZOOM_MAX} title="Zoom in (+)"
+            <button onClick={() => zoomBy(1.25)} disabled={zoom >= ZOOM_MAX} data-tip="Zoom in (+)" aria-label="Zoom in"
               className="agx-btn px-2 py-0.5 rounded disabled:opacity-30" style={{ border: EDGE, color: "var(--text2)" }}>+</button>
             <span aria-hidden style={{ color: "var(--text4)" }}>·</span>
-            <button onClick={() => step(-1)} disabled={images.length < 2} title="Previous (←)"
+            <button onClick={() => step(-1)} disabled={images.length < 2} data-tip="Previous (←)" aria-label="Previous"
               className="agx-btn px-2 py-0.5 rounded disabled:opacity-30" style={{ border: EDGE, color: "var(--text2)" }}>←</button>
-            <button onClick={() => step(1)} disabled={images.length < 2} title="Next (→)"
+            <button onClick={() => step(1)} disabled={images.length < 2} data-tip="Next (→)" aria-label="Next"
               className="agx-btn px-2 py-0.5 rounded disabled:opacity-30" style={{ border: EDGE, color: "var(--text2)" }}>→</button>
             {openLink && (
               <a href={externalUrl(open.url) || undefined} target="_blank" rel="noreferrer noopener"
-                className="px-2 py-0.5 rounded" style={{ border: EDGE, color: "var(--text2)" }} title="Open the file itself">Open ↗</a>
+                className="px-2 py-0.5 rounded" style={{ border: EDGE, color: "var(--text2)" }} data-tip="Open the file itself">Open ↗</a>
             )}
             {/* The app's one close control — same grid, same stroke, and a target
                 you can actually hit. See CloseButton. */}
@@ -424,7 +425,7 @@ export function CardFiles({ files, onRemove, openOther = (a) => openExternal(a.u
   const others = files.filter((f) => !isViewable(f));
 
   if (!files.length) {
-    return <div className="p-5 text-center text-[11.5px]" style={{ color: "var(--text3)" }}>No files on this card.</div>;
+    return <StateCollapse />;
   }
 
   return (
@@ -434,7 +435,7 @@ export function CardFiles({ files, onRemove, openOther = (a) => openExternal(a.u
           {images.map((a, i) => (
             <div key={a.id} className="relative min-w-0">
             <button onClick={() => setAt(i)}
-              title={`${a.title}${a.size ? ` · ${fileSize(a.size)}` : ""}${a.who ? ` · ${a.who}` : ""}`}
+              data-tip={`${a.title}${a.size ? ` · ${fileSize(a.size)}` : ""}${a.who ? ` · ${a.who}` : ""}`}
               className="agx-btn text-left rounded-lg overflow-hidden flex flex-col w-full"
               style={{ border: EDGE, background: "color-mix(in srgb, var(--text) 4%, transparent)" }}>
               {/* `loading="lazy"` is the whole performance story: fifteen thumbnails

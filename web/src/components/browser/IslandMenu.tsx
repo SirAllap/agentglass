@@ -11,6 +11,7 @@
 import { useEffect, useRef } from "react";
 import { Portal } from "../Portal.tsx";
 import { ICON } from "../../lib/iconSize.ts";
+import { BROWSER } from "../../lib/layers.ts";
 
 export interface IslandMenuItem {
   key: string;
@@ -42,7 +43,7 @@ export function IslandMenu({ at, byKey, items, onClose }: {
   };
   return (
     <Portal>
-      <div className="fixed inset-0" style={{ zIndex: 40 }} onClick={onClose} />
+      <div className="fixed inset-0" style={{ zIndex: BROWSER.menuScrim }} onClick={onClose} />
       <div ref={box} role="menu" aria-label="Page menu" onKeyDown={onKeyDown}
         className={"agx-isl-menu" + (byKey ? "" : " is-anim")} style={{ top: at.top, right: at.right }}>
         {items.map((it) => (

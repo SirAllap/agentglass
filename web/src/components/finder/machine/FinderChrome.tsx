@@ -129,7 +129,7 @@ export function FinderSettings({ prefs, onPref, onReset, onForget, onClose, say 
           <div className="flex-1 min-w-0 min-h-0 flex flex-col">
             <div className="flex items-center gap-2 px-6 shrink-0" style={{ minHeight: 52, borderBottom: LINE }}>
               <h2 className="m-0 flex-1 text-[15px]">{PAGES.find((p) => p.id === open)!.title}</h2>
-              <button className="agx-btn rounded-md grid place-items-center" style={{ width: HIT, height: HIT, color: "var(--text3)" }} title="Close (Esc)" aria-label="Close settings" onClick={onClose}><StrataIcon set="act" name="x" size={ICON.sm} /></button>
+              <button className="agx-btn rounded-md grid place-items-center" style={{ width: HIT, height: HIT, color: "var(--text3)" }} data-tip="Close (Esc)" aria-label="Close settings" onClick={onClose}><StrataIcon set="act" name="x" size={ICON.sm} /></button>
             </div>
             <div className={`agx-scroll flex-1 min-w-0 min-h-0 overflow-y-auto ${narrow ? "px-3" : "px-6"} py-4`}>
               {rows.length === 0 && <p style={{ color: "var(--text3)" }}>No matching settings</p>}

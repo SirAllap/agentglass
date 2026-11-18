@@ -20,26 +20,33 @@ const SECTIONS: { id: View; label: string; icon: ReactNode }[] = [
 
 const KEYS = ["j", "k", "r", "s", "Enter", "Esc"] as const;
 
-export function Navigator({ section, counts, onPick }: { section: View; counts: NavCounts | null; onPick: (v: View) => void }) {
+export function Navigator({ section, counts, diskSize, scopeNote, onPick }: {
+  section: View; counts: NavCounts | null; onPick: (v: View) => void;
+  /** Disk's total, once measured ("148 GB"); the section shows nothing until then. */
+  diskSize?: string | null;
+  /** "Showing <project> and the worktrees it owns. N containers from other projects are hidden." */
+  scopeNote?: string | null;
+}) {
   const count = (id: View): ReactNode => {
     if (!counts) return id === "containers" ? "…" : null;
     if (id === "containers") {
       return counts.need ? <><span className="amb"><b>{counts.need}</b> · </span>{counts.containers}</> : counts.containers;
     }
-    return id === "disk" ? null : counts[id];
+    return id === "disk" ? diskSize ?? null : counts[id];
   };
   return (
     <nav className="dk-nav" aria-label="Docker sections">
       <div className="dk-nvh">Docker</div>
       {SECTIONS.map((s) => (
-        <button key={s.id} type="button" className="dk-nv" title={s.label} aria-current={section === s.id ? "page" : undefined} onClick={() => onPick(s.id)}>
+        <button key={s.id} type="button" className="dk-nv" data-tip={s.label} aria-current={section === s.id ? "page" : undefined} onClick={() => onPick(s.id)}>
           {s.icon}<span>{s.label}</span><span className="n">{count(s.id)}</span>
         </button>
       ))}
+      {scopeNote && <div className="dk-note">{scopeNote}</div>}
       <div className="dk-sub">
         <span className="dk-fresh"><i className="dk-live" />Live</span><br />
         Changes arrive from Docker's event stream; nothing is asked on a timer.<br />
-        <span title="j / k move through containers · r restart · s start or stop · Enter opens · Esc goes back">
+        <span data-tip="j / k move through containers · r restart · s start or stop · Enter opens · Esc goes back">
           Keys: {KEYS.map((k) => <span key={k}><kbd>{k}</kbd>{" "}</span>)}
         </span>
       </div>

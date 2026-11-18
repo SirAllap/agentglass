@@ -13,7 +13,8 @@ import { RefreshButton } from "../src/components/workspace/Chrome.tsx";
 
 type El = { props: Record<string, any> };
 const btn = (p: Record<string, unknown>) => RefreshButton({ onRefresh: () => {}, title: "Refresh", ...p } as any) as unknown as El;
-const icon = (b: El) => (b.props.children as El);
+/** The glyph is one of the button's children: a label may sit beside it. */
+const icon = (b: El) => [b.props.children].flat().find((c) => c && typeof c === "object" && "props" in c) as El;
 
 describe("RefreshButton", () => {
   it("turns and is disabled while its own request is out", () => {

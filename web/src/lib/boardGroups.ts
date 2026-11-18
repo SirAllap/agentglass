@@ -22,7 +22,12 @@ export function groupByStatus(
   rows: readonly ProviderTask[], statuses: readonly ListStatus[],
   /** How the cards inside one group are ordered: the tracker's own hand, which is the body's to say. */
   within: (list: ProviderTask[]) => ProviderTask[] = (list) => list,
+  /** The spaces (project keys) in scope: a space filter narrows it, none is every space. A listed status only out-of-scope spaces have is no column. */
+  scope?: readonly string[],
 ): StatusGroup[] {
+  const inScope = scope?.length ? new Set(scope.map((x) => x.toUpperCase())) : null;
+  const here = (s: ListStatus): boolean => !inScope || !s.spaces?.length || s.spaces.some((x) => inScope.has(x.toUpperCase()));
+  const workflow = statuses.filter(here);
   /* A status is the same status whatever its case: two projects of one site may spell it "In review" and "In Review", and the view's
      own list (which merges them) has one entry. The group wears the listed spelling. */
   const lower = (name: string) => name.toLowerCase();
@@ -47,18 +52,31 @@ export function groupByStatus(
    * Seeded before the rows are folded in, so the order is the workflow's own
    * and an empty group lands exactly where it belongs between two full ones.
    */
-  for (const s of statuses) if (!by.has(lower(s.status))) by.set(lower(s.status), { name: s.status, list: [] });
+  for (const s of workflow) if (!by.has(lower(s.status))) by.set(lower(s.status), { name: s.status, list: [] });
+
+  const isDone = (type: string | undefined) => type === "done" || type === "closed";
+  const firstDone = statuses.findIndex((s) => isDone(s.type));
+  /* Filler words say nothing about the stage: "Ready for QA" is the stage of "In QA", not of "Ready for deployment". */
+  const FILLER = new Set(["ready", "for", "in", "to", "the", "of", "on"]);
+  const words = (s: string) => new Set(lower(s).split(/[^a-z0-9]+/).filter((w) => w && !FILLER.has(w)));
+  /* A status the workflow did not list is a column only while a shown card wears it (it is only ever made from a card), and it
+     goes after the workflow columns, by name: never by load order or by which listed status it resembles. */
+  const placeUnknown = (name: string, list: ProviderTask[]): number =>
+    list.some((t) => t.statusKind === "done") ? statuses.length + 1 + 0.5 : statuses.length + 0.5;
 
   return [...by.entries()]
     .map(([k, { name, list }]) => ({
       status: name,
       rows: within(list),
       color: order.get(k)?.color ?? list[0]?.statusColor,
-      done: (order.get(k)?.type ?? "") === "done" || (order.get(k)?.type ?? "") === "closed",
+      done: isDone(order.get(k)?.type),
       points: list.reduce((n, t) => n + (t.points ?? 0), 0),
-      i: order.get(k)?.i ?? 999,
+      /* A listed open status that sits AFTER a done one is the second space's tail of a merged list (the site concatenates each
+         project's statuses), not a workflow step after Done: it is placed like an unlisted one. Measured: "Ready for QA" drawn after Done. */
+      i: (() => { const o = order.get(k); if (!o) return placeUnknown(name, list);
+        return !isDone(o.type) && firstDone >= 0 && o.i > firstDone ? firstDone - 0.5 : o.i; })(),
     }))
-    .sort((a, b) => a.i - b.i);
+    .sort((a, b) => a.i - b.i || a.status.localeCompare(b.status));
 }
 
 /**

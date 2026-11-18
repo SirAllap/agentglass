@@ -4,14 +4,16 @@ import { Portal } from "../Portal.tsx";
 import { Select } from "../Select.tsx";
 import { CardRef, PersonLine, StatusMove } from "../StepCard.tsx";
 import { Face } from "../AssignPicker.tsx";
+import { JiraPeoplePick } from "./JiraPeoplePick.tsx";
 import { Button, CTRL_H, EDGE, LINE, Textarea } from "../workspace/Chrome.tsx";
 import { useOwnedQuestion } from "../../lib/layerOwner.ts";
 import { useFocusTrap } from "../../lib/focusTrap.ts";
-import { CircleIcon, CommentIcon, CrossIcon, DoneIcon, LinkIcon, MinusIcon, RefreshIcon, SwapIcon, UserIcon, WarningIcon } from "../../lib/glyphIcons.tsx";
+import { CaretIcon, CircleIcon, CommentIcon, CrossIcon, DoneIcon, LinkIcon, MinusIcon, PlusIcon, RefreshIcon, SwapIcon, UserIcon, WarningIcon } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
-import { actionLabel, plainFailure, planRows, settleRows, type Phase, type PlanPerson, type PlanRow, type RowKind, type RowState, type Settled, type StepAnswer } from "../../lib/jiraStepPlan.ts";
+import { actionLabel, assignRows, assignStart, assignSuggestions, choiceOf, plainFailure, planRows, settleRows, type Phase, type PlanPerson, type PlanRow, type RowKind, type RowState, type Settled, type StepAnswer } from "../../lib/jiraStepPlan.ts";
 import type { StatusOption } from "../../lib/trackerStatus.ts";
-import type { JiraStepChoice, JiraStepPr, StepBlock } from "../../../../shared/providers.ts";
+import type { JiraPair, JiraStepChoice, JiraStepPr, StepBlock } from "../../../../shared/providers.ts";
+import { tipAttr } from "../../lib/tip.ts";
 
 /*
  * The confirmation a Jira step asks before it runs, and the account of it after.
@@ -29,8 +31,6 @@ import type { JiraStepChoice, JiraStepPr, StepBlock } from "../../../../shared/p
  * it, and not at all with reduced motion.
  */
 
-const NOBODY = "\u0000nobody";
-
 /** What the dialog is given to draw and to run; the press that opened it built this from the card and the saved step. */
 export interface StepDialogSpec {
   /** The step's name on its button, with no ellipsis: "Hand off", "Move to In Review". */
@@ -44,6 +44,9 @@ export interface StepDialogSpec {
   moves: readonly StatusOption[];
   /** The people the card can be given to, when that is asked. */
   people: readonly PlanPerson[];
+  /** The pull request's requested reviewers, and the accounts this machine learned for them: the question's "Suggested". */
+  reviewers?: readonly string[] | undefined;
+  pairs?: readonly JiraPair[] | undefined;
   /** The comment's words to start the edit from, when it is asked. */
   comment: string;
   pr?: JiraStepPr | undefined;
@@ -60,7 +63,7 @@ type Pending = StepDialogSpec & { resolve: (r: StepDialogResult) => void };
 
 const ICONS: Record<RowKind, (s: number) => ReactNode> = {
   move: (s) => <SwapIcon size={s} />, unassign: (s) => <MinusIcon size={s} />, assign: (s) => <UserIcon size={s} />,
-  comment: (s) => <CommentIcon size={s} />, link: (s) => <LinkIcon size={s} />,
+  comment: (s) => <CommentIcon size={s} />, field: (s) => <PlusIcon size={s} />, link: (s) => <LinkIcon size={s} />,
 };
 const NODE: Record<RowState, { tint: string; glyph: (s: number) => ReactNode; word: string }> = {
   waiting: { tint: "var(--text4)", glyph: (s) => <CircleIcon size={s} />, word: "waiting" },
@@ -70,7 +73,7 @@ const NODE: Record<RowState, { tint: string; glyph: (s: number) => ReactNode; wo
   skipped: { tint: "var(--text3)", glyph: (s) => <MinusIcon size={s} />, word: "skipped" },
 };
 
-export const FIELD_KEY = { color: "var(--text3)", fontSize: 10.5, textTransform: "uppercase" as const, letterSpacing: "0.04em" };
+export const FIELD_KEY = { color: "var(--text3)", fontSize: 10.5 };
 
 function Timeline({ rows, phase, shown, still }: { rows: readonly Settled[]; phase: Phase; shown: number; still: boolean }) {
   return (
@@ -91,7 +94,7 @@ function TimelineRow({ row, state, why, last, idle, still }: { row: PlanRow; sta
     <li className="relative flex items-start gap-2.5 pb-3 last:pb-0" data-row={row.id} data-row-state={state} data-noop={row.noop ? "" : undefined}>
       {/* The line the nodes hang on; the last node ends it. */}
       {!last && <span aria-hidden className="absolute" style={{ left: 9, top: 22, bottom: 0, width: 1, background: "var(--surface-line)" }} />}
-      <span className="relative shrink-0 inline-flex items-center justify-center rounded-full" title={node.word}
+      <span className="relative shrink-0 inline-flex items-center justify-center rounded-full" role="img" aria-label={node.word} data-tip={tipAttr(node.word)}
         style={{ width: 20, height: 20, color: node.tint, background: "var(--surface-card)", boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${node.tint} 45%, transparent)`, transition: still ? "none" : "color 160ms ease, box-shadow 160ms ease" }}>
         {node.glyph(ICON.xs)}
       </span>
@@ -110,7 +113,7 @@ function TimelineRow({ row, state, why, last, idle, still }: { row: PlanRow; sta
               style={{ color: "var(--text2)", background: "var(--bg)", borderLeft: "2px solid var(--surface-line)", maxHeight: 96, overflowWrap: "anywhere" }}>{row.detail}</div>
           : <div className="mt-0.5 text-[11px]" style={{ color: "var(--text3)" }}>{row.detail}</div>)}
         {row.note && <div className="mt-0.5 text-[10.5px]" style={{ color: "var(--text3)" }}>{row.note}</div>}
-        {row.noop && idle && <div className="mt-0.5 text-[11px]" data-says-noop="" style={{ color: "var(--text3)" }}>Nothing happens here: {lower(row.noop)}</div>}
+        {row.noop && idle && <div className="mt-0.5 text-[11px]" data-says-noop="" style={{ color: "var(--text3)" }}>{row.alone ? row.noop : `Nothing happens here: ${lower(row.noop)}`}</div>}
         {state === "skipped" && !idle && <div className="mt-0.5 text-[11px]" style={{ color: "var(--text3)" }}>{why === "not run" ? "Not run" : `Skipped: ${why ?? lower(row.noop ?? "nothing to do")}`}</div>}
         {state === "failed" && <div className="mt-0.5 text-[11px]" style={{ color: "var(--error)" }}>{why ?? "Jira did not accept it"}</div>}
       </div>
@@ -149,7 +152,13 @@ export function StepDialog({ spec, onDone }: { spec: StepDialogSpec; onDone: (r:
   const first = spec.to ?? spec.moves[0]?.toStatus ?? "";
   const [to, setTo] = useState(first);
   const [clear, setClear] = useState(false);
-  const [assign, setAssign] = useState<string | null | undefined>(undefined);
+  const [assignOpen, setAssignOpen] = useState(false);
+  const assignBtn = useRef<HTMLButtonElement>(null);
+  const suggestion = useMemo(() => assignSuggestions(spec.people, { logins: spec.reviewers ?? [], pairs: spec.pairs ?? [] }), [spec]);
+  const assignList = useMemo(() => assignRows(spec.people, { logins: spec.reviewers ?? [], pairs: spec.pairs ?? [] }), [spec]);
+  // Where the block's own "Start at" points: whoever presses it, the reviewer's learned account, or nobody picked.
+  const startAt = useMemo(() => assignStart(spec.blocks.find((b) => b.type === "assign"), spec.people, suggestion), [spec, suggestion]);
+  const [assign, setAssign] = useState<string | null | undefined>(startAt);
   const [comment, setComment] = useState(spec.comment);
   const [phase, setPhase] = useState<Phase>("idle");
   const [answer, setAnswer] = useState<(StepAnswer & { task?: { status?: string } | undefined }) | null>(null);
@@ -200,6 +209,8 @@ export function StepDialog({ spec, onDone }: { spec: StepDialogSpec; onDone: (r:
   }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // The people box owns Enter and Escape while it is open: Escape closes the list, not the dialog.
+      if (assignOpen) return;
       if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
       else if (e.key === "Enter" && phase === "idle" && !(e.target instanceof HTMLTextAreaElement) && !(e.target instanceof HTMLButtonElement)) { e.preventDefault(); e.stopPropagation(); void go(); }
     };
@@ -208,7 +219,7 @@ export function StepDialog({ spec, onDone }: { spec: StepDialogSpec; onDone: (r:
   });
 
   const statusOptions = [...new Map(spec.moves.map((m) => [m.toStatus, m])).values()].map((m) => ({ value: m.toStatus, label: m.toStatus, tint: m.color, pill: true, dim: m.toKind === "done" }));
-  const person = (p: PlanPerson) => ({ value: p.writeKey ?? p.key, label: p.name, icon: <Face m={p} size={ICON.lg} /> });
+  const picked = assign == null ? null : spec.people.find((p) => choiceOf(p) === assign) ?? null;
   const toColor = spec.moves.find((m) => m.toStatus === target)?.color;
   const dur = reduced ? 0 : 0.16;
   return (
@@ -244,9 +255,19 @@ export function StepDialog({ spec, onDone }: { spec: StepDialogSpec; onDone: (r:
                 </>}
                 {spec.asks.assign && <>
                   <div style={FIELD_KEY}>Give it to</div>
-                  <Select value={assign === undefined ? "" : assign === null ? NOBODY : assign} title="Assignee" disabled={phase !== "idle"} align="left"
-                    onChange={(v) => setAssign(v === "" ? undefined : v === NOBODY ? null : v)}
-                    options={[{ value: "", label: "Leave as is", dim: true }, { value: NOBODY, label: "Nobody" }, ...spec.people.map(person)]} />
+                  <div className="relative">
+                    <button ref={assignBtn} type="button" data-pick-assign="" aria-haspopup="dialog" aria-expanded={assignOpen} disabled={phase !== "idle"}
+                      onClick={() => setAssignOpen((v) => !v)}
+                      className="w-full inline-flex items-center gap-2 text-[11px] px-2 py-1 rounded disabled:opacity-50"
+                      style={{ border: EDGE, color: "var(--text)", background: "var(--bg)", minHeight: CTRL_H.compact }}>
+                      {assign === undefined ? <span>Leave as is</span> : assign === null ? <span>Nobody</span> : picked
+                        ? <><Face m={picked} size={ICON.lg} /><span className="truncate">{picked.name}</span></>
+                        : <span className="truncate">{assign}</span>}
+                      <span className="flex-1" /><span className="flex" style={{ color: "var(--text3)" }} aria-hidden><CaretIcon size={ICON.xs} /></span>
+                    </button>
+                    {assignOpen && <JiraPeoplePick anchor={assignBtn} rows={assignList} value={assign}
+                      onPick={(v) => { setAssign(v); setAssignOpen(false); }} onClose={() => setAssignOpen(false)} />}
+                  </div>
                 </>}
                 {spec.asks.comment && <>
                   <div style={{ ...FIELD_KEY, alignSelf: "start", paddingTop: 6 }}>Comment</div>
@@ -277,7 +298,7 @@ export function StepDialog({ spec, onDone }: { spec: StepDialogSpec; onDone: (r:
               <Button tone="primary" buttonRef={confirm} onClick={finished ? close : () => { void go(); }} disabled={!finished && (phase === "running" || !spec.writes || !label)}
                 className="min-w-0"
                 /* The label is the step's own sentence and may be long: it wraps, as it always did, instead of being cut at one line. */
-                style={{ height: "auto", minHeight: CTRL_H.regular, paddingBlock: 4, whiteSpace: "normal", textAlign: "left", lineHeight: 1.3 }} title={finished ? undefined : label ?? undefined}>
+                style={{ height: "auto", minHeight: CTRL_H.regular, paddingBlock: 4, whiteSpace: "normal", textAlign: "left", lineHeight: 1.3 }} data-tip={finished ? undefined : label ?? undefined}>
                 {finished ? "Close" : phase === "running" ? "Running…" : label ?? "Nothing to change"}
               </Button>
             </div>

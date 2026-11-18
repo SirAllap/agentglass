@@ -40,7 +40,7 @@ export function EventRun({ events, open, onToggle, faceFor, flat }: {
         <div key={`${e.at}-${i}`} className="agx-tiny"
           /* Why the moves have no name on them, on the row itself rather than
              in a footnote nobody reads. */
-          title={e.kind === "status" ? NO_AUTHOR_NOTE : undefined}>
+          data-tip={e.kind === "status" ? NO_AUTHOR_NOTE : undefined}>
           {/* The face, where ClickUp gives one — the creation does, a move does
               not. Same round 14px as everywhere else, and the bullet keeps the
               rows that have no face aligned with the ones that do. */}
@@ -49,7 +49,7 @@ export function EventRun({ events, open, onToggle, faceFor, flat }: {
             const person = seenWho ? faceFor?.(seenWho) : null;
             if (e.avatar) {
               return (
-                <img src={avatarSrc(e.avatar)} alt="" loading="lazy" referrerPolicy="no-referrer" title={e.who}
+                <img src={avatarSrc(e.avatar)} alt="" loading="lazy" referrerPolicy="no-referrer" data-tip={e.who}
                   onError={(ev) => { ev.currentTarget.style.display = "none"; }}
                   className="shrink-0 self-center rounded-full"
                   style={{ width: 14, height: 14, objectFit: "cover" }} />
@@ -60,11 +60,11 @@ export function EventRun({ events, open, onToggle, faceFor, flat }: {
                fallback every other face in this panel uses. */
             if (person) {
               return person.avatar
-                ? <img src={avatarSrc(person.avatar)} alt="" loading="lazy" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = "none"; }} title={person.name}
+                ? <img src={avatarSrc(person.avatar)} alt="" loading="lazy" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = "none"; }} data-tip={person.name}
                     className="shrink-0 self-center rounded-full"
                     style={{ width: 14, height: 14, objectFit: "cover" }} />
                 : <span className="shrink-0 self-center rounded-full inline-flex items-center justify-center"
-                    title={person.name}
+                    data-tip={person.name}
                     style={{ width: 14, height: 14, fontSize: 8, background: person.color || "var(--bg4)", color: chipInk(person.color) }}>
                     {person.initials}
                   </span>;
@@ -106,7 +106,7 @@ export function EventRun({ events, open, onToggle, faceFor, flat }: {
             ) : null}
           </span>
           <span className="shrink-0 tabular-nums" style={{ color: "var(--text4)" }}
-            title={new Date(e.at).toLocaleString()}>
+            data-tip={new Date(e.at).toLocaleString()}>
             {new Date(e.at).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
           </span>
         </div>

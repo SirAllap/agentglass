@@ -2,6 +2,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { Button, EDGE } from "../workspace/Chrome.tsx";
 import { PAGE_BTN, PAGE_BTN_SM } from "./OrchKit.tsx";
 import { ICON } from "../../lib/iconSize.ts";
+import { tipAttr } from "../../lib/tip.ts";
 import { FlowIcon } from "./flow/flowIcons.tsx";
 import { engineName } from "./flow/flowScreenCopy.ts";
 import { engineLetter } from "./orchestrationCopy.ts";
@@ -28,13 +29,15 @@ export interface HeroPathStep {
   wait: number;
   /** A person answers here: nothing runs. */
   you?: boolean;
+  /** What the step does, in one sentence: the hover card under its name. */
+  does?: string;
 }
 
 /** What the three cards say, or null for a number nothing has read. */
 export interface HeroReadout {
   plan: { label: string; used: number | null; /** Where a rule moves work: percent used. */ mark: number | null };
   /** Workers flying now, and the most the policy allows at once. */
-  flight: { n: number; of: number } | null;
+  flight: { n: number; of: number; /** The project whose own value `of` is, when it differs from All projects (flightOwner). */ own?: string | null } | null;
   /** What today has cost, in the budget views' words. */
   today: string | null;
   /** The block that settled last, by its flow name, and when. Never its message. */
@@ -162,6 +165,7 @@ export function OrchestratorHero(p: {
             const n = step.run + step.wait;
             return (
               <li key={step.id} className="agx-flow-hero-node" data-step={step.id} data-run={step.run > 0 ? "" : undefined}
+                data-tip={step.does ? tipAttr({ name: step.name, text: step.does, tag: step.you ? "You" : step.engine ? engineName(step.engine) : undefined }) : undefined}
                 style={{ "--c": stepColour(step.id, step.hue) } as CSSProperties}>
                 <span aria-hidden className="agx-flow-hero-disc">
                   <FlowIcon name={step.ico} size={ICON.rail} />
@@ -200,7 +204,7 @@ export function OrchestratorHero(p: {
           <div data-readout="workers">
             <dt>Workers in flight</dt>
             {flight
-              ? <dd>{flight.n} <span className="agx-flow-hero-sub">of {flight.of} at once</span></dd>
+              ? <dd>{flight.n} <span className="agx-flow-hero-sub">of {flight.of} at once{flight.own ? ` · set for ${flight.own}` : ""}</span></dd>
               : <dd className="agx-flow-hero-off">{NOT_READ}</dd>}
             {flight && <span aria-hidden className="agx-flow-hero-meter"><i style={{ width: `${fill}%` }} /></span>}
           </div>

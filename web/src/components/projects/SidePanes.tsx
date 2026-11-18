@@ -104,7 +104,7 @@ export function UndoToast({ toast, onDone }: { toast: Toast; onDone: () => void 
   return (
     <div role="status" aria-live="polite" className="absolute flex items-center gap-3 rounded-xl" data-toast
       style={{ left: "50%", bottom: 76, transform: "translateX(-50%)", maxWidth: "92%", padding: "10px 12px", background: "var(--text)", color: "var(--bg)", zIndex: 7, boxShadow: "0 10px 30px -10px rgba(0,0,0,0.5)" }}>
-      <span className="truncate text-[12px]" title={toast.text}>{toast.text}</span>
+      <span className="truncate text-[12px]" data-tip={toast.text}>{toast.text}</span>
       {toast.undo && <button onClick={() => { toast.undo!(); onDone(); }} className="inline-flex items-center gap-1 font-bold bg-transparent border-0 p-0 cursor-pointer text-[12px]" style={{ color: "var(--primary-hover)" }}><UndoIcon size={ICON.xs} /> Undo <Kbd>Z</Kbd></button>}
       {toast.undo && <span className="text-[11px] tabular-nums" style={{ opacity: 0.6 }}>{left} s</span>}
       {toast.action && <button onClick={() => { toast.action!.run(); onDone(); }} className="font-bold bg-transparent border-0 p-0 cursor-pointer text-[12px]" style={{ color: "var(--primary-hover)" }}>{toast.action.label}</button>}

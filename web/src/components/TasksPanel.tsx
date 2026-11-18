@@ -10,20 +10,22 @@
 // Finishing removes the worktree, deletes the branch and kills the window. The
 // second half is the half nobody builds, and it is the reason a machine ends up
 // with fourteen checkouts nobody can name.
+import { reactionTip, type ReactionChip } from "../../../shared/commentReactions.ts";
 import { putCard } from "../lib/prCardStore.ts";
 import { useCloseWithOwner } from "../lib/layerOwner.ts";
 import { CheckoutPicker } from "./CheckoutPicker.tsx";
 import { Fragment, type CSSProperties, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { CaretIcon, TerminalIcon, BlockedIcon, CheckboxIcon, CircleIcon, ClockIcon, CopyIcon, CrossIcon, DoneIcon, DotIcon, IconLabel, FlagIcon, KeyboardIcon, LockIcon, CommentIcon, NoteIcon, MoreIcon, PlusIcon, RefreshIcon, SearchIcon } from "../lib/glyphIcons.tsx";
+import { CaretIcon, TerminalIcon, BlockedIcon, CheckboxIcon, CircleIcon, ClockIcon, CopyIcon, CrossIcon, DoneIcon, DotIcon, IconLabel, FlagIcon, KeyboardIcon, LockIcon, CommentIcon, NoteIcon, MoreIcon, PinIcon, PlusIcon, RefreshIcon, SearchIcon } from "../lib/glyphIcons.tsx";
 import { pickCardPr, mergedInk, isRelated, type CardPr } from "../lib/cardPrPick.ts";
 import { CardPrChip, CardPrDetailRow, LINK_ROW } from "./CardPrChip.tsx";
 import { CardField } from "./CardChrome.tsx";
 import { cardPrsOf, onCardPrs, cardPrVersion, widestCardPrChip } from "../lib/cardPrStore.ts";
 import { digitMetrics, trackPx, whoCellWidth, columnsAt, PR_FLOOR, WHO_FLOOR } from "../lib/tasksColumnFit.ts";
-import { paintThenRevalidate, PRS_TTL_MS, swr, THREAD_TTL_MS } from "../lib/cardTabCache.ts";
 import { api } from "../lib/api.ts";
+import { load as remoteLoad, loadCancellable, markStale as remoteMarkStale, peek, pin, unpin, writePush } from "../lib/remoteStore.ts";
 import { avatarSrc } from "../lib/avatarSrc.ts";
 import { CLICKUP_BOARD, type BoardSource, type MainFeed, type MainReload } from "../lib/boardSource.ts";
+import { scopeOfFound } from "../lib/jiraCardScope.ts";
 import { getJiraRequest, publishJiraSelection, setJiraSelection, useJiraRequest } from "../lib/jiraSelection.ts";
 import { JIRA_BOARD } from "../lib/jiraBoard.ts";
 import { useClickupPrefs, clickupPrefs, clickupPrefsSaved } from "../lib/clickupPrefs.ts";
@@ -32,7 +34,7 @@ import { Optimistic, commentResolvedPatch } from "../lib/taskOptimistic.ts";
 import { FilterBuilder } from "./tasks/FilterBuilder.tsx";
 import { EMPTY, apply as applyFilters, fieldsOf, liveCount as builtCount, type FilterSet } from "./tasks/filters.ts";
 import type { GitRepoRef, IssueDetail, IssuePr, IssueRow, IssueWork, StartMode, LocalTask, TaskCapability, TasksListResponse, SkillInfo } from "../../../shared/types.ts";
-import type { JiraBoardAreas, JiraBoardContext, ProviderTask, ProviderTasksResponse, SavedView, SavedFolder, ViewTasksResponse, ListStatus, ListField, ListPlace, ListMember, TaskDetail, CardEvent, CardField as CardFieldValue } from "../../../shared/providers.ts";
+import type { JiraBoardAreas, JiraBoardContext, ProviderTask, ProviderTasksResponse, SavedView, SavedFolder, ViewTasksResponse, ListStatus, ListField, ListPlace, ListMember, TaskDetail, TaskReply, CardEvent, CardField as CardFieldValue } from "../../../shared/providers.ts";
 import { compareOrder } from "../../../shared/orderIndex.ts";
 import { ON_CHIP, ON_CHIP_OK } from "./tasks/chipStyle.ts";
 import { ReadOnlyNote, ReadOnlyRow, READ_ONLY_TIP } from "./tasks/ReadOnlyNote.tsx";
@@ -40,9 +42,15 @@ import { CARD_BARS, BoardEmpty, BoardNote, BoardSkeleton, InboxIcon, SearchOffIc
 import { JiraQuickChips, JiraSprintHeader, ParentLabel } from "./jira/JiraBoardContext.tsx";
 import { JiraAreaHead, JiraGroupControl, JiraScope, SPRINTS } from "./jira/JiraAreas.tsx";
 import { JiraRailFoot, JiraTree } from "./jira/JiraTree.tsx";
+import { JiraAgentCards } from "./jira/JiraAgentCards.tsx";
 import { AddSpacePopover } from "./jira/AddSpacePopover.tsx";
 import { useJiraTree } from "../lib/useJiraTree.ts";
-import { RAIL_W_JIRA, scopeIdOf, type TreeView } from "../lib/jiraTree.ts";
+import { useJiraViewCounts } from "../lib/useJiraViewCounts.ts";
+import { usePersonNames } from "../lib/personNames.ts";
+import { RAIL_W_JIRA, scopeIdOf, starredViews, type TreeView } from "../lib/jiraTree.ts";
+import { FAVOURITES_FAILED, useFavouriteImport, useSyncFavourites } from "../lib/jiraFavourites.ts";
+import { useJiraFilterSync } from "../lib/useJiraFilterSync.ts";
+import { setJiraSearch } from "../lib/jiraSearchBus.ts";
 import { areaCards, areaRows, headChips, defaultPref, emptyBodyText, railTitle, groupAreas, groupKeyed, parsePref, prefText, type GroupPref, type KeyGroup } from "../lib/jiraAreas.ts";
 import { TypeMark } from "./jira/JiraSections.tsx";
 import { guessOrder, rankOf, rankable, sortedByOrder, splitSprint, sprintTotals, type ParentGroup } from "../lib/jiraBoardContext.ts";
@@ -53,7 +61,11 @@ import { EventRun } from "./CardEventRun.tsx";
 import { layoutCard } from "../lib/cardLayout.ts";
 import { dayToMs, describeWithComment, estimateText, msToDay, parseEstimate, parsePoints, sortSprints, sprintShort, tagSources } from "../lib/cardEdits.ts";
 
+/** The last good answer per source, for the session: see `data` in the board body. */
+const lastBoard = new Map<string, ViewTasksResponse>();
+
 import { branchName, checkoutCommand, commitCommand, worktreeCommand } from "../lib/cardBranch.ts";
+import { CopyRow } from "./tasks/CopyRow.tsx";
 import { neighbours, shortTitle, hopMatches } from "../lib/cardHop.ts";
 import { CardFiles, FileViewer, isViewable } from "./CardFiles.tsx";
 import { Composer, COMPOSER_MIN } from "./tasks/Composer.tsx";
@@ -68,7 +80,8 @@ import { PeoplePick } from "./PeoplePick.tsx";
 import { listMembers } from "../lib/listMembers.ts";
 import { Select } from "./Select.tsx";
 import { orderMembers } from "../lib/peopleOrder.ts";
-import { Markdown, MarkdownImages } from "../lib/markdown.tsx";
+import { Markdown, MarkdownImages, MarkdownMentions } from "../lib/markdown.tsx";
+import { chip as mentionChip } from "./jira/JiraActivity.tsx";
 import { fmtAgo } from "../lib/format.ts";
 import { StatusPill } from "./StatusPill.tsx";
 import { Spinner } from "./Spinner.tsx";
@@ -89,8 +102,8 @@ import { HAS_BROWSER } from "../lib/desktop.ts";
 import { matchesQuery } from "../lib/boardSearch.ts";
 import { openCard, type CardJump } from "../lib/openCard.ts";
 import type { IssueJump } from "../lib/openIssue.ts";
-import { boardView } from "../lib/boardView.ts";
-import { TASK_SOURCES, shownTaskSources, subscribeTaskSources, type TaskSourceId } from "../lib/taskSources.ts";
+import { boardView, stoppedBoard } from "../lib/boardView.ts";
+import { shownTaskSources, subscribeTaskSources, type TaskSourceId } from "../lib/taskSources.ts";
 import { StartFlightPlan } from "./flightPlan/StartFlightPlan.tsx";
 import { Badge, Button, Chip, CHIP, CTRL_H, EDGE, IconButton, IconChip, INPUT, INPUT_STYLE, ListRow, RefreshButton, Segmented, LINE, TL_AVATAR, TL_CSS } from "./workspace/Chrome.tsx";
 import { BellIcon } from "./settingsNavIcons.tsx";
@@ -99,9 +112,13 @@ import { ChipMenu, MenuSep, TaskMenuItem, useMenuAt } from "./tasks/TaskMenu.tsx
 import { PaneGrip, usePaneWidth } from "./tasks/PaneGrip.tsx";
 import { SCROLLBAR_CSS } from "./diff/DiffLines.tsx";
 import { useTaskConnected, visibleTaskSources } from "../lib/taskConnected.ts";
-import { landingSource, rememberTaskSource } from "../lib/taskLanding.ts";
+import { openTaskSource, subscribeTaskLanding, taskLanding, lastTaskSource, rememberTaskSource, type TaskLanding } from "../lib/taskLanding.ts";
+import { allSections, taskRepoRoot, taskTabs } from "../lib/taskView.ts";
+import { TileRootContext } from "../lib/tileRoot.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 import { LAYER } from "../lib/layers.ts";
+import { RAIL_PEEK_MS, RAIL_W as RAIL_FOLDED_W } from "./jira/list/boardModel.ts";
+import { JiraFoldedRail } from "./jira/JiraFoldedRail.tsx";
 import { ContextMenu, MenuItem } from "./ContextMenu.tsx";
 import { JiraRailMenu } from "./jira/list/menus/JiraRailMenu.tsx";
 import { peopleOf } from "./jira/list/PeopleFaces.tsx";
@@ -156,14 +173,6 @@ type SourceId = "all" | TaskSourceId;
    that only appears once you have found Settings is a feature nobody
    discovers. Unconnected, it says what to do and links to the pane that does
    it. Which ones appear at all is a preference — see lib/taskSources.ts. */
-/** Local first, trackers next, GitHub last: the order the header draws them in. */
-const TAB_ORDER: SourceId[] = ["all", "local", "clickup", "jira", "github"];
-const sourceTabs = (shown: TaskSourceId[]): { id: SourceId; label: string }[] => [
-  // "All" only when there is more than one thing for it to be all of.
-  ...(shown.length > 1 ? [{ id: "all" as const, label: "All" }] : []),
-  ...TASK_SOURCES.filter((s) => shown.includes(s.id)).map((s) => ({ id: s.id as SourceId, label: s.label }))
-    .sort((a, b) => TAB_ORDER.indexOf(a.id) - TAB_ORDER.indexOf(b.id)),
-];
 
 /** What a finished bulk run says it did. Past tense, and the same words as the
  *  buttons, so the confirmation is recognisably the thing that was pressed. */
@@ -171,6 +180,21 @@ const LABEL: Record<string, string> = {
   done: "Completed", priority: "Priority set", tag: "Tagged", delete: "Deleted",
 };
 
+
+/** The reactions on a comment, one read-only chip per emoji: ClickUp documents no write for them. */
+function ReactionChips({ chips }: { chips?: ReactionChip[] }) {
+  if (!chips?.length) return null;
+  return (
+    <div className="flex items-center gap-1 flex-wrap mt-1.5">
+      {chips.map((c) => (
+        <span key={c.emoji} data-tip={reactionTip(c)} className="text-[10.5px] px-1.5 py-0.5 rounded-full"
+          style={{ border: `1px solid ${c.mine ? "var(--primary)" : "var(--line, var(--border))"}`, color: "var(--text2)" }}>
+          {c.emoji} {c.count}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 /**
  * How far back a sweep reached, said the way somebody would say it.
@@ -188,6 +212,83 @@ function sinceWords(ms: number): string {
   return `the last ${Math.round(hours / 24)} days`;
 }
 
+/**
+ * One card, for the pane beside a terminal. ClickUp's goes through the board's own
+ * card (the board is read for it, the same way a pull request's card chip does);
+ * a tracker with a card pane of its own is asked for the card by address.
+ */
+export function CardEmbed({ active, card, here, onStatus }: { active: boolean; /** The checkout the pane is about. */ here: string; card: { query: string; label: string; tracker?: "jira" }; onStatus?: (s: { title: string; color: string | null }) => void }) {
+  const source = card.tracker === "jira" ? JIRA_BOARD : CLICKUP_BOARD;
+  const [repos, setRepos] = useState<GitRepoRef[]>([]);
+  // `api.gitRepos()`'s own remoteStore entry (key `git:repos`) is held only
+  // 2s — that TTL is for its 26 general callers, each wanting post-write
+  // freshness, not for a card embed that only needs to know what checkouts
+  // exist. A dedicated key here holds a minute instead, measured against a
+  // tab switch: every-other-switch without it, 0 with it.
+  useEffect(() => { if (active) void remoteLoad<{ repos: GitRepoRef[] }>("git:repos:panel", () => api.gitRepos(), 60_000).then((r) => setRepos(r.repos)).catch(() => { /* the card does not need a checkout */ }); }, [active]);
+  const jump = useMemo<CardJump>(() => ({ query: card.query, label: card.label, n: 1, ...(card.tracker ? { tracker: card.tracker } : null) }), [card.query, card.label, card.tracker]);
+  if (source.CardPane) return <TrackerCardEmbed source={source} query={card.query} tracker={card.tracker ?? "clickup"} active={active} onStatus={onStatus} />;
+  return <ClickUpBody cardOnly active={active} repos={repos} here={here} jump={jump} source={source} />;
+}
+
+/** `source.find`'s own 5-minute hold, keyed by tracker + the card's address —
+ *  a tab switch remounting this with the same card paints at once instead of
+ *  "Reading the card…" every time. */
+const FIND_TTL_MS = 5 * 60_000;
+/** `source.views()` (the write-switch check — for Jira, one read of
+ *  `/jira/views` AND `/jira/status`): one per tracker, not one per mount.
+ *  Measured: 30 requests to each, one per switch, on 3 side-pane tabs × 10
+ *  switches. Writing to a tracker turns on/off far less than every 5 minutes. */
+const BOARD_VIEWS_TTL_MS = 5 * 60_000;
+
+/** What `findKey` caches: a real miss is a value, not a rejection, so it
+ *  gets the same TTL treatment as a found card (see `findOutcome`). */
+export type FindOutcome = { ok: true; task: ProviderTask } | { ok: false; error: string };
+
+/** Normalise a find answer (HTTP 200, `ok:false` for "no such card") into
+ *  something `remoteLoad` can cache. The old code threw on a miss, which
+ *  `load()` never remembers (a thrown load keeps `at` at 0 — see
+ *  remote-store.test.ts, "a failed load is not remembered"), so every tab
+ *  switch to a not-found card asked ClickUp again. A miss is a fact worth
+ *  holding for `FIND_TTL_MS` same as a hit, not a transport failure. */
+export function findOutcome(r: { ok: boolean; error?: string; task?: ProviderTask }): FindOutcome {
+  if (r.ok && r.task) return { ok: true, task: r.task };
+  return { ok: false, error: r.error ?? "Could not find that card" };
+}
+
+function TrackerCardEmbed({ source, query, tracker, active, onStatus }: { source: BoardSource; query: string; tracker: string; active: boolean; onStatus?: (s: { title: string; color: string | null }) => void }) {
+  const findKey = `card-find:${tracker}:${query}`;
+  const seed = peek<FindOutcome>(findKey).value;
+  const [task, setTask] = useState<ProviderTask | null>(() => (seed?.ok ? seed.task : null));
+  const [writable, setWritable] = useState(false);
+  const [err, setErr] = useState(() => (seed && !seed.ok ? seed.error : ""));
+  /* A new card (or tracker): the old one is not this one, so it is gone the moment
+     we know that, not after the fetch — see the other effect below for the fetch itself.
+     Except when `findKey` is already held: a remount (split-mode tab switch) runs this
+     same effect fresh, and clearing unconditionally would blank the cache's own paint
+     right back out before the fetch below could repaint it. */
+  useEffect(() => { if (peek<FindOutcome>(findKey).value === undefined) { setTask(null); setErr(""); } }, [source, query]);
+  useEffect(() => {
+    if (!active) return;
+    let live = true;
+    void remoteLoad<FindOutcome>(findKey, () => source.find(query).then(findOutcome), FIND_TTL_MS)
+      .then((o) => { if (!live) return; if (o.ok) { setTask(o.task); setErr(""); } else { setTask(null); setErr(o.error); } })
+      .catch((e) => { if (live) setErr(e instanceof Error ? e.message : "Could not reach the server"); });
+    void remoteLoad(`board-views:${tracker}`, () => source.views(), BOARD_VIEWS_TTL_MS)
+      .then((v) => { if (live) setWritable(!!v.writeEnabled); }).catch(() => { /* read-only */ });
+    return () => { live = false; };
+  }, [active, source, query]);
+  /* This card is on screen: never the entry an LRU eviction picks. */
+  useEffect(() => { pin(findKey); return () => unpin(findKey); }, [findKey]);
+  const status = task?.status, statusColor = task?.statusColor;
+  useEffect(() => { if (status && onStatus) onStatus({ title: status, color: statusColor ?? null }); }, [status, statusColor, onStatus]);
+  const onTask = useCallback((t: ProviderTask) => { setTask(t); writePush<FindOutcome>(findKey, { ok: true, task: t }); }, [findKey]);
+  const Pane = source.CardPane;
+  if (err) return <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>{err}</div>;
+  if (!task || !Pane) return <div className="p-5"><Spinner label="Reading the card…" className="" /></div>;
+  return <div className="flex flex-col flex-1 min-h-0 min-w-0 text-[11.5px]"><Pane t={task} writable={writable} onTask={onTask} onAllow={() => { /* turning changes on is the full view's switch */ }} /></div>;
+}
+
 export function TasksView({ active, onOpenBrowser, cardJump, issueJump }: {
   active: boolean;
   /** Switch to the browser view; a link that is not a card or a pull request opens there. */
@@ -203,9 +304,19 @@ export function TasksView({ active, onOpenBrowser, cardJump, issueJump }: {
 }) {
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState("");
+  /* The projects that are open, as paths. Empty is the unscoped cockpit ("all
+     repos"), which is not a project to follow. See projectPick.ts. */
+  const [workspaces, setWorkspaces] = useState<string[]>([]);
+  /* The root the block chose for itself, so a hand-picked checkout is left
+     alone when the list is read again and the open project changes under it. */
+  const autoRoot = useRef("");
   /* The write grant of whichever board is on screen; the switch lives up here. */
   const [writes, setWrites] = useState<BoardWrites | null>(null);
   const shown = useSyncExternalStore(subscribeTaskSources, shownTaskSources, shownTaskSources);
+  /* Subscribed rather than read once: this view stays mounted after its first
+     visit, so a landing changed in Settings afterwards used to be saved and
+     never seen — the view was still standing on the tab it mounted with. */
+  const landingMode = useSyncExternalStore(subscribeTaskLanding, taskLanding, taskLanding);
   /*
    * A source somebody hid, put back for as long as they are being shown a card
    * from it.
@@ -227,11 +338,16 @@ export function TasksView({ active, onOpenBrowser, cardJump, issueJump }: {
      draws the preference and then only ever loses tabs, never gains them, so
      it cannot be seen rearranging itself. See taskConnected.ts. */
   const connected = useTaskConnected();
+  /* The bar as the PREFERENCE describes it — every source that is switched on,
+     whether or not the server has answered about it yet. This is what the
+     landing is validated against: a pinned Jira is on it at first render, so
+     the landing is not mistaken for a tab that is gone. */
+  const preferenceTabs = useMemo(() => taskTabs(shown), [shown]);
   const tabs = useMemo(() => {
     const live = visibleTaskSources(shown, connected);
     // A forced source is an errand and outranks both the preference and the
     // connection check: it got here because something asked for a card by id.
-    return sourceTabs(forced && !live.includes(forced) ? [...live, forced] : live);
+    return taskTabs(forced && !live.includes(forced) ? [...live, forced] : live);
   }, [shown, connected, forced]);
 
   /*
@@ -239,27 +355,61 @@ export function TasksView({ active, onOpenBrowser, cardJump, issueJump }: {
    * taskLanding.ts for why that was the wrong constant rather than the wrong
    * default.
    *
-   * Computed once, lazily, from the bar as it stands at first render. That is
-   * enough to land on: the preference is a synchronous localStorage read, and
-   * the connection check can only ever REMOVE tabs afterwards — so the worst
-   * case is landing on a pinned source that turns out not to be set up, which
-   * the reconcile effect below then steps off. One frame, self-correcting, and
-   * no deferral machinery for the ordinary case.
+   * Read from the preference bar, not the live one: at first render the
+   * connection check has not answered, and `visibleTaskSources` deliberately
+   * leaves optional sources off until it does. Landing against that shorter bar
+   * fell back to "All" and stayed there once Jira appeared — the exact screen
+   * this fixes. The reconcile effect waits for the answer, then steps off only
+   * if the tab is really gone.
    */
-  const [source, setSource] = useState<SourceId>(() => landingSource(tabs.map((t) => t.id)) as SourceId);
+  const [source, setSource] = useState<SourceId>(() => openTaskSource({
+    available: preferenceTabs.map((t) => t.id),
+    landing: taskLanding(),
+    last: lastTaskSource(),
+    settled: false,
+  }) as SourceId);
 
   /* Standing on a source that has just been hidden — or on "All" when only one
      source is left — is standing on a tab that is no longer there. Step to the
-     first one that is. */
+     first one that is. Nothing is decided until the connection check answers:
+     before that the bar is shorter than the preference, not the tab gone. */
   useEffect(() => {
+    if (connected === null) return;
     if (!tabs.some((t) => t.id === source)) setSource(tabs[0]?.id ?? "all");
-  }, [tabs, source]);
+  }, [connected, tabs, source]);
+
+  /* What "opens on" means for a view that is already mounted: applied when it
+     is shown again, and when the setting changes while it is. An explicit jump
+     (`forced`) outranks it — see openTaskSource for the whole order. */
+  const openedFor = useRef<{ active: boolean; landing: TaskLanding }>({ active: false, landing: landingMode });
+  useEffect(() => {
+    const again = openedFor.current.active && openedFor.current.landing === landingMode;
+    openedFor.current = { active, landing: landingMode };
+    if (!active || again || forced) return;
+    setSource((cur) => openTaskSource({
+      available: tabs.map((t) => t.id),
+      landing: landingMode,
+      current: cur,
+      last: lastTaskSource(),
+      settled: connected !== null,
+    }) as SourceId);
+    // `tabs` and `connected` are read at the moment of opening rather than
+    // watched: watching them would re-apply the landing over a tab picked by
+    // hand as soon as the connection answer arrived.
+  }, [active, landingMode, forced]);
 
   useEffect(() => {
     if (!active) return;
-    api.gitRepos().then(({ repos: r }) => {
+    Promise.all([api.gitRepos(), api.projects().catch(() => null)]).then(([{ repos: r }, projects]) => {
+      const open = projects?.workspaces?.length ? projects.workspaces : projects?.workspace ? [projects.workspace] : [];
+      const pick = taskRepoRoot(r, open);
       setRepos(r);
-      setRoot((cur) => (cur && r.some((x) => x.root === cur) ? cur : (r[0]?.root ?? "")));
+      setWorkspaces(open);
+      setRoot((cur) => {
+        const wasAuto = !cur || cur === autoRoot.current;
+        autoRoot.current = pick.root;
+        return (wasAuto || !r.some((x) => x.root === cur)) ? pick.root : cur;
+      });
     }).catch(() => {});
   }, [active]);
   /** A project is a remote; its worktrees are the same one — see the header. */
@@ -268,6 +418,13 @@ export function TasksView({ active, onOpenBrowser, cardJump, issueJump }: {
     () => repos.find((r) => r.root === root)?.worktreeOf ?? root,
     [repos, root],
   );
+  /* Which checkout the GitHub block reads, and — when it could not follow the
+     open project — the sentence saying which one it shows instead. A manual
+     pick from the header picker is its own answer, so the note is only about
+     the choice this made by itself. */
+  const repoChoice = useMemo(() => taskRepoRoot(repos, workspaces), [repos, workspaces]);
+  const repoName = repos.find((r) => r.root === root)?.name ?? "";
+  const repoNote = root === repoChoice.root ? repoChoice.note : null;
 
   /* Somebody asked for a ClickUp card, so show them the ClickUp tab. Only the
      tab is decided here — WHICH card is the board's business, and it is handed
@@ -318,9 +475,9 @@ export function TasksView({ active, onOpenBrowser, cardJump, issueJump }: {
           * Checkouts are still not offered: issues come from the GitHub remote,
           * and every worktree of a project shares that one remote, so a list of
           * them would be a dozen ways to read the same list. PROJECTS are a
-          * different question, and the old answer — "`repos[0]` is the project"
-          * — only holds while a project is open. Under "All repos/projects" it
-          * is whichever repo sorted first, and nothing on screen moved it.
+          * different question, and the default answer is the open project's
+          * checkout — see taskRepoRoot — so the picker is how you step outside
+          * it when several are open or none is.
           */}
         {source === "github" && projects.length > 1 && (
           <CheckoutPicker repos={projects} value={projectRoot} onPick={setRoot}
@@ -333,14 +490,21 @@ export function TasksView({ active, onOpenBrowser, cardJump, issueJump }: {
       /* Same body, other source. The key keeps the two apart: both are this
          component in the same place, and without it a switch of tab would hand
          ClickUp's state to Jira. */
-      : source === "jira" ? <ClickUpBody key="jira" active={active} repos={repos} here={root} onOpenBrowser={onOpenBrowser} onWrites={setWrites} jump={cardJump?.tracker === "jira" ? cardJump : null} source={JIRA_BOARD} />
+      : source === "jira" ? <TileRootContext.Provider value={root}><ClickUpBody key="jira" active={active} repos={repos} here={root} onOpenBrowser={onOpenBrowser} onWrites={setWrites} jump={cardJump?.tracker === "jira" ? cardJump : null} source={JIRA_BOARD} /></TileRootContext.Provider>
       : (
         <div className="flex flex-col flex-1 min-h-0">
           {source === "all" && <NowBand onChanged={() => {}} />}
-          {source === "all" && <LocalStrip active={active} onOpen={() => setSource("local")} />}
-          {root ? <IssuesBody key={root} root={root} active={active} jump={issueJump} onOpenSource={source === "all" ? () => setSource("github") : undefined} /> : (
-            <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>No repository to read issues from.</div>
-          )}
+          {/* The saved order decides which block comes first, the same order
+              the bar above is in. A source switched off has no block. */}
+          {source === "all" && allSections(shown).map((id) => id === "local"
+            ? <LocalStrip key="local" active={active} onOpen={() => setSource("local")} />
+            : root
+              ? <IssuesBody key={`github:${root}`} root={root} active={active} jump={issueJump}
+                  onOpenSource={() => setSource("github")} repoLabel={repoName} repoNote={repoNote} />
+              : <div key="github" className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>No repository to read issues from.</div>)}
+          {source === "github" && (root
+            ? <IssuesBody key={`github:${root}`} root={root} active={active} jump={issueJump} repoLabel={repoName} repoNote={repoNote} />
+            : <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>No repository to read issues from.</div>)}
         </div>
       )}
     </div>
@@ -348,7 +512,13 @@ export function TasksView({ active, onOpenBrowser, cardJump, issueJump }: {
 }
 
 
-function IssuesBody({ root, active, jump, onOpenSource }: { root: string; active: boolean; jump?: IssueJump | null; onOpenSource?: () => void }) {
+function IssuesBody({ root, active, jump, onOpenSource, repoLabel, repoNote }: {
+  root: string; active: boolean; jump?: IssueJump | null; onOpenSource?: () => void;
+  /** The checkout's own name, for the empty state before a row has arrived. */
+  repoLabel?: string;
+  /** Why this is not the open project's checkout, when it is not. */
+  repoNote?: string | null;
+}) {
   const [state, setState] = useState<"open" | "closed" | "all">("open");
   const [mine, setMine] = useState(false);
   const [q, setQ] = useState("");
@@ -405,17 +575,18 @@ function IssuesBody({ root, active, jump, onOpenSource }: { root: string; active
   const say = (ok: boolean, text: string) => setNote({ ok, text });
   const narrowed = !!(q.trim() || mine);
   const clearSearch = () => { setQ(""); setMine(false); };
-  const where = repoName.current || "this repository";
+  const where = repoName.current || repoLabel || "this repository";
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       {/* On All this is one block among others, so it gets the heading the Local block has. */}
-      {onOpenSource && (
-        <div className="flex items-center gap-2 text-[12px] shrink-0" style={{ minHeight: 32, padding: "0 14px", marginTop: 10 }}>
+      {(onOpenSource || repoNote) && (
+        <div className="flex items-center gap-2 text-[12px] shrink-0 min-w-0" style={{ minHeight: 32, padding: "0 14px", marginTop: 10 }}>
           <b style={{ fontWeight: 650, color: "var(--text)" }}>GitHub issues</b>
           {rows && <span className="tabular-nums" style={{ color: "var(--text3)" }}>{rows.length}</span>}
+          {repoNote && <span className="truncate" style={{ color: "var(--warn)" }} data-tip={repoNote}>{repoNote}</span>}
           <span className="flex-1" />
-          <Button size="compact" tone="quiet" onClick={onOpenSource}>Open GitHub</Button>
+          {onOpenSource && <Button size="compact" tone="quiet" onClick={onOpenSource}>Open GitHub</Button>}
         </div>
       )}
       <div className="flex items-center gap-2 shrink-0 flex-wrap" style={{ padding: "10px 14px" }}>
@@ -427,7 +598,7 @@ function IssuesBody({ root, active, jump, onOpenSource }: { root: string; active
             placeholder="Search issues" aria-label="Search issues" spellCheck={false} autoComplete="off"
             className={`w-full ${INPUT}`} style={{ ...INPUT_STYLE, paddingRight: q ? 28 : undefined }} />
           {q && (
-            <button onClick={() => setQ("")} aria-label="Clear the search" title="Clear the search"
+            <button onClick={() => setQ("")} aria-label="Clear the search" data-tip="Clear the search"
               className="absolute right-1 top-1/2 -translate-y-1/2 grid place-items-center rounded-md agx-hover"
               style={{ width: 22, height: 22, color: "var(--text3)" }}><CloseIcon size={ICON.xs} /></button>
           )}
@@ -671,7 +842,7 @@ function Detail({ root, number, onSay, onChanged, onClose }: {
                 else openPrs(String(p.number), p.state === "OPEN" ? "open" : "all");
               }}
                 className="text-left flex-1 min-w-0 rounded px-1 -mx-1 agx-hover"
-                title="Open this pull request">
+                data-tip="Open this pull request">
                 <span className="tabular-nums" style={{ color: "var(--primary-ink)" }}>#{p.number}</span>
                 <span className="ml-1.5 text-[10px] tracking-[0.06em] px-1.5 rounded"
                   style={p.state === "MERGED"
@@ -685,13 +856,13 @@ function Detail({ root, number, onSay, onChanged, onClose }: {
                     mentioned the issue and made no promise about it. */}
                 {p.linked && (
                   <span className="ml-1.5 text-[10px]" style={{ color: "var(--text4)" }}
-                    title="linked to this issue on GitHub — merging it closes this">closes this</span>
+                    data-tip="linked to this issue on GitHub — merging it closes this">closes this</span>
                 )}
                 <div className="truncate text-[10.5px]" style={{ color: "var(--text3)" }}>{p.title || p.url}</div>
               </button>
               <a href={externalUrl(p.url)} target="_blank" rel="noreferrer noopener"
                 className="agx-btn text-[10px] px-1.5 py-0.5 rounded shrink-0"
-                style={{ color: "var(--text3)", border: EDGE }} title="Open on GitHub">↗</a>
+                style={{ color: "var(--text3)", border: EDGE }} data-tip="Open on GitHub" aria-label="Open on GitHub">↗</a>
             </div>
           ))}
         </div>
@@ -786,7 +957,7 @@ function NowBand({ onChanged }: { onChanged: () => void }) {
       </div>
       {live.map((r) => (
         <div key={r.id} className="flex items-center gap-2">
-          <span className="flex-1 min-w-0 truncate text-[12px]" style={{ color: "var(--text)" }} title={r.title}>
+          <span className="flex-1 min-w-0 truncate text-[12px]" style={{ color: "var(--text)" }} data-tip={r.title}>
             {r.title}<span className="tabular-nums" style={{ color: "var(--text3)" }}> · {hhmm(r.firedAt ?? r.due)}</span>
           </span>
           <Button size="compact" tone="primary" onClick={() => void act(api.reminderAck(r.id))}>Ack</Button>
@@ -916,8 +1087,10 @@ const todayStr = () => {
  * the list behind it knows its own statuses, which is what makes a status
  * picker possible without guessing.
  */
-function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKUP_BOARD, onWrites }: {
+function ClickUpBody({ active, repos, here, onOpenBrowser, jump, cardOnly, source = CLICKUP_BOARD, onWrites }: {
   active: boolean;
+  /** Beside a terminal: the card the jump names, full width, with no rail, table or toolbar. */
+  cardOnly?: boolean;
   /** The write grant, told to the header, which owns the switch. Null when this body leaves. */
   onWrites?: (w: BoardWrites | null) => void;
   /** Where boards, cards and writes come from. ClickUp unless a body is given another. */
@@ -932,7 +1105,8 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
      module constants' so every line that reads one is the line it was. */
   const { RAIL_KEY, RAIL_SHUT_KEY, RAIL_W_KEY, CARD_MODE_KEY, CARD_W_KEY, WIDE_KEY } = boardKeys(source);
   const [boards, setBoards] = useState<{ views: SavedView[]; folders?: SavedFolder[]; current?: string; writeEnabled: boolean; writeForced?: boolean; connected?: boolean } | null>(null);
-  const [data, setData] = useState<ViewTasksResponse | null>(null);
+  /* The last board this source answered with, kept for the session: a board opened again draws these rows at once, marked as refreshing, instead of a bare skeleton. */
+  const [data, setData] = useState<ViewTasksResponse | null>(() => { const c = lastBoard.get(source.id); return c ? { ...c, revalidating: true } : null; });
   const [busy, setBusy] = useState(false);
   /** The board somebody just clicked, before its answer arrives. See `load`. */
   const [wanted, setWanted] = useState<string | null>(null);
@@ -1105,6 +1279,39 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
   });
   useEffect(() => { try { localStorage.setItem(RAIL_W_KEY, String(railW)); } catch { /* private mode */ } }, [railW]);
   const [railDrag, setRailDrag] = useState(false);
+  /* Jira's sidebar folds to its rail on its own when, docked, it would leave the board under two columns (the board
+     says so through `rail.onAuto`); pinned, it stays docked anyway. Folded, a pointer resting on it for a moment opens
+     it over the board, without moving a column, until the pointer leaves or Escape. */
+  const [railAuto, setRailAuto] = useState(false);
+  const [railPinned, setRailPinned] = useState(false);
+  const [railPeek, setRailPeek] = useState(false);
+  const railPeekTimer = useRef<number | null>(null);
+  const railDocked = railOpen && !(railAuto && !railPinned);
+  const railFull = railDocked || railPeek;
+  const railPeekArm = () => {
+    if (railDocked || railPeek || railPeekTimer.current != null || source.id !== "jira") return;
+    railPeekTimer.current = window.setTimeout(() => { railPeekTimer.current = null; setRailPeek(true); }, RAIL_PEEK_MS);
+  };
+  const railPeekEnd = () => {
+    if (railPeekTimer.current != null) { window.clearTimeout(railPeekTimer.current); railPeekTimer.current = null; }
+    setRailPeek(false);
+  };
+  useEffect(() => {
+    if (!railPeek) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); railPeekEnd(); } };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [railPeek]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { if (railPeekTimer.current != null) window.clearTimeout(railPeekTimer.current); }, []);
+  const railFor = useMemo(() => ({
+    width: railW, folded: !railDocked, pinned: railPinned,
+    onAuto: (fold: boolean) => setRailAuto(fold),
+    // `[`: folded for any reason opens it docked (pinned over the auto fold); docked folds it.
+    onToggle: () => {
+      if (railDocked) { setRailPinned(false); setRailOpen(false); } else { setRailOpen(true); if (railAuto) setRailPinned(true); }
+      railPeekEnd();
+    },
+  }), [railW, railDocked, railPinned, railAuto]); // eslint-disable-line react-hooks/exhaustive-deps
   const railNav = useRef<HTMLElement>(null);
   const railInput = useRef<HTMLInputElement>(null);
   /* The Jira sidebar is its own tree (space > component > epic), fed by one hook; every other source draws the rows below. */
@@ -1367,7 +1574,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
           aria-selected={isBoard || r.kind === "looked" ? sel : undefined}
           aria-busy={busy || undefined}
           tabIndex={railStop === r.key ? 0 : -1}
-          title={r.title}
+          data-tip={r.title}
           onFocus={() => setRailFocus(r.key)}
           onClick={() => railActivate(r)}
           onContextMenu={(e) => {
@@ -1462,13 +1669,13 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
             </button>
           )}
           {sel && isBoard && !busy && !!data?.tasks.length && (
-            <span className="tabular-nums shrink-0 rounded-full" title={`${data.tasks.length} cards on this board`}
+            <span className="tabular-nums shrink-0 rounded-full" data-tip={`${data.tasks.length} cards on this board`}
               style={{ fontSize: 10, marginLeft: 6, paddingInline: 6, background: `color-mix(in srgb, ${tone} 16%, transparent)`, color: "var(--text)" }}>
               {data.tasks.length}
             </span>
           )}
           {!sel && r.kind === "list" && r.expanded === false && !!r.more && (
-            <span className="tabular-nums shrink-0" title={`${r.more} more view${r.more === 1 ? "" : "s"} on this list`}
+            <span className="tabular-nums shrink-0" data-tip={`${r.more} more view${r.more === 1 ? "" : "s"} on this list`}
               style={{ fontSize: 10, marginLeft: 6, color: "var(--text4)" }}>+{r.more}</span>
           )}
         </div>
@@ -1482,11 +1689,28 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
   const jiraMeView = boards?.views.find((v) => v.builtin);
   const jiraSpaceKeys = new Set(jt.spaces.map((x) => x.key));
   const ownedBySpace = (v?: SavedView) => !!v?.folderId && jiraSpaceKeys.has(v.folderId);
+  /* A filter on a person never shows the account id: the name the page holds, or "Person filter". */
+  const tidyPerson = usePersonNames((boards?.views ?? []).map((v) => `${v.name} ${v.listName ?? ""}`));
   const jiraTreeViews: TreeView[] = !isJira ? [] : (boards?.views ?? []).filter((v) => !v.builtin && ownedBySpace(v)).map((v) => ({
-    id: v.id, label: v.listName && v.name !== v.listName ? v.name : (v.listName || v.name), url: v.url, spaceKey: v.folderId,
-    kind: v.id.startsWith("filter:") ? "filter" : v.id.startsWith("jql:") ? "jql" : "board",
+    id: v.id, label: tidyPerson(v.listName && v.name !== v.listName ? v.name : (v.listName || v.name)), url: v.url, spaceKey: v.folderId,
+    kind: v.id.startsWith("filter:") ? "filter" : v.id.startsWith("jql:") ? "jql" : "board", ...(v.team ? { team: true } : null),
   }));
   const jiraLegacy = !isJira ? [] : railRows.filter((r) => r.kind !== "builtin" && r.kind !== "looked" && !ownedBySpace(r.v) && !(r.folder && jiraSpaceKeys.has(r.folder.id)));
+  const jiraLegacyViews: TreeView[] = jiraLegacy.flatMap((r) => (r.v ? [{ id: r.v.id, label: tidyPerson(r.label), kind: r.v.id.startsWith("filter:") ? "filter" as const : r.v.id.startsWith("jql:") ? "jql" as const : "board" as const, ...(r.v.team ? { team: true } : null) }] : []));
+  /* Favourite filters from the site are imported here as real saved queries when the setting is on, so each lists under Starred filters or Team like any other. */
+  const [jiraSync, setJiraSync] = useSyncFavourites();
+  const jiraSavedIds = new Set((boards?.views ?? []).map((v) => v.id));
+  const jiraFavNote = useFavouriteImport(isJira && active && jiraSync, jiraSavedIds, () => {
+    void loadBoards();
+  });
+  useEffect(() => { if (jiraFavNote) setNote({ ok: jiraFavNote !== FAVOURITES_FAILED, text: jiraFavNote }); }, [jiraFavNote]);
+  const jiraStarred = starredViews([...jiraTreeViews, ...jiraLegacyViews], [], jiraSavedIds, jiraSync);
+  /* Only the rows on screen are counted: the team rows exist only while the sidebar is open. */
+  const jiraViewCounts = useJiraViewCounts(jiraStarred.map((v) => v.id), isJira && active);
+  const openJiraView = (id: string) => {
+    setSel(null); setOnLooked(false); closeAddBar();
+    void load(id, false, true);
+  };
 
   /* Sidebar or modal. Global for the same reason the width is: how you like to
      read a card is about you, not about which list you are on. Full screen was
@@ -1551,6 +1775,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
   const loadBoards = useCallback(async () => {
     try { setBoards(await source.views()); } catch { /* the panel still renders */ }
   }, [source]);
+  const jiraFilterSync = useJiraFilterSync(() => loadBoards());
 
   /*
    * `asked` is what somebody CLICKED, held separately from what is on screen.
@@ -1602,6 +1827,14 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
    * Neither of them checked whether you were still looking.
    */
   const asking = useRef(0);
+  const readAbort = useRef<AbortController | null>(null);
+  /** "Still reading… Cancel": stop waiting, keep any rows, say nothing was read. */
+  const cancelRead = useCallback(() => {
+    asking.current++; settling.current++;
+    readAbort.current?.abort();
+    setBusy(false); setWanted(null);
+    setData((d) => stoppedBoard(d, { tasks: [], statuses: [], fields: [], at: 0 }));
+  }, []);
   const load = useCallback(async (id?: string, force = false, asked = false) => {
     if (Main) {
       if (id === undefined) setReset(true); else setWanted(id);
@@ -1614,9 +1847,12 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
     settling.current++;
     setBusy(true);
     if (asked && id) setWanted(id);
+    const ac = new AbortController();
+    readAbort.current = ac;
     try {
-      const r = await source.read(id, force, id ? quickRef.current[id] : undefined);
+      const r = await source.read(id, force, id ? quickRef.current[id] : undefined, ac.signal);
       if (ticket !== asking.current) return; // a later board already won
+      if (!r.error && r.tasks.length) lastBoard.set(source.id, r);
       setData(r);
       if (r.revalidating && r.view?.id) void settle(r.view.id, r.at);
     } catch {
@@ -1920,6 +2156,20 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
      what a task is. */
   const taskFields = useMemo(() => fieldsOf(tasks), [tasks]);
   const byId = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks]);
+  /* What the sidebar filter may know of an epic's cards without asking Jira: the cards this panel already holds. */
+  const loadedChildren = useMemo(() => {
+    const out: Record<string, { key: string; id: string }[]> = {};
+    const add = (t: ProviderTask) => {
+      const parent = t.parent?.key?.toUpperCase();
+      const key = (t.customId ?? "").toUpperCase();
+      if (!parent || !key) return;
+      const list = out[parent] ?? (out[parent] = []);
+      if (!list.some((c) => c.key === key)) list.push({ key, id: t.id });
+    };
+    for (const t of tasks) add(t);
+    for (const t of looked) add(t);
+    return out;
+  }, [tasks, looked]);
 
   /*
    * Whether a failed read is worth a word or a warning. The rule and its thresholds
@@ -1970,7 +2220,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
   // Waits for the answer to "is there a ClickUp here": the sweep is a no-op
   // server-side without a token, and a request that can only be refused is
   // still a request.
-  useEffect(() => { if (clickupHere) void api.clickupWarm(); }, [clickupHere]);
+  useEffect(() => { if (clickupHere) void api.clickupWarm(here); }, [clickupHere, here]);
   const [foundBySearch, setFoundBySearch] = useState<Set<string>>(new Set());
   const exempt = useCallback((t: ProviderTask) => foundBySearch.has(t.id), [foundBySearch]);
 
@@ -2042,7 +2292,13 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
       .catch(() => { /* no face is a fine answer — the chip keeps its word */ });
     return () => { live = false; };
   }, [faceOnBoard, listForFace]);
-  const myFace = faceOnBoard || myAvatar;
+  /* Remembered per source: a board filtered to someone else (a team view) has no card of yours, and the "Assigned to me"
+     row lost its face until that row was opened. Ceiling: the very first visit with none of your cards on screen still
+     draws the empty ring once. */
+  const faceKey = `agentglass.myFace.${source.id}`;
+  const [savedFace] = useState(() => { try { return localStorage.getItem(faceKey) ?? ""; } catch { return ""; } });
+  useEffect(() => { if (faceOnBoard) try { localStorage.setItem(faceKey, faceOnBoard); } catch { /* private window */ } }, [faceOnBoard, faceKey]);
+  const myFace = faceOnBoard || myAvatar || savedFace;
 
 
   const counts = useMemo(() => {
@@ -2343,6 +2599,14 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
       const r = await source.find(asked);
       if (r.ok && r.task) {
         const task = r.task;
+        /* Jira: the card's own epic page (a sub-task's through its parent), else its space, with the card selected; never an empty board with the card on top. */
+        const scope = Main ? await scopeOfFound(source, task) : null;
+        if (scope) {
+          setLooked((cur) => [task, ...cur.filter((t) => t.id !== task.id)].slice(0, LOOKED_MAX));
+          setOnLooked(false); setNote(null); setAreaSel(null); setSel(task.id);
+          await load(scope, false, true);
+          return;
+        }
         // Newest first, and only once however many times you ask for it: this
         // is a history of what you looked at, not a tally of how often.
         setLooked((cur) => [task, ...cur.filter((t) => t.id !== task.id)].slice(0, LOOKED_MAX));
@@ -2391,7 +2655,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
     const cwd = rootForTask(t.list, repos, here);
     if (!cwd) { setNote({ ok: false, text: "No checkout to hand this to — no repo matches that list" }); return; }
     const text = `${t.customId || t.id} — ${t.title}`;
-    void requestTermIssue(cwd, windowName(t), text, true, false, t.title)
+    void requestTermIssue(cwd, windowName(t, { project: cwd }), text, true, false, t.title, "", "", true, "", undefined, t.id)
       .then((done) => setNote(done.ok ? { ok: true, text: `${t.customId || t.id} handed to a pane` } : { ok: false, text: `Not handed over: ${done.error}` }));
   }, [repos, here]);
 
@@ -2556,6 +2820,8 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
     if (!Main || jiraReq.seq === seenReq.current) return;
     seenReq.current = jiraReq.seq;
     const { viewId, areaId } = jiraReq.want;
+    /* A request from the card's header or the tree is a page of its own: Looked up would keep drawing its one card over it. */
+    setOnLooked(false);
     if (viewId && viewId !== (wanted ?? data?.view?.id)) { pendingArea.current = areaId; void load(viewId, false, true); }
     else if (areaId !== undefined) setAreaSel(areaId);
   }, [jiraReq.seq]);
@@ -2722,7 +2988,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
     onFresh={(task) => setOver((m) => ({ ...m, [task.id]: task }))}
     /* A write made here makes the cached thread due, so the next time the card
        is opened it is read again instead of shown as it was before the edit. */
-    onApply={(key, p) => { if (picked) { threadCache.stale(picked.id); apply(picked, key, p); } }}
+    onApply={(key, p) => { if (picked) { remoteMarkStale(threadKey(picked.id)); apply(picked, key, p); } }}
     saving={(key) => queue.busy(picked?.id ?? "", key)}
     /* Offered only when it goes somewhere: a card on the board you are already
        looking at has nowhere to take you, and the panel reads any list by id
@@ -2737,6 +3003,9 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
     : <div className="text-center p-5" style={{ color: "var(--text3)" }}>Pick a card.</div>
   );
 
+  if (cardOnly) {
+    return <div className="flex flex-col flex-1 min-h-0 min-w-0 text-[11.5px]">{picked ? cardBody : <div className="p-5"><Spinner label="Reading the card…" className="" /></div>}</div>;
+  }
   const view = boardView({ data });
   const veiled = !!wanted && (stale || !data?.tasks.length);
   const boardLabel = boards.views.find((v) => v.id === (wanted ?? data?.view?.id))?.name ?? data?.view?.name ?? "the board";
@@ -2766,6 +3035,16 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
             A breadcrumb is a claim about where you are; keeping the previous
             one through a switch makes it a wrong one. */}
         <Breadcrumb place={stale ? undefined : data?.place} className="min-w-0 max-w-[420px] pl-1" />
+        {/* A non-board view's columns came from a board's own order, not category then alphabet: said once, quietly,
+            rather than left for somebody to wonder why "QA" sits ahead of "In Review" here and not on the board itself. */}
+        {!stale && data?.columnsFrom && (
+          <span data-tip={jiraSpaceKeys.has(data.columnsFrom.key)
+            ? `Column order from ${data.columnsFrom.name}. Change it in this project's sidebar menu.`
+            : `Column order from ${data.columnsFrom.name}. Add ${data.columnsFrom.key} to the sidebar to change it.`}
+            className="shrink-0 truncate text-[10px] px-1.5 py-0.5 rounded-full" style={{ border: EDGE, color: "var(--text3)" }}>
+            Columns as on {data.columnsFrom.name}
+          </span>
+        )}
         {!onLooked && ctx?.sprint && !inAreaPage && <JiraSprintHeader sprint={ctx.sprint} now={Date.now()} totals={sprintPoints} />}
         {/* The brief, as a chip on a row that already exists.
             It was a fold above the table, and opening it pushed the rows down
@@ -2774,7 +3053,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
             also what ClickUp does with it. */}
         {!onLooked && !!data?.description?.trim() && (
           <button onClick={() => setAboutOpen(true)}
-            title="What this list is for — the brief, the docs, the team"
+            data-tip="What this list is for — the brief, the docs, the team"
             className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full agx-btn"
             style={{ border: EDGE, color: "var(--text3)" }}>
             About
@@ -2792,7 +3071,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
           {([["side", "Sidebar"], ["modal", "Modal"]] as const).map(([id, label]) => (
             <button key={id} onClick={() => setCardMode(id)}
               aria-pressed={cardMode === id}
-              title={id === "side"
+              data-tip={id === "side"
                 ? "Open a card beside the list, in a pane you can drag wider"
                 : "Open a card over the list, with room for a long description"}
               className="text-[11px] px-2.5 inline-flex items-center"
@@ -2811,7 +3090,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
             this morning. Both are stated, and the exact instant is on hover. */}
         {data?.at ? (
           <span className="text-[10px] flex items-center gap-1"
-            title={`Read at ${new Date(data.at).toLocaleString()}. It reads again when you come back to this window, never behind your back. Refresh forces it now.`}
+            data-tip={`Read at ${new Date(data.at).toLocaleString()}. It reads again when you come back to this window, never behind your back. Refresh forces it now.`}
             style={{ color: "var(--text4)" }}>
             <span>read {stamp(data.at)}</span>
             {/* A read running behind rows that are already good. Said quietly
@@ -2826,7 +3105,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
                  what actually happened is that one request out of every few hundred
                  took longer than its timeout. See `alarming`. */
               : softFail
-              ? <span title={`${data.error} — the rows above are the last answer, from ${new Date(data.at).toLocaleTimeString()}. The next read is automatic; Refresh forces one now.`}
+              ? <span data-tip={`${data.error} — the rows above are the last answer, from ${new Date(data.at).toLocaleTimeString()}. The next read is automatic; Refresh forces one now.`}
                   style={{ color: "var(--text3)" }}>· retrying</span>
               : null}
           </span>
@@ -2846,7 +3125,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
             link. `externalUrl` rather than the raw string — see its file. */}
         {externalUrl(source.openAddress(data)) && (
           <a href={externalUrl(source.openAddress(data))} target="_blank" rel="noreferrer noopener"
-            title={`Open ${data?.view?.name ?? "this board"} in ${source.nouns.tracker}`}
+            data-tip={`Open ${data?.view?.name ?? "this board"} in ${source.nouns.tracker}`}
             className={CHIP}
             style={{ border: EDGE, color: "var(--text2)" }}>
             Open ↗
@@ -2955,7 +3234,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
              * required, which was the whole ask.
              */
             <button onClick={() => { cancelSearch(); setQ(""); searchBox.current?.focus(); }}
-              aria-label="Clear the search" title="Clear · Esc"
+              aria-label="Clear the search" data-tip="Clear · Esc"
               className="agx-hover shrink-0 grid place-items-center self-stretch"
               style={{
                 width: 34, marginTop: -4, marginBottom: -4,
@@ -3071,7 +3350,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
             jump, and it has its own path. */}
         {source.caps.workspaceSearch && !onLooked && q.trim().length >= 2 && !looksLikeId && (
           <button onClick={() => void searchAll()} disabled={searching}
-            title={source.nouns.searchTip}
+            data-tip={source.nouns.searchTip}
             className="text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap disabled:opacity-50"
             style={{ border: EDGE, color: "var(--text2)" }}>
             {searching ? "searching…" : `search the ${source.id === "clickup" ? "workspace" : "site"} ⏎`}
@@ -3085,7 +3364,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
             dependent, that is the only question worth asking first: what can I
             actually start? */}
         <button onClick={() => setReadyOnly((v) => !v)} aria-pressed={readyOnly}
-          title="Cards nothing unfinished is blocking"
+          data-tip="Cards nothing unfinished is blocking"
           className="text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap"
           style={readyOnly
             ? ON_CHIP
@@ -3140,7 +3419,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
             TYPE — see toTask — which is why "in production", "ready for
             deployment" and "won't fix" all fall in it. */}
         <button onClick={() => setShowDone((v) => !v)} aria-pressed={showDone}
-          title={showDone
+          data-tip={showDone
             ? "Every status this board has, finished ones included"
             : `Bring back ${counts.done} card${counts.done === 1 ? "" : "s"} in a finished status — in production, released, won't fix`}
           className={CHIP}
@@ -3154,7 +3433,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
           <>
             <span className="flex-1" />
             <button onClick={() => { setLooked([]); setOnLooked(false); }}
-              title="Forget every card you have looked up"
+              data-tip="Forget every card you have looked up"
               className="text-[10.5px] px-2 py-0.5 rounded-lg"
               style={{ border: EDGE, color: "var(--text3)" }}>
               clear
@@ -3280,7 +3559,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
           onReread={() => { setSel(null); setOnLooked(false); closeAddBar(); void load(menu.v.id, true, true); }}
           onTakeOff={() => void dropBoard(menu.v)} />
       )}
-      <div style={{ display: "contents" }}>
+      <div style={{ display: "contents" }} className={source.id === "jira" ? "agx-jmock" : undefined}>
         {/*
          * The lists, down the side.
          *
@@ -3300,35 +3579,52 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
          * shape ClickUp draws is the shape here.
          */}
         <nav ref={railNav} aria-label="Lists" className="relative flex flex-col shrink-0 min-w-0"
-          style={{ gridColumn: 1, gridRow: "1 / 3", width: railOpen ? railW : 34, borderRight: LINE, transition: railDrag ? "none" : "width 120ms ease", background: isJira ? "var(--surface-nav)" : undefined }}>
-          <div className={`flex items-center shrink-0 ${isJira ? "gap-2 px-2" : "gap-1 px-1.5"}`}
+          onMouseEnter={railPeekArm} onMouseMove={railPeekArm} onMouseLeave={() => { if (railPeek || railPeekTimer.current != null) railPeekEnd(); }}
+          data-peek={railPeek ? "" : undefined}
+          style={{ gridColumn: 1, gridRow: "1 / 3", width: railFull ? railW : RAIL_FOLDED_W, borderRight: LINE, transition: railDrag || railPeek ? "none" : "width 120ms ease", background: isJira ? "var(--surface-nav)" : undefined,
+            /* Peeking: drawn at full width over the board, the grid still giving it the folded column. */
+            ...(railPeek ? { marginRight: RAIL_FOLDED_W - railW, zIndex: LAYER.pane, boxShadow: "var(--surface-lift)" } : null) }}>
+          <div className={`flex items-center shrink-0 ${!railFull ? "justify-center" : isJira ? "gap-2 px-2" : "gap-1 px-1.5"}`}
             style={{ height: isJira ? JIRA_RAIL_HEAD_H : HEAD_H, borderBottom: LINE }}>
-            <button onClick={() => setRailOpen((o) => !o)}
-              aria-expanded={railOpen}
-              title={railOpen ? "Fold the list menu" : "Show the lists"}
+            <button onClick={() => { if (railPeek) { railPeekEnd(); return; } if (railDocked) { setRailPinned(false); setRailOpen(false); } else { setRailOpen(true); if (railAuto) setRailPinned(true); } }}
+              aria-expanded={railFull}
+              data-tip={railFull ? "Fold the list menu" : "Show the lists"} aria-label={railFull ? "Fold the list menu" : "Show the lists"}
               className="shrink-0 grid place-items-center rounded-lg"
               style={{ width: isJira ? CTRL_H.regular : CTRL_H.large, height: isJira ? CTRL_H.regular : CTRL_H.large, border: EDGE, color: "var(--text3)" }}>
               {/* Drawn rather than typed. `‹` is a text glyph and sits on a text
                   baseline, so centring the box still left it riding high inside
                   it — the alignment cannot be fixed by the box because the gap
                   is inside the glyph. An SVG has no baseline to fight. */}
-              <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor"
+              <svg viewBox="0 0 16 16" width={ICON.xs} height={ICON.xs} fill="none" stroke="currentColor"
                 strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden focusable="false">
-                <path d={railOpen ? "M10 3.5 5.5 8l4.5 4.5" : "M6 3.5 10.5 8 6 12.5"} />
+                <path d={railFull ? "M10 3.5 5.5 8l4.5 4.5" : "M6 3.5 10.5 8 6 12.5"} />
               </svg>
             </button>
-            {railOpen && (
+            {railFull && (
               <div className="relative min-w-0 flex-1">
-                <input ref={railInput} value={railQ} onChange={(e) => setRailQ(e.target.value)} placeholder={`Filter ${source.nouns.list}s…`} spellCheck={false}
+                <input ref={railInput} className={`w-full pr-7 ${INPUT}`} style={INPUT_STYLE} value={railQ} onChange={(e) => setRailQ(e.target.value)} placeholder={`Filter ${source.nouns.list}s…`} spellCheck={false}
                   aria-label={`Filter ${source.nouns.list}s`}
                   onKeyDown={(e) => {
                     if (e.key === "Escape" && railQ) { e.preventDefault(); setRailQ(""); }
                     else if (e.key === "ArrowDown" && railStop) { e.preventDefault(); railFocusKey(railStop); }
+                    // The box only matches a saved board or filter's NAME: a card's key or bare number ("851") never
+                    // names one, so Enter here used to say "Nothing matches" for a real card. Same jump the palette's
+                    // search gives a bare number (looksLikeCardId): fetch it and open it, whatever board it is on.
+                    else if (e.key === "Enter" && isJira && looksLikeCardId(railQ, true, source.shortKeys)) { e.preventDefault(); setRailQ(""); void reveal(railQ); }
+                    // Otherwise Enter takes the first row the words mark (a space, component, epic or view) and does
+                    // what Enter on that row does; ArrowDown with no list stop of its own steps into the tree.
+                    else if (isJira && (e.key === "Enter" || (e.key === "ArrowDown" && !railStop)) && railQ.trim()) {
+                      const tree = document.querySelector('[role="tree"][aria-label="Jira spaces"]');
+                      const row = (e.key === "Enter" ? tree?.querySelector("mark.agx-jsb-hit") : tree)?.closest<HTMLElement>('[role="treeitem"]')
+                        ?? tree?.querySelector<HTMLElement>('[role="treeitem"]');
+                      if (!row) return;
+                      e.preventDefault(); row.focus();
+                      if (e.key === "Enter") row.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+                    }
                   }}
-                  className={`w-full pr-7 ${INPUT}`}
-                  style={INPUT_STYLE} />
+                />
                 {railQ && (
-                  <button onClick={() => { setRailQ(""); railInput.current?.focus(); }} aria-label="Clear the filter" title="Clear the filter · Esc"
+                  <button onClick={() => { setRailQ(""); railInput.current?.focus(); }} aria-label="Clear the filter" data-tip="Clear the filter · Esc"
                     className="absolute grid place-items-center rounded-lg agx-btn"
                     style={{ right: 4, top: "50%", transform: "translateY(-50%)", width: MIN_BOX, height: MIN_BOX, color: "var(--text3)" }}>
                     <CrossIcon size={ICON.xs} />
@@ -3336,7 +3632,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
                 )}
               </div>
             )}
-            {railOpen && (
+            {railFull && (
               <button ref={plusBtn}
                 onClick={() => {
                   /* Jira: "+" lists the site's projects (add a space in one press); "Paste an address" in it opens the dialog. */
@@ -3346,8 +3642,17 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
                 aria-expanded={adding || plusOpen}
                 className="shrink-0 grid place-items-center rounded-lg agx-btn"
                 style={{ width: CTRL_H.regular, height: CTRL_H.regular, color: adding || plusOpen ? "var(--text)" : "var(--text3)", ...(isJira && (adding || plusOpen) ? { border: EDGE, background: "color-mix(in srgb, var(--text) 5%, transparent)" } : null) }}
-                title={adding ? "Never mind" : source.nouns.addHint} aria-label={adding ? "Never mind" : source.nouns.addHint}>
+                data-tip={adding ? "Never mind" : source.nouns.addHint} aria-label={adding ? "Never mind" : source.nouns.addHint}>
                 {adding ? <CrossIcon size={ICON.md} /> : <PlusIcon size={ICON.md} />}
+              </button>
+            )}
+            {railFull && isJira && (
+              <button type="button" aria-pressed={railDocked}
+                onClick={() => { if (railDocked) { setRailPinned(false); setRailOpen(false); } else { setRailOpen(true); setRailPinned(true); } railPeekEnd(); }}
+                className="shrink-0 grid place-items-center rounded-lg agx-btn"
+                style={{ width: CTRL_H.regular, height: CTRL_H.regular, color: railDocked ? "var(--text)" : "var(--text3)" }}
+                data-tip={railDocked ? "Unpin: fold the sidebar back to the rail" : "Pin: keep the sidebar open"} aria-label={railDocked ? "Unpin the sidebar" : "Pin the sidebar"}>
+                <PinIcon size={ICON.md} />
               </button>
             )}
           </div>
@@ -3364,8 +3669,17 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
             * twenty. Bottom-to-top is the direction editors put a folded
             * sidebar's label in, and it reads without turning your head.
             */}
-          {!railOpen && (
-            <button onClick={() => setRailOpen(true)} title={`${railActive} — show the lists`}
+          {!railFull && isJira && (
+            <JiraFoldedRail looked={looked.length}
+              counts={jiraViewCounts}
+              views={jiraStarred
+                // The one count in hand is the open board's own: the others are not read until opened.
+                .map((v) => (v.id === railLit && data?.tasks ? { ...v, count: data.tasks.length } : v))} lit={railLit ?? null}
+              onView={openJiraView}
+              onLooked={() => { setOnLooked(true); setSel(looked[0]?.id ?? null); }} />
+          )}
+          {!railFull && !isJira && (
+            <button onClick={() => setRailOpen(true)} data-tip={`${railActive} — show the lists`}
               className="flex-1 min-h-0 w-full flex justify-center pt-2 pb-3 overflow-hidden"
               style={{ color: "var(--text4)" }}>
               <span className="truncate" style={{
@@ -3374,7 +3688,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
               }}>{railActive}</span>
             </button>
           )}
-          {railOpen && (
+          {railFull && (
             <div className={`agx-scroll flex-1 min-h-0 overflow-y-auto${isJira ? "" : " py-1.5"}`}>
               {!isJira && railViews.length === 0 && (railFiltering ? (
                 <div className="px-3 py-3 text-[11px]" style={{ color: "var(--text3)" }}>
@@ -3391,14 +3705,18 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
                   not know yet come first, then spaces and folders, then
                   where you have been. See `railRows`. */}
               {isJira ? (
+                <>
+                <JiraAgentCards spaces={jt.spaces} q={railQ} onOpen={(k) => void reveal(k)} />
                 <JiraTree api={jt} onCloseLegacyMenu={() => setMenu(null)} out={{
                   q: railQ,
                   connected: boards ? boards.connected !== false : null,
-                  views: jiraTreeViews,
+                  views: jiraStarred,
+                  counts: jiraViewCounts,
                   meCount: undefined,
                   meFace: myFace ? <img src={avatarSrc(myFace)} alt="" loading="lazy" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = "none"; }} className="rounded-full" style={{ width: 16, height: 16, objectFit: "cover" }} /> : undefined,
                   looked: looked.length,
                   sprint: source.caps.context && ctx?.sprint ? ctx.sprint.name : undefined,
+                  children: loadedChildren,
                   lit: {
                     me: !jt.selection && !onLooked && !!jiraMeView && railLit === jiraMeView.id,
                     looked: onLooked,
@@ -3408,23 +3726,36 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
                   onMe: () => { if (jiraMeView) { setSel(null); setOnLooked(false); setAreaSel(null); closeAddBar(); void load(jiraMeView.id, false, true); } },
                   onLooked: () => { setOnLooked(true); setSel(looked[0]?.id ?? null); },
                   onSprint: () => setAreaSel((a) => (a === SPRINTS ? null : SPRINTS)),
-                  onView: (id) => { setSel(null); setOnLooked(false); closeAddBar(); void load(id, false, true); },
+                  onView: openJiraView,
+                  onSyncFrom: jiraFilterSync.from,
+                  onSyncTo: jiraFilterSync.to,
+                  note: jiraFilterSync.note,
+                  sync: { on: jiraSync, set: setJiraSync },
                   onTakeOffView: (id) => { const v = boards?.views.find((x) => x.id === id); if (v) void dropBoard(v); },
                   /* The epic of a chosen row is the area the existing page already knows, when this board has it; the pane that reads `jt.selection` takes over from here. */
-                  onPicked: (s) => {
+                  onPicked: (s, card) => {
                     // The place's own cards replace the centre list: a tree row that only lit up was the defect.
-                    const id = scopeIdOf(s);
+                    // A card that matched the filter may sit in another of the epic's components, so the whole epic opens.
+                    const id = card && s.kind === "epic"
+                      ? scopeIdOf({ ...s, component: undefined })
+                      : scopeIdOf(s);
                     setSel(null); setOnLooked(false); setAreaSel(null); closeAddBar();
-                    if (id) void load(id, false, true);
+                    if (id) {
+                      void load(id, false, true);
+                      if (card) setSel(card.id);
+                    }
                   },
                   onReadMe: () => { void load(jiraMeView?.id, true, true); },
-                  legacy: jiraLegacy.length > 0 ? (
+                  /* A row with a view is already listed under Starred filters (jiraStarred takes these same views); drawing it here
+                     too put one filter in the sidebar twice. Only what Starred cannot hold stays in this block. */
+                  legacy: jiraLegacy.some((r) => !r.v) ? (
                     <div ref={railTree} onKeyDown={onRailKey}>
                       <div role="presentation" className="flex items-center" style={{ height: 22, padding: "0 8px", marginTop: 12, fontSize: 10.5, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--text4)" }}>Boards and filters</div>
-                      {jiraLegacy.map(railItem)}
+                      {jiraLegacy.filter((r) => !r.v).map(railItem)}
                     </div>
                   ) : undefined,
                 }} />
+                </>
               ) : (
               <div ref={railTree} role="tree" aria-label="ClickUp lists" onKeyDown={onRailKey}
                 {...(source.id === "clickup" ? null : { "aria-label": `${source.nouns.tracker} ${source.nouns.list}s` })}>
@@ -3433,11 +3764,11 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
               )}
             </div>
           )}
-          {railOpen && isJira && <JiraRailFoot site={jt.site} spaces={jt.spaces.length} />}
-          {railOpen && (
+          {railFull && isJira && <JiraRailFoot site={jt.site} spaces={jt.spaces.length} />}
+          {railFull && (
             <div role="separator" aria-orientation="vertical" tabIndex={0} aria-label="Resize the list menu"
               aria-valuenow={railW} aria-valuemin={RAIL_W_MIN} aria-valuemax={RAIL_W_MAX}
-              title="Drag to resize · double-click for the usual width"
+              data-tip="Drag to resize · double-click for the usual width"
               className="agx-rail-grip absolute top-0 bottom-0"
               style={{ right: -3, width: 6, cursor: "col-resize", zIndex: 5 }}
               onDoubleClick={() => setRailW(railDefault)}
@@ -3468,7 +3799,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
           <div className="flex flex-col min-w-0 min-h-0" style={{ gridColumn: 2, gridRow: "1 / 3" }}>
             <Main source={source} viewId={reset ? null : (wanted ?? data?.view?.id ?? null)} areaId={areaSel}
               writable={boards.writeEnabled} onAllow={() => setConfirmWrite(true)} onSelect={setJiraSelection}
-              feed={feed} reload={reload} active={active} looked={lookedFor} show={show} />
+              feed={feed} reload={reload} onViewsChanged={() => { void loadBoards(); }} active={active} looked={lookedFor} show={show} rail={isJira ? railFor : undefined} />
           </div>
         )}
         {!Main && <div className="flex flex-col min-w-0 min-h-0" style={{ gridColumn: 2, gridRow: 2 }}>
@@ -3506,7 +3837,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
                   every cell after PR draws the one on its own left. */}
               {cols.pr && <span className="text-center" style={COL_RULE}>PR</span>}
               {showWhoCol && <span className="text-center agx-colrule" style={COL_RULE}>Who</span>}
-              {!!squadLabel && <span className="text-center agx-colrule" style={COL_RULE} title={squadLabel}><span className="truncate">{squadLabel}</span></span>}
+              {!!squadLabel && <span className="text-center agx-colrule" style={COL_RULE} data-tip={squadLabel}><span className="truncate">{squadLabel}</span></span>}
               {showSprintCol && <span className="agx-colrule" style={COL_RULE}>Sprint</span>}
               <span className="agx-colrule" style={COL_RULE}>Due</span>
               {anyEst && <span className="text-center agx-colrule" style={COL_RULE}>Est</span>}
@@ -3561,7 +3892,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
             {onLooked && !lookedGroups.length && (
               <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>Nothing matches that.</div>
             )}
-            {!onLooked && view === "loading" && !looksLikeId && <BoardSkeleton label={`Reading ${boardLabel}…`} />}
+            {!onLooked && view === "loading" && !looksLikeId && <BoardSkeleton label={`Reading ${boardLabel}…`} onCancel={cancelRead} />}
             {!onLooked && view !== "loading" && !rows.length && !looksLikeId && (
               <>
                 {data?.error ? (
@@ -3642,7 +3973,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
                   the rows behind it showed through the words and neither was
                   readable. The veil is now fully opaque and draws the skeleton
                   of the rows themselves, so nothing is underneath to read through. */}
-              <BoardSkeleton label={`Reading ${boards.views.find((v) => v.id === wanted)?.name ?? "that board"}…`} />
+              <BoardSkeleton label={`Reading ${boards.views.find((v) => v.id === wanted)?.name ?? "that board"}…`} onCancel={cancelRead} />
               {source.caps.slowAssigned && boards.views.find((v) => v.id === wanted)?.builtin && (
                 <div className="px-3.5 text-[11px] max-w-[60ch] leading-relaxed" style={{ color: "var(--text3)" }}>
                   Asking ClickUp for every card assigned to you across the workspace. That question
@@ -3665,13 +3996,13 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
             {/* Said, rather than left as a list that stops. */}
             {data?.truncated && (
               <span style={{ color: "var(--warning-ink)" }}
-                title={`More than this was waiting. Open the board in ${source.nouns.tracker} to see the rest.`}>
+                data-tip={`More than this was waiting. Open the board in ${source.nouns.tracker} to see the rest.`}>
                 · and more behind it
               </span>
             )}
             {/* When, not only how long ago: a board opened from a cache written
                 this morning has to say so in a way you can check against a clock. */}
-            {!onLooked && data?.at ? <span title={new Date(data.at).toLocaleString()}>· read {stamp(data.at)}</span> : null}
+            {!onLooked && data?.at ? <span data-tip={new Date(data.at).toLocaleString()}>· read {stamp(data.at)}</span> : null}
             <span className="flex-1" />
             {/* The VIEW's name, which the breadcrumb does not carry: one list
                 can have several views, and this says which one you are in.
@@ -3700,7 +4031,7 @@ function ClickUpBody({ active, repos, here, onOpenBrowser, jump, source = CLICKU
             the line it draws is one pixel. */}
         {cardMode === "side" && picked && <div role="separator" aria-orientation="vertical" tabIndex={0}
           aria-label="Drag to resize the card pane"
-          title="Drag to resize · double-click for the usual width"
+          data-tip="Drag to resize · double-click for the usual width"
           onDoubleClick={() => setCardW(CARD_W_DEFAULT)}
           onKeyDown={(e) => {
             if (e.key === "ArrowLeft") { e.preventDefault(); setCardW((w) => clampCardW(w + (e.shiftKey ? 40 : 12))); }
@@ -3841,7 +4172,7 @@ function FieldValue({ f }: { f: CardFieldValue }) {
   if (f.kind === "date" && f.at) {
     return (
       <span className="text-[11.5px] tabular-nums inline-block max-w-full truncate align-bottom"
-      style={{ color: "var(--text2)" }} title={new Date(f.at).toLocaleString()}>
+      style={{ color: "var(--text2)" }} data-tip={new Date(f.at).toLocaleString()}>
         {new Date(f.at).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" })}
       </span>
     );
@@ -3850,7 +4181,7 @@ function FieldValue({ f }: { f: CardFieldValue }) {
     return (
       <a href={externalUrl(f.href) || undefined} target="_blank" rel="noreferrer noopener"
         className="text-[11.5px] truncate inline-block max-w-full align-bottom"
-        style={{ color: "var(--primary-ink)" }} title={f.href}>
+        style={{ color: "var(--primary-ink)" }} data-tip={f.href}>
         {f.value} <span aria-hidden style={{ color: "var(--text4)" }}>↗</span>
       </a>
     );
@@ -3860,7 +4191,7 @@ function FieldValue({ f }: { f: CardFieldValue }) {
        sits in a column of values, and a saturated rectangle here would outshout the
        status pill, which is the thing on the card that actually changes. */
     return (
-      <span className="text-[10.5px] px-1.5 py-0.5 rounded-md inline-block max-w-full truncate align-bottom" title={f.value}
+      <span className="text-[10.5px] px-1.5 py-0.5 rounded-md inline-block max-w-full truncate align-bottom" data-tip={f.value}
         style={{
           color: f.color,
           background: `color-mix(in srgb, ${f.color} 15%, transparent)`,
@@ -3886,7 +4217,7 @@ function FieldValue({ f }: { f: CardFieldValue }) {
   const text = String(f.value ?? "");
   return (
     <span className={`text-[11.5px] inline-block max-w-full truncate align-bottom ${f.kind === "number" ? "tabular-nums" : ""}`}
-      title={text}
+      data-tip={text}
       style={{ color: "var(--text2)" }}>{f.value}</span>
   );
 }
@@ -4102,7 +4433,7 @@ function AboutValue({ text }: { text: string }) {
         const pr = prRefFromUrl(p);
         if (pr) {
           return (
-            <button key={i} onClick={() => openPr(pr.repo, pr.number)} title={`Open #${pr.number} here`}
+            <button key={i} onClick={() => openPr(pr.repo, pr.number)} data-tip={`Open #${pr.number} here`}
               className="underline underline-offset-2" style={{ color: "var(--primary-ink)" }}>
               #{pr.number} <span style={{ color: "var(--text4)" }}>{pr.repo}</span>
             </button>
@@ -4110,7 +4441,7 @@ function AboutValue({ text }: { text: string }) {
         }
         if (/^https?:\/\//.test(p)) {
           return (
-            <button key={i} onClick={() => openExternal(p)} title={p}
+            <button key={i} onClick={() => openExternal(p)} data-tip={p}
               className="underline underline-offset-2 break-all" style={{ color: "var(--primary-ink)" }}>{p}</button>
           );
         }
@@ -4120,7 +4451,7 @@ function AboutValue({ text }: { text: string }) {
         if (/^[A-Z][A-Z0-9]+-\d{3,}/.test(p)) {
           const id = p.match(/^[A-Z][A-Z0-9]+-\d+/)?.[0] ?? p;
           return (
-            <button key={i} onClick={() => openCard(id, id)} title={p.length > id.length ? `${p} — open ${id}` : `Open ${id}`}
+            <button key={i} onClick={() => openCard(id, id)} data-tip={p.length > id.length ? `${p} — open ${id}` : `Open ${id}`}
               className="underline underline-offset-2" style={{ color: "var(--primary-ink)" }}>{p}</button>
           );
         }
@@ -4148,7 +4479,7 @@ function Breadcrumb({ place, className, onList }: {
   if (!parts.length) return null;
   return (
     <div className={`flex items-center gap-1 min-w-0 text-[10px] ${className ?? ""}`}
-      title={parts.join("  /  ")}>
+      data-tip={parts.join("  /  ")}>
       {parts.map((p, i) => {
         const last = i === parts.length - 1;
         const go = last && onList ? onList : undefined;
@@ -4159,7 +4490,7 @@ function Breadcrumb({ place, className, onList }: {
                 dimmer, which is what makes a breadcrumb readable at a glance. */}
             {go
               ? (
-                <button onClick={go} title={`Open ${p}`}
+                <button onClick={go} data-tip={`Open ${p}`}
                   className="agx-btn truncate rounded px-1 -mx-1 hover:underline"
                   style={{ color: "var(--primary-ink)" }}>{p}</button>
               )
@@ -4329,7 +4660,7 @@ function FolderPicker({ folders, busy, onAdd, onAddList }: {
             row.list ? (
               <button key={`l:${row.list.id}`} disabled={busy}
                 onClick={() => setOpenList(openList === row.list!.id ? "" : row.list!.id)}
-                title={`A list sitting directly in this space${typeof row.list.tasks === "number" ? ` — ${row.list.tasks} task${row.list.tasks === 1 ? "" : "s"}` : ""}. Open it to pick which of its views to add.`}
+                data-tip={`A list sitting directly in this space${typeof row.list.tasks === "number" ? ` — ${row.list.tasks} task${row.list.tasks === 1 ? "" : "s"}` : ""}. Open it to pick which of its views to add.`}
                 className="text-[11px] px-2 py-1 rounded-lg flex items-center gap-1.5"
                 style={{
                   border: openList === row.list.id ? "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" : EDGE,
@@ -4407,7 +4738,7 @@ function ListViews({ listId, busy, onPick }: { listId: string; busy: boolean; on
         {/* The list itself first, which is the old behaviour kept as a choice —
             sometimes the default view IS what somebody wants. */}
         <button disabled={busy} onClick={() => onPick(listId)}
-          title="The list, on whichever view ClickUp treats as its default"
+          data-tip="The list, on whichever view ClickUp treats as its default"
           className="text-[11px] px-2 py-1 rounded-lg"
           style={{ border: EDGE, color: "var(--text3)", opacity: busy ? 0.5 : 1 }}>the list itself</button>
         {shown.map((v) => (
@@ -4453,7 +4784,7 @@ function Folder({ f, on, busy, onAdd }: {
                  ones turn up on their own" is true of both but for a different
                  reason. Saying which is which is what stops somebody looking
                  for a folder that does not exist. */
-              title={on ? "Already on the sidebar"
+              data-tip={on ? "Already on the sidebar"
                 : `${f.lists.length} list${f.lists.length === 1 ? "" : "s"} — added whole, so new ones turn up on their own`}
               className="text-[11px] px-2 py-1 rounded-lg flex items-center gap-1.5"
               style={{
@@ -4753,13 +5084,13 @@ function Face({ p, n, size = 18 }: {
   } as const;
   if (p.avatar && !broken) {
     return (
-      <img src={avatarSrc(p.avatar)} alt="" title={p.me ? `${p.name} — you` : p.name}
+      <img src={avatarSrc(p.avatar)} alt="" data-tip={p.me ? `${p.name} — you` : p.name}
         loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)}
         style={{ ...base, objectFit: "cover", position: "relative" }} />
     );
   }
   return (
-    <span title={p.me ? `${p.name} — you` : p.name}
+    <span data-tip={p.me ? `${p.name} — you` : p.name}
       className="inline-flex items-center justify-center text-[10px] font-medium"
       style={{ ...base, position: "relative", background: p.color || "var(--bg4)", color: chipInk(p.color), ...(size > 18 ? { fontSize: Math.round(size * 0.35) } : {}) }}>
       {p.initials}
@@ -4984,18 +5315,18 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
             fold, and everything on it is still here: the list name and the
             status pill show only where the board mixes lists or statuses. */}
         <div className="flex items-center gap-1.5 min-w-0" style={{ minHeight: 24 }}>
-          <span className="shrink-0 rounded-full" title={t.status}
+          <span className="shrink-0 rounded-full" data-tip={t.status}
             style={{ width: 8, height: 8, background: t.statusColor || "var(--text4)" }} />
           {!!blocked.length && (
             <span className={`${ROW_CHIP} tracking-[0.06em] shrink-0 tabular-nums`}
-              title={`Waiting on ${blocked.map((b) => `${shortName(b.title, b.customId ?? b.id)} — ${b.title}`).join("\n")}`}
+              data-tip={`Waiting on ${blocked.map((b) => `${shortName(b.title, b.customId ?? b.id)} — ${b.title}`).join("\n")}`}
               style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}>
               <BlockedIcon size={ICON.xs} className="inline-block align-[-2px] mr-1" />Blocked
             </span>
           )}
           {source.caps.context && t.issueType && <span className="shrink-0 flex self-center"><TypeMark type={t.issueType} /></span>}
           {t.flagged && (
-            <span className={`${ROW_CHIP} tracking-[0.06em] shrink-0 uppercase`} title="Flagged: an impediment is raised on this card"
+            <span className={`${ROW_CHIP} tracking-[0.06em] shrink-0 uppercase`} data-tip="Flagged: an impediment is raised on this card"
               style={{ color: "var(--warning-ink)", background: "color-mix(in srgb, var(--warning) 16%, transparent)" }}>Flagged</span>
           )}
           {showStatus && <StatusPill status={t.status} color={t.statusColor} dim={done} />}
@@ -5003,23 +5334,23 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
             <span className="shrink-0 font-mono text-[11px] tabular-nums" style={{ color: "var(--text3)" }}>{t.customId}</span>
           )}
           <span className="truncate text-[12.5px] min-w-0" style={{ color: done ? "var(--text3)" : "var(--text)" }}
-            title={`${t.title} · Priority: ${prioLook(t.priority).label}`}>{t.title}</span>
+            data-tip={`${t.title} · Priority: ${prioLook(t.priority).label}`}>{t.title}</span>
           {t.tags.slice(0, 2).map((tag) => (
             <span key={tag} className={`${TAG_PILL} shrink-0`}
               style={{ color: "var(--text3)", background: TAG_FILL, border: TAG_EDGE }}>{tag}</span>
           ))}
           {!!t.subtasks && (
-            <span className="shrink-0 text-[10.5px]" style={{ color: "var(--text4)" }} title={`${t.subtasks} subtasks`}>⌥{t.subtasks}</span>
+            <span className="shrink-0 text-[10.5px]" style={{ color: "var(--text4)" }} data-tip={`${t.subtasks} subtasks`}>⌥{t.subtasks}</span>
           )}
           {!!t.comments && (
             <span className="shrink-0 inline-flex items-center gap-1 text-[10.5px] tabular-nums" style={{ color: "var(--text3)" }}
-              title={`${t.comments} comment${t.comments === 1 ? "" : "s"}`}>
+              data-tip={`${t.comments} comment${t.comments === 1 ? "" : "s"}`}>
               <CommentIcon size={ICON.xs} />{t.comments}
             </span>
           )}
           {showList && t.list && (
             <span className="shrink-0 text-[10.5px] truncate max-w-[110px]" style={{ color: "var(--text4)" }}
-              title={t.alsoIn?.length ? `${t.list} · also in ${t.alsoIn.map((l) => l.name).join(", ")}` : t.list}>{t.list}</span>
+              data-tip={t.alsoIn?.length ? `${t.list} · also in ${t.alsoIn.map((l) => l.name).join(", ")}` : t.list}>{t.list}</span>
           )}
         </div>
       </div>
@@ -5048,7 +5379,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
       {showSquad && (
         <span className="flex items-center justify-center agx-colrule" style={{ ...COL_RULE, display: "flex" }}>
           {sq && (
-            <span title={`${sq.name}: ${sq.value}`} aria-label={`${sq.name}: ${sq.value}`}
+            <span data-tip={`${sq.name}: ${sq.value}`} aria-label={`${sq.name}: ${sq.value}`}
               style={{
                 width: 18, height: 18, borderRadius: 999, background: sq.color,
                 // The same ring the faces wear, so a pale option does not float
@@ -5061,7 +5392,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
       {showSprint && (
         <span className="agx-colrule" style={COL_RULE}>
           <span className="truncate text-[10.5px]" style={{ color: t.sprint ? "var(--info)" : "var(--text4)" }}
-            title={t.sprint ?? ""}>{t.sprint ?? ""}</span>
+            data-tip={t.sprint ?? ""}>{t.sprint ?? ""}</span>
         </span>
       )}
       {/* Blank when the count is not known, 0 when it is known to be zero. The
@@ -5082,7 +5413,7 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSquad, showSprint
           figures reads as a column somehow less certain than the ones beside it. */}
       {showEst && (
         <span className="text-[11px] tabular-nums text-center agx-colrule" style={{ ...COL_RULE, color: "var(--text4)" }}
-          title={t.estimateHours ? `${t.estimateHours}h estimated${t.spentHours ? `, ${t.spentHours}h logged` : ""}` : ""}>
+          data-tip={t.estimateHours ? `${t.estimateHours}h estimated${t.spentHours ? `, ${t.spentHours}h logged` : ""}` : ""}>
           {t.estimateHours ? `${t.estimateHours}h` : ""}
         </span>
       )}
@@ -5209,7 +5540,7 @@ function DepRow({ d, onGo }: { d: ProviderTask; onGo: (id: string) => void }) {
       className="w-full text-left flex items-center gap-2 py-1 px-1 -mx-1 rounded agx-hover">
       <StatusPill status={d.status} color={d.statusColor} dim={done} />
       <span className="truncate text-[11px]" style={{ color: done ? "var(--text4)" : "var(--text2)" }}
-        title={d.title}>{d.title}</span>
+        data-tip={d.title}>{d.title}</span>
     </button>
   );
 }
@@ -5225,10 +5556,15 @@ function DepRow({ d, onGo }: { d: ProviderTask; onGo: (id: string) => void }) {
 const COMPOSER_SHARE = 0.3;
 const CARD_SCROLL_CSS = ".agx-scroll.agx-cu-scroll{scrollbar-width:auto;scrollbar-color:auto}.agx-cu-scroll::-webkit-scrollbar-button{display:none;width:0;height:0}";
 
-/** Per card, for the life of the window: see lib/cardTabCache.ts. */
-type PrsRead = { prs: (CardPr & { stated?: boolean })[]; err: boolean };
-const prsCache = swr<PrsRead>(PRS_TTL_MS, (v) => !v.err);
-const threadCache = swr<Awaited<ReturnType<typeof api.clickupTask>>>(THREAD_TTL_MS, (r) => !!r.ok);
+/** A card's pull-request search, through remoteStore (lib/remoteStore.ts):
+ *  `card-prs:<cardKey>`, 5 min — a failed search is never cached, so the
+ *  next open asks again rather than holding an empty list. */
+const PRS_TTL_MS = 5 * 60_000;
+const prsKey = (cardKey: string) => `card-prs:${cardKey}`;
+type CardPrs = (CardPr & { stated?: boolean })[];
+/** A ClickUp card's thread, through remoteStore: `clickup-thread:<cardId>`, 2 min. */
+const THREAD_TTL_MS = 2 * 60_000;
+const threadKey = (cardId: string) => `clickup-thread:${cardId}`;
 
 /** One row of the card's GitHub tab, pull request or other link. The text takes
  *  the room and the buttons sit at the row's right edge, top-aligned with the
@@ -5242,8 +5578,8 @@ function RowSquare({ href, onClick, title, children }: { href?: string; onClick?
   const safe = href === undefined ? undefined : externalUrl(href);
   if (href !== undefined && !safe) return null;
   return safe
-    ? <a href={safe} target="_blank" rel="noreferrer noopener" className={cls} style={ROW_SQUARE} title={title} aria-label={title}>{children}</a>
-    : <button onClick={onClick} className={cls} style={ROW_SQUARE} title={title} aria-label={title}>{children}</button>;
+    ? <a href={safe} target="_blank" rel="noreferrer noopener" className={cls} style={ROW_SQUARE} data-tip={title} aria-label={title}>{children}</a>
+    : <button onClick={onClick} className={cls} style={ROW_SQUARE} data-tip={title} aria-label={title}>{children}</button>;
 }
 
 /** The copy button of an "Other links" row: says "Copied" for a moment, the way
@@ -5260,38 +5596,6 @@ function CopyLinkChip({ url }: { url: string }) {
       onClick={() => { void navigator.clipboard.writeText(url).then(() => setDone(true)).catch(() => setDone(false)); }}>
       {done ? <DoneIcon size={ICON.xs} /> : <CopyIcon size={ICON.xs} />}
     </RowSquare>
-  );
-}
-
-/**
- * One line of the GitHub panel: a label, a value, and a way to take it.
- *
- * ClickUp's own is a boxed field with a copy button on its right, and the value
- * is what you came for — so the whole row is the button. The label is above it
- * in small type, because a branch name is long and a label beside it would push
- * it off the row.
- */
-function CopyRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
-  const [done, setDone] = useState(false);
-  useEffect(() => {
-    if (!done) return;
-    const t = setTimeout(() => setDone(false), 1200);
-    return () => clearTimeout(t);
-  }, [done]);
-  return (
-    <button
-      onClick={() => { void navigator.clipboard.writeText(value).then(() => setDone(true)).catch(() => setDone(false)); }}
-      title={`Copy: ${value}`}
-      className="agx-btn w-full text-left rounded-md px-2 py-1.5 flex items-start gap-2"
-      style={{ border: EDGE, background: "color-mix(in srgb, var(--text) 3%, transparent)" }}>
-      <span className="min-w-0 flex-1">
-        <span className="block text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>{label}</span>
-        <span className={`block text-[11px] break-all ${mono ? "font-mono" : ""}`} style={{ color: "var(--text2)" }}>{value}</span>
-      </span>
-      <span className="shrink-0 text-[10px] mt-2" style={{ color: done ? "var(--success)" : "var(--text4)" }}>
-        {done ? "Copied" : <CopyIcon size={ICON.xs} />}
-      </span>
-    </button>
   );
 }
 
@@ -5406,19 +5710,19 @@ function CardHop({ list, id, onGo }: { list: ProviderTask[]; id: string; onGo: (
   if (list.length < 2) return null;
 
   const arrow = "inline-flex items-center justify-center rounded shrink-0 disabled:opacity-30 disabled:cursor-default agx-hover disabled:hover:bg-transparent";
-  const box = { width: 20, height: 20, color: "var(--text3)" };
+  const box = { width: MIN_BOX, height: MIN_BOX, color: "var(--text3)" };
 
   return (
     <span className="flex items-center gap-1">
       <button className={arrow} style={box} disabled={!hop.prev}
         onClick={() => hop.prev && onGo(hop.prev.id)}
-        title={hop.prev ? `Previous: ${hop.prev.title}` : "This is the first card on the board"}>‹</button>
+        data-tip={hop.prev ? `Previous: ${hop.prev.title}` : "This is the first card on the board"} aria-label={hop.prev ? `Previous: ${hop.prev.title}` : "This is the first card on the board"}>‹</button>
       <button
         className="max-w-[280px] flex items-center gap-1.5 rounded px-1.5 py-0.5 text-[10.5px] disabled:opacity-40 disabled:cursor-default agx-hover disabled:hover:bg-transparent"
         style={{ border: EDGE, color: "var(--text2)" }}
         disabled={!hop.next}
         onClick={() => hop.next && onGo(hop.next.id)}
-        title={hop.next ? `Next: ${hop.next.title}` : "This is the last card on the board"}>
+        data-tip={hop.next ? `Next: ${hop.next.title}` : "This is the last card on the board"}>
         <span className="shrink-0" style={{ color: "var(--text4)" }}>next</span>
         <span className="truncate">{hop.next ? shortTitle(hop.next.title) : "—"}</span>
         <span aria-hidden className="shrink-0" style={{ color: "var(--text4)" }}>›</span>
@@ -5427,7 +5731,7 @@ function CardHop({ list, id, onGo }: { list: ProviderTask[]; id: string; onGo: (
         <button onClick={() => setOpen((o) => !o)}
           className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] tabular-nums agx-hover"
           style={{ border: EDGE, color: "var(--text3)" }}
-          title="Open another card of this board, without closing this one">
+          data-tip="Open another card of this board, without closing this one">
           {/* A card looked up by id is not in the board's list, and saying
               "0 of 29" would be a lie about where you are rather than a count. */}
           {hop.i ? `${hop.i}/${hop.n}` : `${hop.n}`}
@@ -5570,6 +5874,13 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
   /** Which comment threads are open, by comment id. Closed by default: a card
    *  with five threaded comments would otherwise open as a wall. */
   const [openThreads, setOpenThreads] = useState<Set<string>>(new Set());
+  /* Replies are read when a thread is opened (GET /comment/<id>/reply), never up front: one request per commented thread would be paid by every card. */
+  const [threadReplies, setThreadReplies] = useState<Record<string, TaskReply[] | "loading" | "error">>({});
+  const loadReplies = useCallback((id: string) => {
+    setThreadReplies((m) => ({ ...m, [id]: "loading" }));
+    void api.clickupCommentReplies(id).then((r) => setThreadReplies((m) => ({ ...m, [id]: r.ok ? r.data.replies : "error" })))
+      .catch(() => setThreadReplies((m) => ({ ...m, [id]: "error" })));
+  }, []);
   /**
    * The assignee picker, and the people it offers.
    *
@@ -5722,11 +6033,11 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
   const prField = prLinkValue(t.custom, cuPrefs?.prLinkField);
   const prCwd = rootForTask(t.list, repos, here) ?? here;
   const prKey = [t.id, t.customId || "", prField, prCwd].join("\n");
-  const [prs, setPrs] = useState<PrsRead["prs"]>(() => prsCache.peek(prKey)?.prs ?? []);
+  const [prs, setPrs] = useState<CardPrs>(() => peek<CardPrs>(prsKey(prKey)).value ?? []);
   const [prsErr, setPrsErr] = useState(false);
   /** False until a search for THIS card has answered (or one is cached): the
    *  empty-state sentence is only true after that. */
-  const [prsLoaded, setPrsLoaded] = useState(() => prsCache.peek(prKey) !== undefined);
+  const [prsLoaded, setPrsLoaded] = useState(() => peek<CardPrs>(prsKey(prKey)).value !== undefined);
 
   // Read out of text the card already carries: no request, and the targets are
   // never fetched. See shared/githubLinks.ts.
@@ -5742,44 +6053,71 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
   /* Keyed on the strings the search is made of, not on `t.custom` or `repos`:
      those are new objects every time the board re-reads itself, which it does
      on coming back to the window, and the old effect emptied the list and
-     searched again each time. See lib/cardTabCache.ts. */
+     searched again each time. See lib/remoteStore.ts. A failed search is
+     never cached (the loader throws), so the next open asks again instead of
+     holding an empty list for the TTL. */
   useEffect(() => {
     let live = true;
-    const hit = prsCache.peek(prKey);
-    setPrs(hit?.prs ?? []); setPrsErr(false); setPrsLoaded(hit !== undefined);
-    void paintThenRevalidate(prsCache, prKey,
-      () => api.clickupPrs(t.customId || "", prField, prCwd)
-        .then((r): PrsRead => ({ prs: r.prs ?? [], err: !r.ok }))
-        .catch((): PrsRead => ({ prs: [], err: true })),
-      (v) => { if (live) { setPrs(v.prs); setPrsErr(v.err); setPrsLoaded(true); } });
+    const key = prsKey(prKey);
+    const hit = peek<CardPrs>(key).value;
+    setPrs(hit ?? []); setPrsErr(false); setPrsLoaded(hit !== undefined);
+    void remoteLoad<CardPrs>(key, () => api.clickupPrs(t.customId || "", prField, prCwd).then((r) => {
+      if (!r.ok) throw new Error("the search failed");
+      return r.prs ?? [];
+    }), PRS_TTL_MS)
+      .then((v) => { if (live) { setPrs(v); setPrsErr(false); setPrsLoaded(true); } })
+      .catch(() => { if (live) { setPrsErr(true); setPrsLoaded(true); } });
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prKey]);
 
+  /** Drops THIS view's wait on the card read; set per effect run, so an old card's
+   *  cancel can never silence a real failure on the next one. */
+  const cardCancel = useRef<(() => void) | null>(null);
+  /** "Still reading… Cancel" on the card: stop waiting and show the retry state. The shared
+   *  request is aborted only when no other view waits on it (see `loadCancellable`). */
+  const cancelCard = useCallback(() => {
+    cardCancel.current?.();
+    setFull({ ok: false, error: "Stopped. Nothing was read." });
+  }, []);
   useEffect(() => {
     let live = true;
-    const hit = threadCache.peek(t.id);
+    cardCancel.current = null;
+    const key = threadKey(t.id);
+    const hit = peek<CardRead>(key).value;
     setFull(hit ?? null); setAskOpen(false);
-    void paintThenRevalidate(threadCache, t.id, () => {
+    const h = loadCancellable<CardRead>(key, (signal) => {
       const ticket = layers.readStarted();
-      return api.clickupTask(t.id).then((r) => { if (r.ok) layers.readLanded(ticket); return r; })
-        .catch((): CardRead => ({ ok: false, error: "Could not read the card" }));
-    }, (r) => { if (live) setFull(r); });
-    return () => { live = false; };
+      return api.clickupTask(t.id, signal).then((r) => {
+        if (!r.ok) throw new Error(r.error || "Could not read the card");
+        layers.readLanded(ticket);
+        return r;
+      });
+    }, THREAD_TTL_MS);
+    cardCancel.current = () => { live = false; h.cancel(); };
+    h.promise
+      .then((r) => { if (live) setFull(r); })
+      .catch((e) => { if (live) setFull({ ok: false, error: e instanceof Error ? e.message : "Could not read the card" }); });
+    return () => { live = false; if (cardCancel.current) cardCancel.current = null; };
   }, [t.id, layers]);
 
   /* Re-read the card after anything that changes the conversation. The board's
      own poll does not carry comments — they are fetched per card, on demand —
      so a comment posted here would otherwise not appear until the card was
      closed and opened again. */
+  /* Read through a ref so `reread` keeps one identity however the threads are toggled. */
+  const openThreadsRef = useRef(openThreads);
+  openThreadsRef.current = openThreads;
   const reread = useCallback(() => {
-    threadCache.stale(t.id);
-    const ticket = layers.readStarted();
-    void threadCache.load(t.id, () => api.clickupTask(t.id), { force: true }).then((r) => {
-      if (r.ok) layers.readLanded(ticket);
-      setFull(r);
-    }).catch(() => { /* the card stays as it was */ });
-  }, [t.id, layers]);
+    void remoteLoad<CardRead>(threadKey(t.id), () => {
+      const ticket = layers.readStarted();
+      return api.clickupTask(t.id).then((r) => {
+        if (!r.ok) throw new Error(r.error || "Could not read the card");
+        layers.readLanded(ticket);
+        return r;
+      });
+    }, 0).then((r) => { setFull(r); for (const id of openThreadsRef.current) loadReplies(id); }).catch(() => { /* the card stays as it was */ });
+  }, [t.id, layers, loadReplies]);
 
   /** Whether THIS card is being re-read, so its own button can say so without
    *  the board's Refresh claiming the work. */
@@ -5940,7 +6278,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
         <div className="flex items-center gap-1.5 flex-wrap" style={{ minHeight: HEAD_H }}>
           <button onClick={() => void copyIt(t.customId || t.id, "human")} className={`${ID_CHIP} tabular-nums`}
             style={{ color: "var(--primary-ink)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}
-            title={`Copy ${t.customId || t.id} — the id for a branch, a commit or a colleague`}>
+            data-tip={`Copy ${t.customId || t.id} — the id for a branch, a commit or a colleague`}>
             {copied === "human" ? <span className="inline-flex items-center gap-1">copied<DoneIcon size={ICON.xs} /></span> : (t.customId || t.id)}
           </button>
           {/* Only when there are genuinely two. A workspace without custom ids
@@ -5948,7 +6286,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
           {t.customId && t.customId !== t.id && (
             <button onClick={() => void copyIt(t.id, "raw")} className={`${ID_CHIP} tabular-nums`}
               style={{ color: "var(--text4)", border: EDGE }}
-              title={`Copy ${t.id} — ClickUp's own id, the one its API and URLs take`}>
+              data-tip={`Copy ${t.id} — ClickUp's own id, the one its API and URLs take`}>
               {copied === "raw" ? <span className="inline-flex items-center gap-1">copied<DoneIcon size={ICON.xs} /></span> : t.id}
             </button>
           )}
@@ -5969,7 +6307,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
               and its own box because a bare glyph is a 10px target. */}
           {onClose && (
             <button onClick={onClose} aria-label="Close the card"
-              title="Close the card (Esc)"
+              data-tip="Close the card (Esc)"
               className={`shrink-0 grid place-items-center rounded-md text-[13px] leading-none agx-btn ${nav ? "" : "ml-auto"}`}
               style={{ width: HIT, height: HIT, color: "var(--text3)" }}>
               {/* The house's own glyph rather than a bare ✕ character: the lock
@@ -5998,8 +6336,8 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
               own line height. */}
           <button onClick={() => void copyIt(t.title, "title")}
             className="inline-flex items-center justify-center align-middle ml-1.5 rounded agx-hover"
-            style={{ width: 20, height: 20, color: copied === "title" ? "var(--success)" : "var(--text4)" }}
-            title="Copy the title"
+            style={{ width: MIN_BOX, height: MIN_BOX, color: copied === "title" ? "var(--success)" : "var(--text4)" }}
+            data-tip="Copy the title"
             aria-label={copied === "title" ? "Title copied" : "Copy the title"}>
             {copied === "title" ? (
               <svg width={ICON.sm} height={ICON.sm} viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -6020,7 +6358,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
             full scroll away. In the sticky band, so they follow the card. */}
         <div className="flex items-center gap-1.5 flex-wrap pb-1.5 mt-2.5">
         <div className="relative">
-          <button onClick={() => setAskOpen((o) => !o)} title={opensIn(engines)} className="text-[10.5px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
+          <button onClick={() => setAskOpen((o) => !o)} data-tip={opensIn(engines)} className="text-[10.5px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
             style={{ border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", color: "var(--warning-ink)" }}>
             Send to terminal ▾
           </button>
@@ -6054,7 +6392,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
                       const cmd = o.prompt ?? (skillCommand(sk.name, t) + (mode ? ` ${mode}` : ""));
                       // A tmux window with the agent already running it, which
                       // is the gesture the issues panel uses.
-                      void requestTermIssue(cwd, windowName(t), cmd, true, yolo, t.title, "", "", false, o.kind ?? "", o.mode)
+                      void requestTermIssue(cwd, windowName(t, { project: cwd }), cmd, true, yolo, t.title, "", "", true, o.kind ?? "", o.mode, t.id)
                         .then((done) => onNote(done.ok ? `${cmd}${yolo ? " · permissions off" : ""} — opening a window` : `Not started: ${done.error}`));
                     };
                     return (
@@ -6065,7 +6403,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
                       )}
                       <div className="px-2.5 py-1.5 agx-hover">
                         <div className="flex items-center gap-1">
-                        <button className="text-left flex-1 min-w-0" title={sk.description} onClick={() => run()}>
+                        <button className="text-left flex-1 min-w-0" data-tip={sk.description} onClick={() => run()}>
                           <div style={{ color: "var(--warning-ink)" }}>
                             /{sk.name.replace(/^\//, "")} <span style={{ color: "var(--text3)" }}>{t.customId || t.id}</span>
                           </div>
@@ -6109,7 +6447,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
                   const cwd = rootForTask(t.list, repos, here);
                   if (!cwd) { onNote("No checkout to hand this to"); return; }
                   const text = o.prompt ?? h.build(t, full?.description ?? "");
-                  void requestTermIssue(cwd, windowName(t), text, true, yolo, t.title, "", "", false, o.kind ?? "", o.mode)
+                  void requestTermIssue(cwd, windowName(t, { project: cwd }), text, true, yolo, t.title, "", "", true, o.kind ?? "", o.mode, t.id)
                     .then((done) => onNote(done.ok ? `${t.customId || t.id} handed to a pane` : `Not handed over: ${done.error}`));
                 };
                 return (
@@ -6151,7 +6489,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
         {t.url && (
           <button onClick={() => void copyIt(t.url, "url")} className="text-[10.5px] px-2.5 min-h-[28px] inline-flex items-center rounded-lg"
             style={{ border: line, color: "var(--text2)" }}
-            title={t.url}>{copied === "url" ? <span className="inline-flex items-center gap-1">copied<DoneIcon size={ICON.xs} /></span> : "Copy URL"}</button>
+            data-tip={t.url}>{copied === "url" ? <span className="inline-flex items-center gap-1">copied<DoneIcon size={ICON.xs} /></span> : "Copy URL"}</button>
         )}
         <StartFlightPlan id={t.customId ?? t.id} title={t.title} url={t.url} />
         {/* Open and Refresh share the far right corner: Copy PROJ id / Copy
@@ -6177,14 +6515,19 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
           is being re-read. */}
         <RefreshButton onRefresh={() => {
           setRereading(true);
-          const ticket = layers.readStarted();
-          void threadCache.load(t.id, () => api.clickupTask(t.id), { force: true })
+          void remoteLoad<CardRead>(threadKey(t.id), () => {
+            const ticket = layers.readStarted();
+            return api.clickupTask(t.id).then((r) => {
+              if (!r.ok) throw new Error(r.error || "Could not read the card");
+              layers.readLanded(ticket);
+              return r;
+            });
+          }, 0)
             .then((r) => {
-              if (r.ok) layers.readLanded(ticket);
               setFull(r);
               /* And the fields the BOARD owns, or half the card stays as it was
                  read a minute ago while the other half is current. */
-              if (r.ok && r.task) onFresh?.(r.task);
+              if (r.task) onFresh?.(r.task);
             })
             .catch(() => { /* keep what we have */ })
             .finally(() => setRereading(false));
@@ -6317,7 +6660,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
            * "Crimson") looks identical either way — the wrapper is invisible.
            */
           <div key={c.id} className="agx-lrow min-w-0">
-            <span className="truncate" title={c.name}>{fieldLabel(c.name)}</span>
+            <span className="truncate" data-tip={c.name}>{fieldLabel(c.name)}</span>
             <span className="min-w-0"><FieldValue f={c} /></span>
           </div>
         ))}
@@ -6340,7 +6683,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
               not quietly take off whoever else was on it. */}
           <div className="relative">
             <button ref={whoBtn} disabled={!writable} onClick={() => writable && openWho()}
-              title={writable ? undefined : READ_ONLY_TIP}
+              data-tip={writable ? undefined : READ_ONLY_TIP}
               aria-label={writable ? undefined : `Assignees. ${READ_ONLY_TIP}`}
               className="w-full text-left rounded px-1 -mx-1 py-0.5 agx-hover text-[11.5px] leading-tight flex items-center gap-1.5"
               style={{ color: t.mine ? "var(--success)" : "var(--text2)" }}>
@@ -6499,7 +6842,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
         )}
         {t.updated ? (
           <CardField label="Last moved">
-            <span style={{ color: "var(--text3)" }} title={new Date(t.updated).toLocaleString()}>{fmtAgo(t.updated)}</span>
+            <span style={{ color: "var(--text3)" }} data-tip={new Date(t.updated).toLocaleString()}>{fmtAgo(t.updated)}</span>
           </CardField>
         ) : null}
       </div>
@@ -6588,7 +6931,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
       )}
       {!!shape.echoed.length && (
         <div className="mb-3 text-[10px]" style={{ color: "var(--text4)" }}
-          title={shape.echoed.map((c) => c.name).join("\n")}>
+          data-tip={shape.echoed.map((c) => c.name).join("\n")}>
           {shape.echoed.length} field{shape.echoed.length === 1 ? "" : "s"} say the same as the description and {shape.echoed.length === 1 ? "is" : "are"} not repeated.
         </div>
       )}
@@ -6628,9 +6971,9 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
                 return (
                   <div key={c.id} className="grid gap-3 py-1.5 items-baseline"
                     style={{ gridTemplateColumns: wide ? "200px 1fr" : "minmax(110px, 42%) 1fr", borderBottom: LINE }}>
-                    <span className="text-[10.5px] min-w-0 truncate flex items-center gap-1" style={{ color: "var(--text4)" }} title={spec?.readOnly ? `${c.name} — marked read-only by its own name` : c.name}>
+                    <span className="text-[10.5px] min-w-0 truncate flex items-center gap-1" style={{ color: "var(--text4)" }} data-tip={spec?.readOnly ? `${c.name} — marked read-only by its own name` : c.name}>
                       <span className="truncate">{fieldLabel(c.name)}</span>
-                      {spec?.readOnly && <span aria-hidden className="flex" title="Marked read-only by its own name"><LockIcon size={ICON.xs} /></span>}
+                      {spec?.readOnly && <span aria-hidden className="flex" data-tip="Marked read-only by its own name"><LockIcon size={ICON.xs} /></span>}
                     </span>
                     <span className="min-w-0">
                       {canPick
@@ -6754,7 +7097,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
               <div key={l.url} className={LINK_ROW}>
                 <button onClick={() => openOther(l.url)}
                   className="text-left flex-1 min-w-0 rounded px-1 -mx-1 agx-hover"
-                  title="Open in your browser">
+                  data-tip="Open in your browser">
                   <span className="block truncate text-[11px]" style={{ color: "var(--primary-ink)" }}>{l.title}</span>
                   <div className="truncate text-[10.5px]" style={{ color: "var(--text3)" }}>{l.path}</div>
                 </button>
@@ -6852,7 +7195,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
                 <span className="text-[10.5px] font-semibold" style={{ color: "var(--text2)" }}>{c.who || "—"}</span>
                 {!!c.at && (
                   <span className="text-[10px]" style={{ color: "var(--text4)" }}
-                    title={new Date(c.at).toLocaleString()}>
+                    data-tip={new Date(c.at).toLocaleString()}>
                     {new Date(c.at).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                     {" · "}{fmtAgo(c.at)}
                   </span>
@@ -6865,24 +7208,14 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
                   <button
                     onClick={() => setOpenThreads((s) => {
                       const n = new Set(s);
-                      if (n.has(c.id)) n.delete(c.id); else n.add(c.id);
+                      if (n.has(c.id)) n.delete(c.id); else { n.add(c.id); if (!Array.isArray(threadReplies[c.id])) loadReplies(c.id); }
                       return n;
                     })}
-                    disabled={!c.replyList?.length}
-                    title={c.replyList?.length ? "Show the replies" : "This thread could not be loaded"}
+                    data-tip="Show the replies"
                     className="text-[10px] px-1.5 py-0.5 rounded inline-flex items-center gap-1.5 hover:opacity-80 disabled:opacity-50"
                     style={{ color: "var(--primary-ink)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
                     <span style={{ transform: openThreads.has(c.id) ? "none" : "rotate(-90deg)", display: "inline-block" }}>▾</span>
                     {c.replies} {c.replies === 1 ? "reply" : "replies"}
-                    {/* The faces, before anything is expanded. Most of what the
-                        count is for is "did the person I asked answer, or was
-                        it the bot again", and that is answerable at a glance. */}
-                    {/* The existing Face, fed the reply's author. One avatar renderer for
-                        the whole panel: a second one would drift from it the
-                        first time either changed. */}
-                    {c.replyList?.slice(0, 3).map((r, i) => (
-                      <Face key={r.id} n={i} p={{ name: r.who, initials: r.initials ?? "", color: r.color, avatar: r.avatar }} />
-                    ))}
                   </button>
                 )}
                 {/* Everything else you can do to a comment, out of the way.
@@ -6896,7 +7229,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
                     it by the flexbox rather than by their own baseline. */}
                 <button
                   onClick={(e) => setCommentMenu({ id: c.id, x: e.clientX, y: e.clientY })}
-                  title="More for this comment"
+                  data-tip="More for this comment"
                   aria-label="More for this comment"
                   className="agx-bench-hit ml-auto shrink-0 rounded-md text-[14px] leading-none flex items-center justify-center"
                   style={{ width: 28, height: 26, color: "var(--text3)", border: EDGE }}>…</button>
@@ -6920,7 +7253,11 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
                         else onNote(r.error ?? "ClickUp refused the edit");
                       }).finally(() => setBusyComment(null));
                     }} />
-                : <div className="agx-cu-body agx-cu-note" style={{ color: "var(--text2)" }}><Markdown text={c.text} /></div>}
+                : <div className="agx-cu-body agx-cu-note" style={{ color: "var(--text2)" }}>{c.mentions?.length
+                    ? <MarkdownMentions value={{ names: c.mentions.map((m) => m.name), chip: mentionChip }}><Markdown text={c.text} /></MarkdownMentions>
+                    : <Markdown text={c.text} />}
+                </div>}
+              <ReactionChips chips={c.reactions} />
 
               {/* What you can do to a comment, and only what ClickUp will
                   actually allow: it refuses an edit or a delete on somebody
@@ -6952,7 +7289,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
                   )}
                   <CommentAction iconOnly label={c.resolved ? "Resolved" : "Resolve"}
                     title={c.resolved ? "Mark it unresolved" : "Mark it resolved"}
-                    d="M4 12l5 5L20 6" on={!!c.resolved} tone="var(--success, #98c379)"
+                    d="M4 12l5 5L20 6" on={!!c.resolved} tone="var(--success)"
                     onClick={() => {
                       /* Drawn on the press and sent behind — see
                          lib/taskOptimistic.ts. The read after it is the one
@@ -7014,17 +7351,22 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
               {/* The thread, when it is open. Indented and hung off a rule, so
                   a reply is never mistaken for the next comment — which is
                   exactly what a flat list of both would produce. */}
-              {openThreads.has(c.id) && !!c.replyList?.length && (
+              {openThreads.has(c.id) && typeof threadReplies[c.id] === "string" && (
+                <div className="text-[10.5px]" style={{ paddingLeft: 12, color: "var(--text3)" }}>
+                  {threadReplies[c.id] === "loading" ? "Loading the replies…" : "This thread could not be loaded"}
+                </div>
+              )}
+              {openThreads.has(c.id) && Array.isArray(threadReplies[c.id]) && (
                 <div className="agx-nest flex flex-col gap-3"
                   style={{ paddingLeft: 12, borderLeft: LINE }}>
-                  {c.replyList.map((r) => (
+                  {(threadReplies[c.id] as TaskReply[]).map((r) => (
                     <div key={r.id}>
                       <div className="flex items-center gap-2 flex-wrap mb-1.5">
                         <Face n={0} p={{ name: r.who, initials: r.initials ?? "", color: r.color, avatar: r.avatar }} />
                         <span className="text-[10.5px] font-semibold" style={{ color: "var(--text2)" }}>{r.who || "—"}</span>
                         {!!r.at && (
                           <span className="text-[10px]" style={{ color: "var(--text4)" }}
-                            title={new Date(r.at).toLocaleString()}>
+                            data-tip={new Date(r.at).toLocaleString()}>
                             {new Date(r.at).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                           </span>
                         )}
@@ -7046,6 +7388,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
                               }).finally(() => setBusyComment(null));
                             }} />
                         : <Markdown text={r.text} />}
+                      <ReactionChips chips={r.reactions} />
                       {writable && r.mine && editing !== r.id && (
                         <div className="agx-hover-show flex items-center gap-1 mt-1.5">
                           <CommentAction label="Edit" title="Edit this reply"
@@ -7138,7 +7481,7 @@ function CardDetail({ t, today, statuses, fields, place, writable, onAllow, repo
 
       </></MarkdownImages>)}
 
-      {full === null && <BoardSkeleton label="Reading the card…" widths={CARD_BARS} dots={false} />}
+      {full === null && <BoardSkeleton label="Reading the card…" widths={CARD_BARS} dots={false} onCancel={cancelCard} />}
       {full && !full.ok && (
         <BoardEmpty tone="error" icon={<WarnIcon />} title="Could not read this card" body={full.error ?? "The id is kept so you can still copy it."}>
           <StateButton primary onClick={reread}>Try now</StateButton>
@@ -7812,7 +8155,7 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
         <button onClick={(e) => { e.stopPropagation(); onMark?.(); }} aria-label="Unmark" className="flex">{box}</button>
       ) : onToggle && writable ? (
         <button onClick={(e) => { e.stopPropagation(); onToggle(); }}
-          title={isDone ? "Reopen" : "Mark done"}
+          data-tip={isDone ? "Reopen" : "Mark done"}
           aria-label={isDone ? `Reopen ${t.description}` : `Mark ${t.description} done`}
           className="flex">{box}</button>
       ) : <span className="flex">{box}</span>}
@@ -7820,8 +8163,8 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
       <div className="min-w-0 flex items-center gap-2">
         {/* Always 14px, so titles line up whether or not a task has a priority. */}
         <span className="shrink-0 text-center text-[11px]" style={{ width: 14, fontWeight: 700, color: isDone ? "var(--text4)" : prioInk }}
-          title={t.priority ? PRIO_NAME[t.priority] : undefined}>{t.priority}</span>
-        <span className="truncate text-[12.5px]" title={t.description}
+          data-tip={t.priority ? PRIO_NAME[t.priority] : undefined}>{t.priority}</span>
+        <span className="truncate text-[12.5px]" data-tip={t.description}
           style={isDone ? { textDecoration: "line-through", color: "var(--text3)" } : { color: "var(--text)" }}>
           {t.description}
         </span>
@@ -7829,7 +8172,7 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
           <button key={tag} onClick={(e) => { e.stopPropagation(); onFilter?.("tag", tag); }}
             className={`${TAG_PILL} shrink-0`}
             style={{ color: "var(--text3)", background: TAG_FILL, border: TAG_EDGE }}
-            title={`Only +${tag}`}>+{tag}</button>
+            data-tip={`Only +${tag}`}>+{tag}</button>
         ))}
         {progress.total > 0 && (
           <span className={`${TAG_PILL} tabular-nums shrink-0`}
@@ -7845,7 +8188,7 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
         {t.project && (
           <button onClick={(e) => { e.stopPropagation(); onFilter?.("project", t.project!); }}
             className="truncate max-w-full" style={{ color: "var(--text3)" }}
-            title={`Only @${t.project}`}>{t.project}</button>
+            data-tip={`Only @${t.project}`}>{t.project}</button>
         )}
       </span>
 
@@ -7868,7 +8211,7 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
           <button onClick={(e) => { e.stopPropagation(); onRemind?.(); }}
             className="agx-onrow grid place-items-center rounded-md agx-hover"
             style={{ width: 24, height: 24, color: t.due ? "var(--warning-ink)" : "var(--text4)" }}
-            title="Set a reminder for this task" aria-label="Set a reminder for this task">
+            data-tip="Set a reminder for this task" aria-label="Set a reminder for this task">
             <BellIcon size={ICON.xs} />
           </button>
         )}
@@ -8158,7 +8501,7 @@ function TaskFields({ t, today, projects, tags, onEdit, reminderRow }: {
         ) : (
           <div>
             <button className={val} onClick={() => { setProjectText(t.project ?? ""); setEditingProject(true); }}
-              title="Change the project" style={{ color: t.project ? "var(--text)" : "var(--text4)" }}>
+              data-tip="Change the project" style={{ color: t.project ? "var(--text)" : "var(--text4)" }}>
               {t.project ? <Badge tint="var(--text2)" fill="var(--text)" wash={8}>{t.project}</Badge> : "none"}
             </button>
           </div>
@@ -8173,7 +8516,7 @@ function TaskFields({ t, today, projects, tags, onEdit, reminderRow }: {
               style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--text) 8%, transparent)" }}>
               +{tag}
               <button onClick={() => onEdit({ tags: t.tags.filter((x) => x !== tag) })}
-                title={`Remove ${tag}`} className="flex" style={{ color: "var(--text4)" }}><CloseIcon size={ICON.xs} /></button>
+                data-tip={`Remove ${tag}`} aria-label={`Remove ${tag}`} className="flex" style={{ color: "var(--text4)" }}><CloseIcon size={ICON.xs} /></button>
             </span>
           ))}
           {addingTag ? (
@@ -8349,7 +8692,7 @@ function LocalStrip({ active, onOpen }: { active: boolean; onOpen: () => void })
         <b style={{ fontWeight: 650, color: "var(--text)" }}>Local due soon</b>
         <span className="tabular-nums" style={{ color: "var(--text3)" }}>{open.length}</span>
         <span className="flex-1" />
-        <Button size="compact" tone="quiet" onClick={onOpen}>Open Local</Button>
+        <Button size="compact" tone="quiet" onClick={onOpen}>Open local</Button>
       </div>
       {shown.map((t) => <TaskRow key={t.uuid} t={t} today={today} on={false} onPick={onOpen} reminder={byTask[t.uuid] ?? null} />)}
       {open.length > shown.length && (

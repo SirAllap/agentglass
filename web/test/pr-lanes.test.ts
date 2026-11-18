@@ -7,7 +7,7 @@
  * order is the policy, and every case below is one somebody would notice.
  */
 import { describe, expect, it } from "bun:test";
-import { fileInLane, board, LANES, LANE_CAP } from "../src/lib/prLanes.ts";
+import { fileInLane, board, LANES, LANE_CAP, stakeFrom } from "../../shared/prLanes.ts";
 import type { PrSummary, PrCheck } from "../../shared/types.ts";
 
 /*
@@ -219,6 +219,22 @@ describe("the board", () => {
     expect(b.get("land")![0]!.filed.reason).toContain("merge");
   });
 
+  it("files a stake built from the two list numbers the way an explicit one is filed", () => {
+    /*
+     * The phone has no PrDetail: its stake is membership in the two lists it
+     * already reads (`mine` and `review`), so the classifier must file that
+     * stake exactly as it files one the desk built by hand. Otherwise one
+     * pull request reads two ways depending on which client asked.
+     */
+    const stake = stakeFrom([{ number: 1 }], [{ number: 2 }]);
+    const mine = pr({ number: 1, reviewDecision: "APPROVED" });
+    const asked = pr({ number: 2 });
+    expect(fileInLane(mine, stake(mine))).toEqual(fileInLane(mine, MINE));
+    expect(fileInLane(asked, stake(asked))).toEqual(fileInLane(asked, ASKED));
+    expect(stake(pr({ number: 3 }))).toEqual(NEITHER);
+  });
+});
+
 describe("a conflict is not a green pull request", () => {
   /*
    * The lane called itself "red checks or conflicts" from the day it was
@@ -258,6 +274,7 @@ describe("a conflict is not a green pull request", () => {
   });
 });
 
+describe("the cap", () => {
   it("caps a lane at something that fits on a screen", () => {
     // Forty cards in a column is a scroll inside a scroll — worse than the flat
     // list the board replaced. What this holds is that a cap EXISTS and stays
@@ -351,5 +368,72 @@ describe("a push the board has not read past", () => {
   });
   it("waits only until the list is read after the push", () => {
     expect(fileInLane(pr({ ...approvedGreen, readAt: 6000, headSha: NEW, pushSeen: { sha: NEW, at: 5000 } }), MINE).lane).toBe("land");
+  });
+});
+
+describe("a bot's approval with a person asked", () => {
+  const base = pr({ reviewDecision: "APPROVED", reviewers: [{ login: "orbit-reviewer" }] });
+  it("waits on the person instead of landing", () => {
+    expect(fileInLane(base, MINE).lane).toBe("others");
+  });
+  it("lands once the person approved", () => {
+    expect(fileInLane({ ...base, humanReview: { kind: "approved", who: ["orbit-reviewer"] } }, MINE).lane).toBe("land");
+  });
+  it("lands when nobody was asked", () => {
+    expect(fileInLane({ ...base, reviewers: [] }, MINE).lane).toBe("land");
+  });
+});
+
+describe("an approval of an older head, re-requested", () => {
+  const base = pr({ reviewDecision: "APPROVED", reviewers: [{ login: "Orbit-Reviewer" }],
+    humanReview: { kind: "approved", who: ["orbit-reviewer"], stale: true } });
+  it("waits on the reviewer instead of landing", () => {
+    const f = fileInLane(base, MINE);
+    expect(f.lane).toBe("others");
+    expect(f.reason).toContain("orbit-reviewer was asked to look again");
+  });
+  it("waits when only the re-request flag says so", () => {
+    expect(fileInLane({ ...base, reviewers: [], humanReview: { ...base.humanReview!, askedAgain: true } }, MINE).lane).toBe("others");
+  });
+  it("still lands when stale but nobody was asked again", () => {
+    expect(fileInLane({ ...base, reviewers: [] }, MINE).lane).toBe("land");
+  });
+  it("waits when re-requested even though the approval covers the head", () => {
+    expect(fileInLane({ ...base, humanReview: { kind: "approved", who: ["orbit-reviewer"], askedAgain: true } }, MINE).lane).toBe("others");
+  });
+  it("still lands when the approval covers the head", () => {
+    expect(fileInLane({ ...base, humanReview: { kind: "approved", who: ["orbit-reviewer"] } }, MINE).lane).toBe("land");
+  });
+});
+
+describe("a reviewer asked while the checks still run", () => {
+  it("waits on the reviewer", () => {
+    expect(fileInLane(pr({ pend: 2, reviewers: [{ login: "orbit-reviewer" }] }), MINE).lane).toBe("others");
+  });
+  it("after changes, only once the author asked again", () => {
+    const again = pr({ pend: 2, reviewDecision: "CHANGES_REQUESTED", reviewers: [{ login: "orbit-reviewer" }], humanReview: { kind: "changes", who: ["orbit-reviewer"], askedAgain: true } });
+    expect(fileInLane(again, MINE).lane).toBe("others");
+    expect(fileInLane({ ...again, humanReview: { kind: "changes", who: ["orbit-reviewer"] } }, MINE).lane).toBe("flight");
+  });
+  it("stays in flight when nobody was asked", () => {
+    expect(fileInLane(pr({ pend: 2 }), MINE).lane).toBe("flight");
+  });
+});
+
+describe("changes asked, then the author asked again", () => {
+  it("files under Waiting when the card reads awaiting, checks running or not", () => {
+    const base = pr({ reviewDecision: "CHANGES_REQUESTED", reviewers: [{ login: "orbit-reviewer" }], humanReview: { kind: "awaiting", who: ["orbit-reviewer"] } });
+    expect(fileInLane({ ...base, checks: { ...pr({ pend: 1 }).checks } }, MINE).lane).toBe("others");
+    expect(fileInLane(base, MINE).lane).toBe("others");
+  });
+});
+
+describe("changes asked, then asked again, checks done", () => {
+  it("files under Waiting, not in flight", () => {
+    const f = fileInLane(pr({ reviewDecision: "CHANGES_REQUESTED", reviewers: [{ login: "orbit-reviewer" }], humanReview: { kind: "changes", who: ["orbit-reviewer"], askedAgain: true } }), MINE);
+    expect(f.lane).toBe("others");
+  });
+  it("stays in flight while the changes are still yours to apply", () => {
+    expect(fileInLane(pr({ reviewDecision: "CHANGES_REQUESTED", humanReview: { kind: "changes", who: ["orbit-reviewer"] } }), MINE).lane).toBe("flight");
   });
 });

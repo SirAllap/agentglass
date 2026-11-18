@@ -109,7 +109,7 @@ export function ListPanel({ sections, selected, onSelect, nothing, blank }: {
             <span className="agx-le-n">{s.entries.length}</span>
             {s.onAdd && (
               <button type="button" className="agx-le-add" aria-label={s.addLabel ?? `New in ${s.title}`}
-                title={s.addLabel ?? `New in ${s.title}`} onClick={s.onAdd}>
+                data-tip={s.addLabel ?? `New in ${s.title}`} onClick={s.onAdd}>
                 <PlusIcon size={ICON.sm} />
               </button>
             )}

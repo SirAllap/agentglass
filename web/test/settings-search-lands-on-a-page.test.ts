@@ -15,10 +15,11 @@
  * (see settings-search-sound.test.ts); the row itself is what carries it.
  */
 import { describe, expect, test } from "bun:test";
+import { modalSource } from "./settingsSource.ts";
 import { readFileSync } from "node:fs";
 import { pageScore, type SettingsPage } from "../src/lib/settingsIndex.ts";
 
-const src = readFileSync(new URL("../src/components/SettingsModal.tsx", import.meta.url).pathname, "utf8");
+const src = modalSource();
 
 function loadTabs(): SettingsPage[] {
   const re = /\{ id: "([a-z-]+)"(?: as const)?, label: "([^"]*)", group: "[^"]*", kw: "([^"]*)"/g;
@@ -39,23 +40,24 @@ describe("a realistic query lands on the page it names", () => {
 
   const cases: [string, string][] = [
     ["dark mode", "appearance"],
-    ["tmux prefix", "tmux"],
-    ["sidebar order", "rail"],
-    ["flight plan", "orchestration"],
-    ["flight", "orchestration"],
+    ["tmux prefix", "advanced"],
+    ["sidebar order", "appearance"],
+    ["flight plan", "fplan"],
+    ["flight", "fplan"],
     ["diff view", "diff"],
     ["task sources", "tasks"],
     ["github token", "connections"],
-    ["budget limit", "budgets"],
-    ["review prompts", "review-prompts"],
-    ["saved replies", "saved-replies"],
+    ["budget limit", "engines"],
+    // Folded into Commands & replies: the search lands on the page that took them in.
+    ["review prompts", "recipes"],
+    ["saved replies", "recipes"],
     ["export data", "privacy"],
     ["privacy telemetry", "privacy"],
     ["monospace font", "terminal"],
     ["notification sound", "notifications"],
     ["install plugin", "plugins"],
     ["remote pair phone", "remote"],
-    ["window fullscreen", "prefs"],
+    ["window fullscreen", "appearance"],
     // Activity is link-only: its own row on Data & privacy is the best answer and opens it.
     ["activity log", "privacy"],
     ["onboarding checklist", "onboarding"],

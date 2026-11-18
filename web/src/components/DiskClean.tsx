@@ -18,9 +18,17 @@ import { DiskIcon, DoneIcon, EyeIcon, LockIcon, RefreshIcon, WarningIcon } from 
 import { BroomIcon } from "./docker/DockerIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { Badge, Button } from "./workspace/Chrome.tsx";
-import type { DiskCleanLine, DiskCleanMount, DiskCleanReport, DiskCleanRunResult } from "../../../shared/types.ts";
+import { AskAboutButton } from "./AskAboutButton.tsx";
+import { diskSeed } from "../lib/askSeed.ts";
+import { askAbout, askDir } from "../lib/askAbout.ts";
+import { sentNote } from "../lib/sendToTerminal.ts";
+import { SparkleIcon } from "../lib/glyphIcons.tsx";
+import { applyKept, claimAutoReport, useDiskScan } from "../lib/diskScan.ts";
+import { badgeSpace } from "../lib/diskWarnPref.ts";
+import { onDiskExplainChanged } from "../lib/diskExplainBus.ts";
+import type { DiskCleanLine, DiskCleanMount, DiskCleanReport, DiskCleanRunResult, DiskExplain, DiskExplainItem, DiskSpace } from "../../../shared/types.ts";
 import {
-  VERDICT, cleanable, confirmLabel, diskHeadline, fmtBytes, phaseOf, publishDiskMounts, publishDiskPlan, reclaimHeadline, resultView, sortLines, useDiskWarnPct, wholePlan, type Tone,
+  VERDICT, scannedAgo, cleanable, confirmLabel, diskHeadline, fmtBytes, phaseOf, publishDiskMounts, publishDiskPlan, explainEstimate, explainSpent, reclaimHeadline, reportGroups, resultView, sortLines, useDiskWarnPct, wholePlan, type Tone,
 } from "../lib/diskClean.ts";
 import { groupsOf, mountBar } from "../lib/machineView.ts";
 import { clearDiskStage, needsStageScan, planDiskStage, useDiskStage, type DiskStageRequest } from "../lib/diskStage.ts";
@@ -33,32 +41,95 @@ type Armed = null | "all" | string;
 
 export function DiskClean({ disk }: { disk: { diskTotal: number; diskFree: number } }) {
   const [report, setReport] = useState<DiskCleanReport | null>(null);
-  const [scanning, setScanning] = useState(false);
+  const [askSaid, setAskSaid] = useState("");
+  const [ownScan, setScanning] = useState(false);
+  /** A scan the server is running that this panel did not start (it kept going while the dialog was closed). */
+  const [serverScan, setServerScan] = useState(false);
+  /* The peek's own free-space reading: the badge needs no scan. */
+  const [peekSpace, setPeekSpace] = useState<DiskSpace | null>(null);
+  const scanning = ownScan || serverScan;
+  const reading = useDiskScan().reading;
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<DiskCleanRunResult | null>(null);
   const [running, setRunning] = useState(false);
   const [armed, setArmed] = useState<Armed>(null);
   const [staged, setStaged] = useState<DiskStageRequest | null>(null);
+  const [reportError, setReportError] = useState<string | null>(null);
   const warn = useDiskWarnPct();
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
+  const ownRef = useRef(false);
   const scan = useCallback(async (fresh: boolean) => {
-    setScanning(true); setError(null); setResult(null); setArmed(null);
+    ownRef.current = true; setScanning(true); setError(null); setResult(null); setArmed(null);
     try {
-      const r = await api.machineDiskClean(fresh);
+      let r = await api.machineDiskClean(fresh);
+      // A plain read with no cache answers "scanning" at once; that scan is
+      // already running, so wait for it instead of drawing an empty plan.
+      for (let i = 0; alive.current && r.state === "scanning" && i < 240; i++) {
+        await new Promise((res) => setTimeout(res, 750));
+        r = await api.machineDiskClean(false);
+      }
       if (!alive.current) return;
+      if (r.state === "scanning") { setError("The scan is still running. Try again in a moment."); return; }
       setReport(r);
       publishDiskMounts("scan", r.mounts);
+      // The mockup's report starts by itself after the person's own scan, once for that scan.
+      if (fresh && r.lines.length && claimAutoReport(r.at)) void startRef.current();
     } catch (e) {
       if (alive.current) setError(e instanceof Error ? e.message : String(e));
-    } finally { if (alive.current) setScanning(false); }
+    } finally { ownRef.current = false; if (alive.current) setScanning(false); }
   }, []);
+  const startRef = useRef<() => Promise<void>>(async () => {});
+
+  /* The engine's report on the kept scan. It runs on the server, so it goes on when the view closes; the kept scan carries it back. */
+  const takeExplain = useCallback((explain: DiskExplain | undefined) => setReport((cur) => (cur ? { ...cur, explain } : cur)), []);
+  const startReport = useCallback(async () => {
+    setReportError(null);
+    try {
+      const r = await api.machineDiskExplain();
+      if (!r.ok) { if (alive.current) setReportError(r.error ?? "The report did not start."); return; }
+      const k = await api.machineDiskCleanKept();
+      if (alive.current && k.report) takeExplain(k.report.explain);
+    } catch (e) { if (alive.current) setReportError(e instanceof Error ? e.message : String(e)); }
+  }, [takeExplain]);
+  const cancelReport = useCallback(async () => {
+    takeExplain(undefined);
+    try { await api.machineDiskExplainCancel(); } catch { /* the turn ends by itself at its time limit */ }
+  }, [takeExplain]);
+    /* Only while a report is being written: ask the kept scan for it every 2 s, and stop the moment it is not running. */
+  /* The report's progress arrives as a socket frame (disk-explain); it is re-read when told, and once on mount above. */
+  useEffect(() => onDiskExplainChanged(() => {
+    void api.machineDiskCleanKept().then((k) => {
+      if (!alive.current) return;
+      setServerScan(k.scanning === true);
+      if (!k.report) return;
+      // A scan that ended while no press of ours was waiting for it: show what it found.
+      if (!k.scanning && !ownRef.current) { setReport(k.report); publishDiskMounts("scan", k.report.mounts); } else takeExplain(k.report.explain);
+    }).catch(() => { /* the next frame asks again */ });
+  }), [takeExplain]);
 
   /* An agent's staged plan: copied into state the moment there is one (the
      mailbox forgets after a minute) and measured against the scan on screen.
      With no scan yet, the cached one is fetched first: staging is not a reason
      to walk the disk. */
+  /* On open, the scan the server kept (it lives there, so a reload or a second
+     window sees it too). Asked once, never starts a scan, and never replaces a
+     scan the person started meanwhile. */
+  useEffect(() => {
+    void api.machineDiskCleanKept().then((k) => {
+      applyKept(k);
+      if (!alive.current) return;
+      setServerScan(k.scanning === true);
+      setPeekSpace(k.space ?? null);
+      if (!k.report) return;
+      setReport((cur) => cur ?? k.report);
+      publishDiskMounts("scan", k.report.mounts);
+      // The mockup's report starts by itself, ONCE per scan: a kept scan that has none yet gets it the first time, never again after a cancel or a failure.
+      if (!k.scanning && !k.report.explain && k.report.lines.length && claimAutoReport(k.report.at)) void startRef.current();
+    }).catch(() => { /* no kept scan to show: the button still scans */ });
+  }, []);
+
   const req = useDiskStage();
   const triedFor = useRef<number | null>(null);
   useEffect(() => {
@@ -103,9 +174,13 @@ export function DiskClean({ disk }: { disk: { diskTotal: number; diskFree: numbe
 
   // The Safe group's one clean button: the staged plan when there is one, else the whole plan.
   const target = view.stagedPlan ?? view.plan;
-  const canClean = phase === "plan" && target.ids.length > 0 && !running;
+  const stale = report?.staleWhy ?? null;
+  const canClean = phase === "plan" && target.ids.length > 0 && !running && !stale;
   const groups = useMemo(() => groupsOf(report?.lines ?? []), [report]);
   const [showInfo, setShowInfo] = useState(false);
+  startRef.current = startReport;
+  const explain = report?.explain;
+  const rg = useMemo(() => (explain?.status === "ready" ? reportGroups(report?.lines ?? [], explain) : null), [report, explain]);
 
   const cleanButton = canClean && (armed === (staged ? "staged" : "all") ? (
     <>
@@ -118,18 +193,20 @@ export function DiskClean({ disk }: { disk: { diskTotal: number; diskFree: numbe
       {staged ? `Clean staged ${fmtBytes(target.bytes)}` : `Clean ${fmtBytes(target.bytes)}`}
     </Button>
   ));
-  const row = (l: DiskCleanLine) => (
-    <LineRow key={l.id} l={l} many={(report?.mounts.length ?? 0) > 1} marked={view.stagedPlan?.ids.includes(l.id) ?? false}
-      armed={armed === l.id} busy={running} onArm={() => setArmed(l.id)} onKeep={() => setArmed(null)} onRun={() => void run([l.id])} />
+  const row = (l: DiskCleanLine, ex?: DiskExplainItem) => (
+    <LineRow key={l.id} l={l} ex={ex} many={(report?.mounts.length ?? 0) > 1} marked={view.stagedPlan?.ids.includes(l.id) ?? false}
+      armed={armed === l.id} busy={running} onArm={() => setArmed(l.id)} onKeep={() => setArmed(null)} onRun={() => void run([l.id])}
+      onAsk={() => { if (report) void askDir().then((dir) => (dir ? askAbout(dir, diskSeed(report, { on: l.label })) : { ok: false as const, error: "no project folder is known" })).then((d) => setAskSaid(sentNote(d, l.label).text)); }} />
   );
 
   const reclaim = phase === "plan" ? reclaimHeadline(view.plan) : null;
   const diskLine = diskHeadline(disk);
   const lead = reclaim ?? diskLine ?? "Disk cleanup";
+  const ago = scannedAgo(report, Date.now());
   const sub = phase === "plan"
-    ? `${view.plan.ids.length} item${view.plan.ids.length === 1 ? "" : "s"} · ${diskLine ?? "the scan is on screen"}`
+    ? `${ago ? `${ago} · ` : ""}${view.plan.ids.length} item${view.plan.ids.length === 1 ? "" : "s"} · ${diskLine ?? "the scan is on screen"}`
     : phase === "error" ? "The scan did not finish."
-    : phase === "empty" ? "Nothing safe to remove right now."
+    : phase === "empty" ? `${ago ? `${ago} · ` : ""}Nothing safe to remove right now.`
     : phase === "done" ? "What the clean did, per item and per disk."
     : "Nothing is scanned until you ask; the scan only reads and nothing is removed.";
 
@@ -142,14 +219,19 @@ export function DiskClean({ disk }: { disk: { diskTotal: number; diskFree: numbe
           <b className="mc-dc-n" data-big={reclaim ? true : undefined}>{lead}</b>
           {phase !== "scanning" && <span className="mc-dc-sub">{sub}</span>}
         </div>
+        {(() => { const sp = badgeSpace(peekSpace, report?.space); return sp && <span className="mc-fine" data-space={sp.state} role="status">{fmtBytes(sp.free)} free</span>; })()}
         {running && <span className="mc-fine" role="status">Removing…</span>}
+        {report && <AskAboutButton what="The disk report" disabled={scanning || running} onSaid={(_ok, text) => setAskSaid(text)}
+          cwd={askDir}
+          seed={() => diskSeed(report)} />}
         <Button size="hit" tone="primary" disabled={scanning || running} title="Look at what is on the disks. Reads only; nothing is removed." onClick={() => void scan(true)}>
           {scanning ? <><span className="mc-spin"><RefreshIcon size={ICON.sm} /></span>Scanning…</> : <><RefreshIcon size={ICON.sm} />{report || error ? "Scan again" : "Scan for what can go"}</>}
         </Button>
       </div>
 
+      {askSaid && <div className="mc-fine" role="status">{askSaid}</div>}
       {phase === "scanning" && (
-        <div className="mc-fine" role="status">Looking at Docker, checkouts, caches and the trash…
+        <div className="mc-fine" role="status">{reading ? `Reading ${reading}…` : "Looking at Docker, checkouts, caches and the trash…"}
           <div className="mc-ind"><i /></div>Measuring folders can take a minute on a big disk.</div>
       )}
       {phase === "error" && (
@@ -163,6 +245,11 @@ export function DiskClean({ disk }: { disk: { diskTotal: number; diskFree: numbe
 
       {(phase === "plan" || phase === "empty") && report && (
         <>
+          {stale && (
+            <div className="mc-note" role="status" style={{ "--tint": "var(--warning)", margin: 0 } as CSSProperties}>
+              <WarningIcon size={ICON.sm} /><span>{stale}</span>
+            </div>
+          )}
           {report.problems.length > 0 && (
             <div className="mc-note" role="alert" style={{ "--tint": "var(--warning)", margin: 0 } as CSSProperties}>
               <WarningIcon size={ICON.sm} />
@@ -185,27 +272,97 @@ export function DiskClean({ disk }: { disk: { diskTotal: number; diskFree: numbe
           {phase === "empty" && (
             <div className="mc-fine">{report.lines.length ? "Nothing to clean right now. What is left is in use, needs your eye, or is only shown for information." : "Nothing found that could be cleaned."}</div>
           )}
-          {groups.safe.lines.length > 0 && (
-            <PlanGroup icon={<DoneIcon size={ICON.md} />} hue="var(--success)" title="Safe" hint="come back by themselves; no sudo" tip={VERDICT.safe.title} bytes={groups.safe.bytes} action={cleanButton || undefined}>
-              {groups.safe.lines.map(row)}
-            </PlanGroup>
-          )}
-          {groups.ask.lines.length > 0 && (
-            <PlanGroup icon={<EyeIcon size={ICON.md} />} hue="var(--warning)" title="Look first" hint="not in the plan: you decide" tip={VERDICT.ask.title} bytes={groups.ask.bytes}>
-              {groups.ask.lines.map(row)}
-            </PlanGroup>
-          )}
-          {groups.info.lines.length > 0 && (
-            <PlanGroup icon={<LockIcon size={ICON.md} />} hue="var(--text3)" title="In use and for information" hint="stays; shown so the numbers add up" tip={`${VERDICT.inuse.title} ${VERDICT.explain.title}`}
-              bytes={groups.info.bytes} fold={!showInfo}
-              action={<Button size="compact" tone="quiet" aria-expanded={showInfo} onClick={() => setShowInfo((v) => !v)}>{showInfo ? "Hide" : "Show"}</Button>}>
-              {showInfo && groups.info.lines.map(row)}
-            </PlanGroup>
+          <ReportNote explain={explain} error={reportError} hasItems={report.lines.length > 0} onCancel={() => void cancelReport()} onRetry={() => void startReport()} />
+          {rg ? (
+            <>
+              {rg.safe.rows.length > 0 && (
+                <PlanGroup icon={<DoneIcon size={ICON.md} />} hue="var(--success)" title="Safe" hint="nothing uses it; it comes back" tip={VERDICT.safe.title} bytes={rg.safe.bytes} action={cleanButton || undefined}>
+                  {rg.safe.rows.map((x) => row(x.line, x.item))}
+                </PlanGroup>
+              )}
+              {rg.check.rows.length > 0 && (
+                <PlanGroup icon={<EyeIcon size={ICON.md} />} hue="var(--warning)" title="Check first" hint="look before you decide" tip={VERDICT.ask.title} bytes={rg.check.bytes}>
+                  {rg.check.rows.map((x) => row(x.line, x.item))}
+                </PlanGroup>
+              )}
+              {rg.keep.rows.length > 0 && (
+                <PlanGroup icon={<LockIcon size={ICON.md} />} hue="var(--text3)" title="Keep" hint="in use, or costly to lose" tip={VERDICT.inuse.title} bytes={rg.keep.bytes}>
+                  {rg.keep.rows.map((x) => row(x.line, x.item))}
+                </PlanGroup>
+              )}
+              {rg.rest.length > 0 && (
+                <PlanGroup icon={<LockIcon size={ICON.md} />} hue="var(--text3)" title="Not in the report" hint="shown so the numbers add up" tip={VERDICT.explain.title}
+                  bytes={rg.rest.reduce((n, l) => n + (l.bytes ?? 0), 0)} fold={!showInfo}
+                  action={<Button size="compact" tone="quiet" aria-expanded={showInfo} onClick={() => setShowInfo((v) => !v)}>{showInfo ? "Hide" : "Show"}</Button>}>
+                  {showInfo && rg.rest.map((l) => row(l))}
+                </PlanGroup>
+              )}
+            </>
+          ) : (
+            <>
+              {groups.safe.lines.length > 0 && (
+                <PlanGroup icon={<DoneIcon size={ICON.md} />} hue="var(--success)" title="Safe" hint="come back by themselves; no sudo" tip={VERDICT.safe.title} bytes={groups.safe.bytes} action={cleanButton || undefined}>
+                  {groups.safe.lines.map((l) => row(l))}
+                </PlanGroup>
+              )}
+              {groups.ask.lines.length > 0 && (
+                <PlanGroup icon={<EyeIcon size={ICON.md} />} hue="var(--warning)" title="Look first" hint="not in the plan: you decide" tip={VERDICT.ask.title} bytes={groups.ask.bytes}>
+                  {groups.ask.lines.map((l) => row(l))}
+                </PlanGroup>
+              )}
+              {groups.info.lines.length > 0 && (
+                <PlanGroup icon={<LockIcon size={ICON.md} />} hue="var(--text3)" title="In use and for information" hint="stays; shown so the numbers add up" tip={`${VERDICT.inuse.title} ${VERDICT.explain.title}`}
+                  bytes={groups.info.bytes} fold={!showInfo}
+                  action={<Button size="compact" tone="quiet" aria-expanded={showInfo} onClick={() => setShowInfo((v) => !v)}>{showInfo ? "Hide" : "Show"}</Button>}>
+                  {showInfo && groups.info.lines.map((l) => row(l))}
+                </PlanGroup>
+              )}
+            </>
           )}
         </>
       )}
     </section>
   );
+}
+
+/** The report's own state: running (progress, cancel, the estimate), failed (one line and a retry), or ready (what it cost). Never blank. */
+function ReportNote({ explain, error, hasItems, onCancel, onRetry }: { explain: DiskExplain | undefined; error: string | null; hasItems: boolean; onCancel: () => void; onRetry: () => void }) {
+  if (explain?.status === "running") {
+    return (
+      <div className="mc-note" role="status" style={{ "--tint": "var(--primary)", margin: 0 } as CSSProperties}>
+        <span className="mc-spin"><RefreshIcon size={ICON.sm} /></span>
+        <span style={{ minWidth: 0, flex: 1 }}>
+          <b>Report running in the background.</b> Claude reads the scan's names and sizes (never file contents) and says what each item is. You can keep cleaning meanwhile.
+          <span className="mc-ind"><i /></span>
+          <span className="mc-fine">{explainEstimate(explain)}</span>
+        </span>
+        <Button size="compact" tone="quiet" onClick={onCancel}>Cancel report</Button>
+      </div>
+    );
+  }
+  const failed = explain?.status === "error" ? explain.error ?? "The report failed." : error;
+  if (failed) {
+    return (
+      <div className="mc-note" role="alert" style={{ "--tint": "var(--warning)", margin: 0 } as CSSProperties}>
+        <WarningIcon size={ICON.sm} /><span style={{ minWidth: 0, flex: 1 }}>{failed} The scan below is unchanged.</span>
+        <Button size="compact" onClick={onRetry}>Retry report</Button>
+      </div>
+    );
+  }
+  if (explain?.status === "ready") {
+    const spent = explainSpent(explain);
+    return <div className="mc-fine">Report written by Claude from names and sizes only · {explain.count} item{explain.count === 1 ? "" : "s"}{spent ? ` · ${spent}` : ""}. Nothing was removed.</div>;
+  }
+  /* The report starts by itself once per scan; when there is none (cancelled, failed, or already tried) say so and let the person start it. */
+  if (hasItems) {
+    return (
+      <div className="mc-note" role="status" style={{ "--tint": "var(--primary)", margin: 0 } as CSSProperties}>
+        <span style={{ minWidth: 0, flex: 1 }}><b>No report yet.</b> Claude can read the scan's names and sizes (never file contents) and say what each item is and whether it is safe, check or keep.</span>
+        <Button size="compact" onClick={onRetry}>Write report</Button>
+      </div>
+    );
+  }
+  return null;
 }
 
 function PlanGroup({ icon, hue, title, hint, tip, bytes, action, fold, children }: {
@@ -252,19 +409,22 @@ function Mounts({ mounts, warn }: { mounts: DiskCleanMount[]; warn: number }) {
   );
 }
 
-function LineRow({ l, many, marked, armed, busy, onArm, onKeep, onRun }: {
-  l: DiskCleanLine; many: boolean; marked: boolean; armed: boolean; busy: boolean; onArm: () => void; onKeep: () => void; onRun: () => void;
+function LineRow({ l, ex, many, marked, armed, busy, onArm, onKeep, onRun, onAsk }: {
+  l: DiskCleanLine; ex?: DiskExplainItem; many: boolean; marked: boolean; armed: boolean; busy: boolean; onArm: () => void; onKeep: () => void; onRun: () => void; onAsk: () => void;
 }) {
   return (
     <div className="mc-vr" data-line={l.id} data-arm={armed || undefined} data-staged={marked || undefined}>
-      <div className="a" title={`${l.label} — ${l.why}`}>
+      <div className="a" title={`${l.label} — ${ex ? `${ex.why} ${ex.regen}` : l.why}`}>
         {l.label}
         {many && <i>on {l.mount}</i>}
         {marked && <i data-staged>staged</i>}
-        <small>{l.why}</small>
+        <small>{ex ? ex.why : l.why}</small>
+        {ex?.regen && <small>Comes back: {ex.regen}</small>}
+        {l.bytes === null && l.sizeCommand && <small>Run to see the size: <code>{l.sizeCommand}</code></small>}
       </div>
-      <span className={`s${l.bytes === null ? " root" : ""}`}>{l.bytes === null ? "needs root" : fmtBytes(l.bytes)}</span>
+      <span className={`s${l.bytes === null ? " root" : ""}`}>{l.bytes === null ? "size needs root" : fmtBytes(l.bytes)}</span>
       <span className="sl">
+        <Button size="compact" square tone="quiet" label={`Ask about ${l.label}`} title="Open a new terminal tab with the scan, asking about this item." onClick={onAsk}><SparkleIcon size={ICON.sm} /></Button>
         {cleanable(l) && (armed ? (
           <>
             <Button size="compact" tone="danger" autoFocus onClick={onRun} disabled={busy}>Remove</Button>

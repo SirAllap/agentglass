@@ -25,7 +25,8 @@ describe("header/toolbar controls share the refresh button's height", () => {
   it("CTRL_H.regular is still the refresh button's own height", async () => {
     const chrome = await read("/workspace/Chrome.tsx");
     expect(chrome).toContain("CTRL_H = { compact: 22, strip: 24, hit: HIT, regular: 28, large: 32 }");
-    expect(chrome).toContain("width: CTRL_H.regular, height: CTRL_H.regular");
+    // A labelled refresh is as wide as its words; the icon-only one keeps the square.
+    expect(chrome).toContain("label ? {} : { width: CTRL_H.regular }), height: CTRL_H.regular");
   });
 
   it("Tasks board header: Open/Sidebar/Modal no longer float at py-0.5", async () => {

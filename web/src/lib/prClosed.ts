@@ -37,6 +37,40 @@ const keyOf = (root: string, id: ClosedSectionId, who = "@me") => `${root}|${id}
  * already read. Nothing is asked for it, so before the first open there is no
  * number rather than a request.
  */
+const LISTENERS = new Set<() => void>();
+/**
+ * Merged or closed something, or pressed Refresh: what was kept is a photograph from the first open, and a pull request that closed
+ * since is not in it. The sections ask again and swap their rows in place, so the grid does not blink empty.
+ */
+export function refreshClosed(root: string): void {
+  for (const k of [...KEPT.keys()]) if (k.startsWith(`${root}|`)) KEPT.set(k, { ...KEPT.get(k)!, failed: true });
+  for (const f of LISTENERS) f();
+}
+
+/**
+ * A merge this app just made is written into the Merged section from the row it already holds, with no request: the final
+ * facts are the ones on the row (the checks at its head, the verdict), and the next Refresh replaces them with GitHub's own.
+ * Nothing happens when the section was never read: its first read will include the pull request.
+ */
+export function landInClosed(root: string, p: PrSummary, at: string, by?: string | null): void {
+  const key = keyOf(root, "merged");
+  const cur = KEPT.get(key);
+  if (!cur || cur.failed || cur.rows.some((r) => r.number === p.number)) return;
+  const c = p.checks;
+  const row: PrSummary = {
+    ...p, state: "MERGED", updatedAt: at,
+    closed: {
+      at, openedAt: p.updatedAt, by: by ?? null, method: null,
+      checks: { total: c.total, success: c.success, failure: c.failure, skipped: c.skipped ?? 0, failing: (c.failing ?? []).slice(0, 2).map((f) => f.name) },
+      commits: 0,
+      reviews: { approved: p.humanReview?.kind === "approved" ? p.humanReview.who : [], changes: [], rounds: 0, comments: 0 },
+      why: null,
+    },
+  };
+  KEPT.set(key, { ...cur, rows: [row, ...cur.rows], total: cur.total == null ? null : cur.total + 1 });
+  for (const f of LISTENERS) f();
+}
+
 export function closedKnownTotal(root: string): number | undefined {
   let sum = 0;
   for (const s of CLOSED_SECTIONS) {
@@ -73,7 +107,14 @@ export function useMyClosed(root: string, on: boolean, who = "@me") {
     if (live.current && current.current === who) setState((s) => ({ ...s, [id]: next }));
   }, [root, who]);
 
-  const ask = useCallback(async (id: ClosedSectionId, cursor: string | null, prev: Section) => {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const f = () => setTick((t) => t + 1);
+    LISTENERS.add(f);
+    return () => { LISTENERS.delete(f); };
+  }, []);
+
+  const ask = useCallback(async (id: ClosedSectionId, cursor: string | null, prev: Section, fresh = false) => {
     const q = closedQuery(id, who);
     patch(id, { ...prev, loading: true, failed: false });
     let wait = 0;
@@ -86,7 +127,7 @@ export function useMyClosed(root: string, on: boolean, who = "@me") {
       if (r.prs.length || !r.loading) {
         const seen = new Set(prev.rows.map((p) => p.number));
         patch(id, {
-          rows: [...prev.rows, ...r.prs.filter((p) => !seen.has(p.number))],
+          rows: fresh ? r.prs : [...prev.rows, ...r.prs.filter((p) => !seen.has(p.number))],
           total: r.total ?? null, hasNext: !!r.hasNext, cursor: r.cursor ?? null, loading: false, failed: !!r.error && !r.prs.length,
         });
         return;
@@ -101,9 +142,10 @@ export function useMyClosed(root: string, on: boolean, who = "@me") {
     for (const s of CLOSED_SECTIONS) {
       const kept = KEPT.get(keyOf(root, s.id, who));
       if (kept && !kept.failed) { setState((cur) => ({ ...cur, [s.id]: kept })); continue; }
-      void ask(s.id, null, EMPTY);
+      /* Asked again over rows already drawn (refreshClosed): they stay until the new page replaces them. */
+      void ask(s.id, null, kept?.rows.length ? kept : EMPTY, !!kept?.rows.length);
     }
-  }, [on, root, who, ask]);
+  }, [on, root, who, ask, tick]);
 
   const more = useCallback((id: ClosedSectionId) => {
     const cur = KEPT.get(keyOf(root, id, who));

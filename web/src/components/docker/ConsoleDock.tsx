@@ -23,7 +23,7 @@ export function ConsoleDock({ show, open, height, onHeight, onClose, onToggle }:
       {show && (
         <div className="dk-dock">
           <button type="button" className="dk-chip sm" onClick={onToggle}
-            title="A shell in this project, docked under the view. It keeps running while you look around.">
+            data-tip="A shell in this project, docked under the view. It keeps running while you look around.">
             <TerminalIcon size={ICON.xs} />Console
           </button>
           <span className="mut">A shell in this project, docked under the view. It keeps running while you look around.</span>

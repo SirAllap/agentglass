@@ -22,12 +22,11 @@ const base = (): Policy => composePolicy(defaultStored(), {
 });
 
 describe("the menu and the keys are lists, not a paragraph", () => {
-  test("seven entries on every block, each with what it does; two say why they are off", () => {
+  test("seven entries on every block, each with what it does; only the general setting waits on a project", () => {
     expect(FLOW_MENU.length).toBe(7);
     for (const m of FLOW_MENU) expect(m.does.length).toBeGreaterThan(0);
-    const off = FLOW_MENU.filter((m) => m.needs === "none");
-    expect(off.map((m) => m.label)).toEqual(["Add a step after", "Remove step"]);
-    for (const m of off) expect(m.why?.length).toBeGreaterThan(10);
+    expect(FLOW_MENU.filter((m) => m.needs === "none")).toEqual([]);
+    for (const act of ["after", "remove"] as const) expect(menuOff(FLOW_MENU.find((x) => x.act === act)!, { projectScope: false, field: true })).toBe(false);
   });
   test("the six keys the Keys section prints are the ones the drawing listens for", () => {
     expect(FLOW_KEYS.map((k) => k.what)).toEqual(["Between blocks", "Open this block", "Close a menu", "Context menu", "Context menu · menu key", "Between sections"]);
@@ -47,7 +46,7 @@ describe("Polaris has a page of its own", () => {
     expect(paneSrc).not.toContain("<PolarisSlot");
     // The card that pointed there left with the rest of the per-block cards: Polaris is reached from its own page in the nav.
     expect(paneSrc).not.toContain("Open Polaris settings");
-    expect(paneSrc).not.toContain('openSettings("polaris")');
+    // Flow & review keeps a link row to the Polaris page: its assisted setup and doors live there until the page is a section.
   });
 });
 

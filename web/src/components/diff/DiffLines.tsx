@@ -305,7 +305,7 @@ function LineBtn({ n, side, onPick, canPick }: { n: number | null | undefined; s
   return (
     <button
       onClick={(e) => onPick({ line: n, side, shift: e.shiftKey })}
-      title={`Line ${n} — comment; shift-click to cover a range`}
+      data-tip={`Line ${n} — comment; shift-click to cover a range`}
       aria-label={`Comment on line ${n}`}
       className="agx-linebtn">+</button>
   );
@@ -483,7 +483,7 @@ export function UnifiedDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, canP
       {built.map(({ h, rows }, hi) => (
         <div key={hi}>
           {gapRow?.(hi)}
-          <div data-hunk className="z-10 py-0.5 t-dim2" style={{ position: "var(--agx-hunk-pos, sticky)" as CSSProperties["position"], top: "var(--agx-hunk-top, 0px)", background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
+          <div data-hunk className="z-10 py-0.5 t-dim2" style={{ position: "var(--agx-hunk-pos, sticky)" as CSSProperties["position"], top: "var(--agx-hunk-top, var(--prx-stick, 0px))", background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
             <span className="sticky left-0 inline-flex items-center gap-3 px-3">
               <span className="whitespace-pre">@@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@</span>
               {hunkAction && hunkAction(hi)}
@@ -605,7 +605,7 @@ export function SplitDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, canPic
     {built.map(({ h, rows }, hi) => (
       <div key={hi}>
         {gapAt(which, hi)}
-        <div data-hunk className="z-10 py-0.5 t-dim2 whitespace-pre" style={{ minHeight: hunkAction ? HUNK_BAR_H : undefined, position: "var(--agx-hunk-pos, sticky)" as CSSProperties["position"], top: "var(--agx-hunk-top, 0px)", background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
+        <div data-hunk className="z-10 py-0.5 t-dim2 whitespace-pre" style={{ minHeight: hunkAction ? HUNK_BAR_H : undefined, position: "var(--agx-hunk-pos, sticky)" as CSSProperties["position"], top: "var(--agx-hunk-top, var(--prx-stick, 0px))", background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
           {/* A flex row as wide as the pane (100cqw: the scroller is a size container),
               so the title truncates and the buttons are never pushed past the edge. */}
           <span className="sticky left-0 flex items-center gap-3 px-3 box-border" style={{ width: "100cqw" }}>
@@ -654,7 +654,7 @@ export function SplitDiff({ c, hunks, wrap, hunkAction, rowAfter, onPick, canPic
         {built.map(({ h, rows }, hi) => (
           <div key={hi}>
             {gapRow?.(hi)}
-            <div data-hunk className="z-10 px-3 py-0.5 t-dim2 whitespace-pre inline-flex items-center gap-3 w-full" style={{ position: "var(--agx-hunk-pos, sticky)" as CSSProperties["position"], top: "var(--agx-hunk-top, 0px)", background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
+            <div data-hunk className="z-10 px-3 py-0.5 t-dim2 whitespace-pre inline-flex items-center gap-3 w-full" style={{ position: "var(--agx-hunk-pos, sticky)" as CSSProperties["position"], top: "var(--agx-hunk-top, var(--prx-stick, 0px))", background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
               <span>@@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@</span>
               {hunkAction && hunkAction(hi)}
             </div>

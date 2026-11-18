@@ -5,13 +5,14 @@ import { BASE_PROJECT, MODE_ACTION, type AgentRule, type AgentRulesView, type Ru
 import type { LaunchMode } from "../../../../shared/launchModes.ts";
 import { projectLabel } from "../../lib/agentsScreen.ts";
 import {
-  MODE_CHOICES, actionKeyOf, baseOrder, baseSummary, blockedBy, fullAccessOn, fullAccessRemovals, fullAccessRequests, isUnder, newRuleRequest, ruleCode, ruleIcon, ruleTitle, ruleTotals, ruleWhen, rowRequest, sourceChip,
+  MODE_CHOICES, actionKeyOf, baseOrder, baseSummary, blockedBy, confirmAllow, fullAccessOn, fullAccessRemovals, fullAccessRequests, isUnder, narrowTitle, newRuleRequest, ruleCode, ruleIcon, ruleTitle, ruleTotals, ruleWhen, rowRequest, sourceChip,
   splitLearned, suggestionPhrase, type HeldCall,
 } from "../../lib/agentRulesView.ts";
 import { growthBars } from "../../lib/weeklyStrip.ts";
 import { tipAttr } from "../../lib/tip.ts";
 import { ICON } from "../../lib/iconSize.ts";
 import { Ph } from "./phosphor.tsx";
+import { useVisibleInterval } from "../../lib/visibleInterval.ts";
 import { NewBadge, SubLine } from "./AgentsSections.tsx";
 import { Button, INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
 
@@ -70,9 +71,8 @@ export function AgentRulesSection({ root, projects, who, gates, active, now, com
   useEffect(() => {
     if (!active || roots.length === 0) return;
     void load();
-    const t = setInterval(() => void load(), REFRESH_MS);
-    return () => clearInterval(t);
   }, [active, load, roots.length]);
+  useVisibleInterval(() => void load(), REFRESH_MS, active && roots.length > 0);
 
   const first = views[roots[0] ?? ""];
   const head = (
@@ -266,11 +266,23 @@ const SETTINGS: { v: RuleSetting; word: string; tone: "allow" | "ask" | "deny" }
   { v: "allow", word: "Allow", tone: "allow" }, { v: "ask", word: "Ask me", tone: "ask" }, { v: "never", word: "Never", tone: "deny" },
 ];
 
-function Tri({ value, label, busy, onPick }: { value: RuleSetting | null; label: string; busy: boolean; onPick: (s: RuleSetting) => void }) {
+function Tri({ value, label, name, busy, onPick }: { value: RuleSetting | null; label: string; name?: string; busy: boolean; onPick: (s: RuleSetting) => void }) {
+  const [asking, setAsking] = useState(false);
+  if (asking) {
+    return (
+      <span role="group" aria-label={`Allow ${name ?? "this rule"}?`}
+        style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 11.5, color: "var(--text2)", whiteSpace: "nowrap" }}>
+        Allow?
+        <Button size="compact" tone="primary" disabled={busy} onClick={() => { setAsking(false); onPick("allow"); }}>Allow</Button>
+        <Button size="compact" tone="quiet" disabled={busy} onClick={() => setAsking(false)}>Keep Never</Button>
+      </span>
+    );
+  }
   return (
     <div className="tri" role="group" aria-label={label}>
       {SETTINGS.map((o) => (
-        <button key={o.v} type="button" className={value === o.v ? `on t-${o.tone}` : ""} aria-pressed={value === o.v} disabled={busy} onClick={() => value !== o.v && onPick(o.v)}>{o.word}</button>
+        <button key={o.v} type="button" className={value === o.v ? `on t-${o.tone}` : ""} aria-pressed={value === o.v} disabled={busy}
+          onClick={() => { if (value === o.v) return; if (confirmAllow(value, o.v)) setAsking(true); else onPick(o.v); }}>{o.word}</button>
       ))}
     </div>
   );
@@ -300,15 +312,16 @@ function useRuleRows(now: number, reload: () => Promise<void>) {
   };
   const setMode = (mode: LaunchMode) => run(MODE_ACTION, () => api.agentRuleSet({ root: "*", action: MODE_ACTION, match: "", setting: mode === "default" ? "ask" : "allow", mode }));
 
-  const row = (rule: AgentRule, opts: { fresh?: boolean; base?: boolean; overrides?: boolean }) => {
+  const row = (rule: AgentRule, opts: { fresh?: boolean; base?: boolean; overrides?: boolean; narrow?: boolean }) => {
     const chip = sourceChip(rule, opts.base);
+    const title = opts.narrow ? narrowTitle(rule) : ruleTitle(rule);
     const mode = rule.action === MODE_ACTION;
     return (
       <div className={`lr${opts.fresh ? " fresh" : ""}`} key={rule.id}>
         <span className="ri"><Ph name={ruleIcon(rule)} size={15} /></span>
         <div>
           <div className="l1">
-            <b>{ruleTitle(rule)}</b><code>{ruleCode(rule)}</code>
+            <b>{title}</b><code>{ruleCode(rule)}</code>
             {opts.fresh && <span className="fresh-t">learned this week</span>}
             {opts.overrides && <span className="agv-chip info">overrides the base rule</span>}
           </div>
@@ -323,7 +336,7 @@ function useRuleRows(now: number, reload: () => Promise<void>) {
               ))}
             </div>
           )
-          : <Tri value={rule.setting} label={`${ruleTitle(rule)}: what an agent may do`} busy={busy === rule.id} onPick={(s) => void write(rule, s)} />}
+          : <Tri value={rule.setting} label={`${title}: what an agent may do`} name={title} busy={busy === rule.id} onPick={(s) => void write(rule, s)} />}
       </div>
     );
   };
@@ -400,7 +413,7 @@ function ProjectCard({ root, view, tag, who, gates, now, reload }: {
 
       <div className="grp"><Ph name="list-checks" size={14} />Learned in this project<span className="cnt">{view.learned.length}</span><span className="sp" /><span className="m">newest first</span></div>
       {view.learned.length === 0 && <div className="older">Nothing learned yet</div>}
-      {listed.map((l) => row(l.rule, { fresh: l.fresh, overrides: view.base.some((b) => b.action === l.rule.action) }))}
+      {listed.map((l) => row(l.rule, { fresh: l.fresh, overrides: view.base.some((b) => b.action === l.rule.action), narrow: true }))}
       {rest.length > 0 && (
         <div className="older">
           <Ph name="eye-slash" size={15} /><b>{rest.length}</b> older learned rules<span style={{ flex: 1 }} />

@@ -56,9 +56,10 @@ describe("the window log", () => {
     expect(main).toContain("re-maximised after open");
   });
 
-  test("the file is capped, like the popup log beside it", () => {
+  test("the file rotates near the cap instead of being thrown away", () => {
     expect(main).toContain("WINDOW_LOG_MAX");
-    expect(main).toContain("fs.statSync(file).size > WINDOW_LOG_MAX");
+    expect(main).toContain("rotatingAppend(file, line, WINDOW_LOG_MAX)");
+    expect(main).toContain("stallProbe.shouldRotate(q.size, q.max)"); // async flush (fixelec): size is tracked, not statSync per line
   });
 });
 

@@ -48,10 +48,14 @@ describe("EditorFoot", () => {
 
 describe("the list pages", () => {
   for (const f of ["RecipesPane", "ReviewPromptsPane", "SavedRepliesPane"]) {
-    test(`${f} is a list beside an editor, not a card per item`, () => {
+    test(`${f} is a list of shell rows with row actions, and its editor is a section of rows`, () => {
       const src = readFileSync(join(SRC, `${f}.tsx`), "utf8");
-      expect(src).toContain("<ListEditorSplit");
-      expect(src).toContain("<EditorPanel");
+      expect(src).toContain('from "./settings/shell/SettingRow.tsx"');
+      expect(src).toContain("<GroupActions");
+      expect(src).toContain("<DangerAction");
+      expect(src).not.toContain("<ListEditorSplit");
+      expect(src).not.toContain("<EditorPanel");
+      expect(src).not.toContain("<SettingsCard");
     });
   }
 });

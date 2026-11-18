@@ -3,6 +3,7 @@
  * setting that picks the mode is a low-class registry setting with a row.
  */
 import { describe, expect, it } from "bun:test";
+import { modalSource } from "./settingsSource.ts";
 import { readFileSync } from "node:fs";
 import { classOf } from "../../shared/settingClass.ts";
 import { DEFAULT_FAB, FAB_MODES, fabVisible } from "../src/lib/benchStore.ts";
@@ -38,11 +39,11 @@ describe("the setting", () => {
     expect(classOf("terminal.benchButton")?.class).toBe("low");
   });
   it("has a row with the three options, hint read from the keymap", () => {
-    const src = readFileSync(new URL("../src/components/SettingsModal.tsx", import.meta.url), "utf8");
-    const at = src.indexOf('settingId="terminal.benchButton"');
+    const src = readFileSync(new URL("../src/components/settings/pages/TerminalPage.tsx", import.meta.url), "utf8");
+    const at = src.indexOf('row("terminal.benchButton")');
     expect(at).toBeGreaterThan(0);
-    const row = src.slice(at, at + 700);
-    expect(row).toContain('"Only when something is open"');
+    const row = src.slice(at, at + 900);
+    expect(row).toContain('id: "open"');
     expect(row).toContain('appChordFor("bench.toggle")');
   });
   it("the button returns null when not visible", () => {

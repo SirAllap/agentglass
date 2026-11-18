@@ -6,7 +6,7 @@ import { CommentIcon, CrossIcon as XIcon, EditIcon, FlagIcon, HandIcon, LockIcon
 import { ICON } from "../../lib/iconSize.ts";
 import { preflightFallbackNote, preflightLabel, type PreflightTarget } from "../../../../shared/preflightEngine.ts";
 import {
-  DEFAULT_PILOT_SETTINGS, fmtUsd, meter, nowLine, parseUsd, track,
+  DEFAULT_PILOT_SETTINGS, FILE_CAP_OPTIONS, fmtUsd, meter, nowLine, parseUsd, track,
   type Field, type RowNote, type StationKey, type UsdField,
 } from "../../lib/pilotSettings.ts";
 import { projectName } from "../../lib/flightPlan.ts";
@@ -246,7 +246,7 @@ export function PilotSettingsView({ settings, snapshot, waiting, target, project
                 </div>
               )}
             </PilotRow>
-            <PilotRow title="Sizes reviewed" hint="S never: it goes straight to a builder." note={noteOf("sizes")} saving={busy("sizes")}>
+            <PilotRow title="Sizes that are plans" hint="Which sizes are plans at all: any other size goes straight to a builder, and S never is one." note={noteOf("sizes")} saving={busy("sizes")}>
               {(ids) => <Seg ids={ids} disabled={off} value={s.sizes} options={[["L", "L only"], ["ML", "M and L"]] as const} onPick={(v) => onChange({ sizes: v })} />}
             </PilotRow>
             <PilotRow title="Second looks" hint="Co-pilot and Manual: after a blocker is fixed, look again at most this often. Autopilot spends to the budget instead, at most 8 looks per plan." note={noteOf("secondLooks")} saving={busy("secondLooks")}>
@@ -258,6 +258,10 @@ export function PilotSettingsView({ settings, snapshot, waiting, target, project
                 {!fallback && <button type="button" className="btn sm" onClick={() => openSettings("orchestration")}>Change in Orchestration</button>}
                 {usd("costCapUsd", "Cost cap per run, in dollars", ids)}
               </>}
+            </PilotRow>
+            <span hidden data-setting="flightPlan.preflight.fileCapBytes" />
+            <PilotRow title="Big-file cap" hint="A file the plan names with no cited line. Over the cap, only its head goes in, with a notice naming the cut; a cited file is unaffected." note={noteOf("fileCapBytes")} saving={busy("fileCapBytes")}>
+              {(ids) => <Seg ids={ids} disabled={off} value={s.fileCapBytes} options={FILE_CAP_OPTIONS} onPick={(v) => onChange({ fileCapBytes: v })} />}
             </PilotRow>
           </section>
           {extra}
@@ -289,7 +293,7 @@ export function PilotSettingsView({ settings, snapshot, waiting, target, project
           <section className="ps-card">
             <Head icon={<ShieldIcon size={ICON.md} />} title="The builder never" sub="File edits and shell commands are checked before they run. A script the builder writes and then runs is not." badge={<span className="ps-badge"><LockIcon size={ICON.xs} />Not a setting</span>} />
             <ul className="ps-never" aria-label="The builder never">
-              {NEVER.map(([w, note]) => <li key={w} title={note ? `${w}: ${note}` : undefined}><XIcon size={ICON.xs} />{w}</li>)}
+              {NEVER.map(([w, note]) => <li key={w} data-tip={note ? `${w}: ${note}` : undefined}><XIcon size={ICON.xs} />{w}</li>)}
             </ul>
             {NEVER.filter(([, n]) => n).map(([w, n]) => <p key={w} className="ps-never-note">{w}: {n}</p>)}
             <PilotRow title="Builder starts from" hint="Local trunk keeps a project whose merges stay local honest; origin cuts from the remote." note={noteOf("builderBase")} saving={busy("builderBase")}>
@@ -349,7 +353,7 @@ export function SettingsTab({ enabled, root, onEnabled, onChanged, scope }: {
     else { setOnNote(undefined); onEnabled(!enabled); onChanged(); }
   };
   const master = (
-    <section className="ps-card">
+    <section className="ps-card" data-setting="flightPlan.enabled">
       <PilotRow title="Use Flight plan" hint="Off means nothing is reviewed and nothing waits, in every project." note={onNote}>
         {(ids) => <Switch ids={ids} on={enabled} onToggle={() => void toggle()} />}
       </PilotRow>

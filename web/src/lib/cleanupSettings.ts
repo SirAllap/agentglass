@@ -11,6 +11,8 @@
  * behaves as Ask, which its sentence says.
  */
 
+import { checkTagTemplate } from "../../../shared/dockerTag.ts";
+
 export type CleanupMode = "off" | "ask" | "atMerge" | "auto";
 export type CleanupKind = "docker" | "worktree" | "branch" | "stashes" | "evidence" | "notes" | "tab" | "agent-scratch" | "agent-history";
 
@@ -101,6 +103,24 @@ export function checkBriefsDir(raw: string): { ok: true; dir: string } | { ok: f
 
 /** The whole stored body with a new briefs folder: the door replaces the object, so every other field is carried over. */
 export const withBriefsDir = (body: unknown, dir: string): Record<string, unknown> => ({ ...(body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {}), briefsDir: dir });
+
+/* ---- teardown script: cleanup.config.teardownScript, per project ---- */
+
+/** The stored `cleanup.config` body as drawn: its teardown script, empty = off. */
+export const teardownOf = (v: unknown): string => (v && typeof v === "object" && typeof (v as { teardownScript?: unknown }).teardownScript === "string" ? (v as { teardownScript: string }).teardownScript : "");
+
+export const TEARDOWN_HELP = "A script in this repository's main checkout (as the default branch has it), run with the worktree path as its first argument before the worktree is removed, to clean up what the checkout's own tooling made (volumes, test databases). If it fails, the worktree is kept. Empty = off.";
+
+/** The path the person typed (empty turns it off), or the sentence that says why not; the server checks again. */
+export function checkTeardownScript(raw: string): { ok: true; path: string } | { ok: false; why: string } {
+  const p = raw.trim();
+  if (!p) return { ok: true, path: "" };
+  if (p.length > 256 || p.includes("\0") || p.startsWith("/") || p.startsWith("~") || p.split("/").includes("..")) return { ok: false, why: "Use a path inside the repository (scripts/teardown.sh): no leading / or ~, no \"..\", at most 256 characters." };
+  return { ok: true, path: p };
+}
+
+/** The whole stored body with a new teardown script: the door replaces the object, so every other field is carried over. */
+export const withTeardownScript = (body: unknown, path: string): Record<string, unknown> => ({ ...(body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {}), teardownScript: path });
 
 /* ---- other folders: cleanup.otherFolders, per project ---- */
 
@@ -250,4 +270,32 @@ export const retryPlan = (plan: readonly RootWrite[], results: readonly RootResu
 export function bulkLine(results: readonly RootResult[]): { saved: number; failed: number; text: string } {
   const failed = results.filter((r) => !r.ok).length, saved = results.length - failed;
   return { saved, failed, text: failed ? `${saved} of ${results.length} saved` : `${saved} saved` };
+}
+
+/* ---- Docker leftovers: cleanup.config.{dockerImageTagTemplate, orphanVolumePatterns, orphanKeep} and cleanup.orphanAutoRemove ---- */
+
+export const DOCKER_TEMPLATE_HELP = "The image tag your build gives a checkout: {slug} (the card or branch) and/or {sha} (the commit's short sha), each at most once. With {sha}, the images of a merged pull request's commits go with it, and the Images view marks the ones built at a commit no checkout is on. Example: app:{sha}. Empty = off.";
+export const ORPHAN_VOLUMES_HELP = "Named volumes the sweep may list when their checkout is gone, one per line or comma, each with {slug}: app-cache-{slug}. Empty = no volume is ever listed. Anonymous volumes and any volume a container mounts are never listed.";
+export const ORPHAN_KEEP_HELP = "Volume names (globs with * or ?) the sweep never lists, whatever else matches. Empty = none kept.";
+
+export interface DockerLeftoverFields { template: string; patterns: string[]; keep: string[] }
+const strList = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+/** The stored `cleanup.config` body as drawn. */
+export function leftoverFieldsOf(cfg: unknown): DockerLeftoverFields {
+  const o = (cfg && typeof cfg === "object" ? cfg : {}) as Record<string, unknown>;
+  return { template: typeof o.dockerImageTagTemplate === "string" ? o.dockerImageTagTemplate : "", patterns: strList(o.orphanVolumePatterns), keep: strList(o.orphanKeep) };
+}
+/** One-per-line or comma separated text as a list. */
+export const listOfText = (t: string): string[] => [...new Set(t.split(/[\n,]/).map((x) => x.trim()).filter(Boolean))];
+/** The body with these three fields replaced, every other field kept (the door replaces the whole object). */
+export function withLeftovers(cfg: unknown, f: DockerLeftoverFields): Record<string, unknown> {
+  const o = (cfg && typeof cfg === "object" ? cfg : {}) as Record<string, unknown>;
+  return { ...o, dockerImageTagTemplate: f.template, orphanVolumePatterns: f.patterns, orphanKeep: f.keep };
+}
+/** The sentence that says why this template cannot be saved, or null; the server checks again. */
+export function checkTemplateText(t: string): string | null {
+  const v = t.trim();
+  if (!v) return null;
+  const r = checkTagTemplate(v);
+  return r.ok ? null : `The template ${r.error}.`;
 }

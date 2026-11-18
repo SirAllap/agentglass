@@ -6,11 +6,14 @@ import { CloseIcon } from "../CloseButton.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { roleLabel, type FlowLike } from "../../lib/roleLabel.ts";
 import { Button, Chip, EDGE, INPUT, INPUT_STYLE, LINE } from "../workspace/Chrome.tsx";
+import { useOwnAccounts } from "../../lib/useOwnAccounts.ts";
+import { pickerOptions } from "../../lib/usageAccountsView.ts";
 import { LAYER } from "../../lib/layers.ts";
 import {
   CHAIN_MAX, ROLE_IDS, TRIGGERS_MAX,
   type Chain, type EngineChoice, type Policy, type PolicyRule, type Trigger, type UsageProviderId,
 } from "../../../../shared/orchestration.ts";
+import { addStepState, conditionFields } from "./ruleSheetLayout.ts";
 import { RuleStrip } from "./RuleStrips.tsx";
 import { buildRule, ruleProblem } from "./ruleDraft.ts";
 import { WORKER_ROLES, type RoleId } from "../../../../shared/workerRoles.ts";
@@ -111,8 +114,8 @@ function StepRow({ id, label, index, count, step, role, readiness, onChange, onM
  * The engines as a menu, ready ones first. A disabled row is quiet and says why
  * in one line; pressing it does nothing.
  */
-function AddStep({ label, role, readiness, onAdd }: {
-  label: string; role: "orchestrator" | "worker"; readiness: readonly EngineReadiness[] | null;
+function AddStep({ label, role, readiness, disabled, onAdd }: {
+  label: string; disabled?: boolean; role: "orchestrator" | "worker"; readiness: readonly EngineReadiness[] | null;
   onAdd: (engine: string, options: readonly EngineOption[]) => void;
 }) {
   const anchor = useRef<HTMLSpanElement | null>(null);
@@ -121,7 +124,7 @@ function AddStep({ label, role, readiness, onAdd }: {
   const ordered = [...options.filter((o) => !o.disabled), ...options.filter((o) => o.disabled)];
   return (
     <span ref={anchor} className="agx-rule-addwrap">
-      <Button type="button" size="regular" aria-haspopup="menu" aria-expanded={open}
+      <Button type="button" size="regular" disabled={disabled} aria-haspopup="menu" aria-expanded={open}
         label={`Add a step to ${label}`} onClick={() => setOpen((v) => !v)}>+ Add a step</Button>
       {open && (
         <AnchoredMenu anchor={anchor} align="left" minWidth={288} onClose={() => setOpen(false)}>
@@ -164,15 +167,11 @@ export function ChainEditor({ id, label, chain, role, readiness, onChange }: {
             onMove={(by) => onChange(chainMove(chain, i, by))} onRemove={() => onChange(chainRemove(chain, i))} />
         ))}
       </ol>
-      {chain.length >= CHAIN_MAX ? (
-        <p className="agx-rule-note">{CHAIN_FULL} {CHAIN_TAIL}</p>
-      ) : (
-        <div className="agx-rule-addrow">
-          <AddStep label={label} role={role} readiness={readiness}
-            onAdd={(engine, options) => { const n = chainAddFrom(chain, options, engine); if (n) onChange(n); }} />
-          <span className="agx-rule-note">{CHAIN_TAIL}</span>
-        </div>
-      )}
+      <div className="agx-rule-addrow">
+        <AddStep label={label} role={role} readiness={readiness} disabled={addStepState(chain.length, CHAIN_MAX).disabled}
+          onAdd={(engine, options) => { const n = chainAddFrom(chain, options, engine); if (n) onChange(n); }} />
+        <span className="agx-rule-note">{chain.length >= CHAIN_MAX ? `${CHAIN_FULL} ` : ""}{CHAIN_TAIL}</span>
+      </div>
     </div>
   );
 }
@@ -184,6 +183,8 @@ export function TriggerEditor({ id, t, now, left, onChange, onRemove, removable 
   id: string; t: Trigger; now: Date; left: Left; onChange: (t: Trigger) => void; onRemove: () => void; removable: boolean;
 }) {
   const choices = usageChoices();
+  const own = useOwnAccounts();
+  const picks = (p: UsageProviderId) => pickerOptions(own, p, usageChoices().find((c) => c.value === p)?.label ?? p);
   const num = (v: string) => Math.max(1, Math.min(99, Math.round(Number(v) || 1)));
   const kind = KINDS.find((k) => k.id === t.kind)?.label ?? t.kind;
   return (
@@ -191,23 +192,21 @@ export function TriggerEditor({ id, t, now, left, onChange, onRemove, removable 
       <div className="agx-rule-cond-top">
         <Select value={t.kind} title="Condition" style={SELECT_BOX} options={KINDS.map((k) => ({ value: k.id, label: k.label }))}
           onChange={(k) => { if (k !== t.kind) onChange(freshTrigger(k as Trigger["kind"])); }} />
-        <span className="agx-rule-grow" />
-        {removable && (
-          <Button type="button" square size="regular" label="Remove this condition" onClick={onRemove}>
-            <CloseIcon size={ICON.sm} />
-          </Button>
-        )}
-      </div>
-      {(t.kind === "usage" || t.kind === "limit") && (
         <div className="agx-rule-fields">
-          <Select value={t.provider} title="Which plan" style={SELECT_BOX} options={choices}
-            onChange={(p) => onChange({ ...t, provider: p as typeof t.provider })} />
+          {conditionFields(t.kind).includes("plan") && (t.kind === "usage" || t.kind === "limit") && (
+            <Select value={t.provider} title="Which plan" style={SELECT_BOX} options={choices}
+              onChange={(p) => onChange({ ...t, provider: p as typeof t.provider })} />
+          )}
+          {(t.kind === "usage" || t.kind === "limit") && picks(t.provider).length > 0 && (
+            <Select value={t.account ?? "default"} title="Which account" style={SELECT_BOX} options={picks(t.provider)}
+              onChange={(a) => onChange({ ...t, account: a === "default" ? undefined : a })} />
+          )}
           {t.kind === "usage" && (
             <>
               <Select value={t.window} title="Which window" style={SELECT_BOX}
                 options={[{ value: "5h", label: "5 h window" }, { value: "weekly", label: "Weekly window" }, { value: "either", label: "Either window" }]}
                 onChange={(w) => onChange({ ...t, window: w as typeof t.window })} />
-              <label htmlFor={`${id}-pct`} className="agx-rule-fieldlabel">with at most</label>
+              <label htmlFor={`${id}-pct`} className="agx-rule-fieldlabel">at most</label>
               <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
                 <input id={`${id}-pct`} type="number" min={1} max={99} value={t.remainingAtMost}
                   onChange={(e) => onChange({ ...t, remainingAtMost: num(e.target.value) })}
@@ -217,7 +216,12 @@ export function TriggerEditor({ id, t, now, left, onChange, onRemove, removable 
             </>
           )}
         </div>
-      )}
+        {removable && (
+          <Button type="button" square size="regular" label="Remove this condition" onClick={onRemove}>
+            <CloseIcon size={ICON.sm} />
+          </Button>
+        )}
+      </div>
       {t.kind === "usage" && <RuleStrip when={[t]} now={now} left={left} />}
       {(t.kind === "usage" || t.kind === "limit") && GAUGE_HELP() && (
         <p id={helpIdFor(`${id}-gauge`)} className="agx-rule-note">{GAUGE_HELP()}</p>
@@ -282,7 +286,7 @@ function JobSection({ id, slot, title, chain, role, readiness, open, onOpen, onT
             <span className="agx-rule-job-count">keeps the page's choice</span>
           </span>
         )}
-        <Button type="button" size="compact" on={!!chain} aria-pressed={!!chain}
+        <Button type="button" size="regular" on={!!chain} aria-pressed={!!chain}
           aria-label={`${title}: ${chain ? "on" : "off"}`} onClick={onToggle}>{chain ? "On" : "Off"}</Button>
       </div>
       {chain && open && (

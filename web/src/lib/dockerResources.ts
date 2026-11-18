@@ -7,7 +7,7 @@
  */
 import type { DockerContainer, DockerDisk, DockerImage, DockerNetwork } from "../../../shared/types.ts";
 import { humanSize } from "../../../shared/dockerSize.ts";
-import { imageBytes } from "./dockerDisk.ts";
+import { imageBytes, imageSizeIndex, orphanUniqueBytes } from "./dockerDisk.ts";
 
 export type ImageKind = "use" | "idle" | "dang";
 
@@ -29,17 +29,42 @@ export function imageKind(img: DockerImage, containers: DockerContainer[]): Imag
   return img.dangling ? "dang" : "idle";
 }
 
-const sum = (xs: { bytes: number }[]) => xs.reduce((n, x) => n + x.bytes, 0);
+/** Bytes of a list of image rows, each image id counted once: `docker images`
+ *  gives one row per tag, and every tag of one id carries the image's full size. */
+export const sum = (xs: { bytes: number; image?: { id?: string } }[]) => {
+  const seen = new Set<string>();
+  let n = 0;
+  for (const x of xs) {
+    const id = x.image?.id;
+    if (id) { if (seen.has(id)) continue; seen.add(id); }
+    n += x.bytes;
+  }
+  return n;
+};
 const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
-export function imagesView(images: DockerImage[], containers: DockerContainer[], orphans: DockerDisk["orphans"]) {
+/**
+ * What the Images view says, kept out of sync with `docker system df` for a
+ * while: `docker images` lists one row per TAG, and its `Size` counts shared
+ * layers once per row — 30 tags of one app image, 6.2 GB each, sharing almost
+ * every layer, summed to 219 GB on a machine `system df` itself called 41 GB.
+ * The total, the count and "unused" below come from `disk` (the daemon's own
+ * arithmetic) whenever it has arrived; summing the rows is only the fallback
+ * for the moment before the first `system df` answer is in.
+ */
+export function imagesView(
+  images: DockerImage[], containers: DockerContainer[], orphans: DockerDisk["orphans"],
+  disk?: Pick<DockerDisk, "images" | "imageCount" | "imageReclaimable" | "perImage"> | null,
+) {
   const gone = new Set(orphans.flatMap((o) => [o.id, o.tag]));
+  const sizes = imageSizeIndex(disk?.perImage);
   const items = images.map((image) => {
     const users = usedBy(image, containers);
     const kind = imageKind(image, containers);
     const isGone = gone.has(image.id) || gone.has(`${image.repository}:${image.tag}`);
+    const sz = sizes.get(image.id);
     return {
-      image, kind, bytes: imageBytes(image), usedBy: users,
+      image, kind, bytes: imageBytes(image), unique: sz?.unique ?? null, shared: sz?.shared ?? null, created: sz?.created ?? null, usedBy: users,
       /** Built by a checkout that was removed, and nothing runs from it. */
       goneNow: isGone && !users.length,
       removable: !users.length,
@@ -52,15 +77,21 @@ export function imagesView(images: DockerImage[], containers: DockerContainer[],
     items.filter((i) => i.kind === k).sort((a, b) => Number(b.goneNow) - Number(a.goneNow) || b.bytes - a.bytes);
   const groups = { use: group("use"), idle: group("idle"), dang: group("dang") };
   const bytes = { use: sum(groups.use), idle: sum(groups.idle), dang: sum(groups.dang) };
-  const unused = bytes.idle + bytes.dang;
   const goneNow = items.filter((i) => i.goneNow);
-  const total = humanSize(sum(items));
+  // Shared with diskMath's orphan card (dockerDisk.ts), so the two can never
+  // print a different "gone with their worktree" number for the same list.
+  const goneBytes = orphanUniqueBytes(orphans);
+  const itemCount = items.length;
+  const hasUnused = groups.idle.length > 0 || groups.dang.length > 0;
+  const total = humanSize(disk?.images ?? sum(items));
+  const unused = disk?.imageReclaimable ?? (bytes.idle + bytes.dang);
+  const shownCount = disk?.imageCount ?? itemCount;
   return {
-    items, groups, bytes, goneNow,
-    lead: unused ? `${count(items.length, "image")}, ${total}.` : "Nothing to clean up here.",
-    rest: unused
-      ? `${humanSize(unused)} unused${goneNow.length ? `, ${humanSize(sum(goneNow))} of it gone with ${goneNow.length === 1 ? "its" : "their"} worktree` : ""}.`
-      : `${count(items.length, "image")}, ${total}, every one in use.`,
+    items, groups, bytes, goneNow, goneBytes,
+    lead: hasUnused ? `${count(shownCount, "image")}, ${total}.` : "Nothing to clean up here.",
+    rest: hasUnused
+      ? `${humanSize(unused)} unused${goneNow.length ? `, ${humanSize(goneBytes)} of it gone with ${goneNow.length === 1 ? "its" : "their"} worktree` : ""}.`
+      : `${count(shownCount, "image")}, ${total}, every one in use.`,
   };
 }
 

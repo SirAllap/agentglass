@@ -8,21 +8,33 @@
  * Choosing a row only WRITES the selection (`api.select`); what the main pane
  * does with it is the pane's own business.
  */
-import { Fragment, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { PrCardMenu } from "../PrCardMenu.tsx";
 import { CTRL_H, LINE } from "../workspace/Chrome.tsx";
-import { ICON } from "../../lib/iconSize.ts";
+import { HIT, ICON, MIN_BOX } from "../../lib/iconSize.ts";
 import { tipAttr, type TipSpec } from "../../lib/tip.ts";
 import { Face } from "../TrackerPeoplePick.tsx";
 import { openExternal } from "../../lib/externalUrl.ts";
-import { BoxIcon, ClockIcon, EyeIcon, EyeOffIcon, FlagIcon, ListIcon, MoreIcon, SearchIcon } from "../../lib/glyphIcons.tsx";
+import { api as jiraApi } from "../../lib/api.ts";
+import { BoxIcon, ClockIcon, EyeIcon, EyeOffIcon, FlagIcon, MoreIcon, StarIcon } from "../../lib/glyphIcons.tsx";
 import type { JiraTreeApi } from "../../lib/useJiraTree.ts";
 import {
-  EPIC_H, ROW_H, browseUrl, buildRows, componentMenu, componentUrl, epicMenu, epicProgress, epicTip, focusable, keyC, keyE, keyS, meMenu,
-  rowSelected, spaceMenu, targetOf, toneOf, viewMenu, type TreeMenuId, type TreeRow, type TreeSelection, type TreeView,
-  SHAPES, shapeOf, type TreeShape,
+  EPIC_H, ROW_H, browseUrl, nextRingRead, countLabel, sectionRows, spaceProgress, starredAt, buildRows, componentMenu, componentUrl, epicMenu, epicProgress, epicTip, focusable, keyC, keyE, keyS, looksLikeCardKey, meMenu,
+  rowSelected, spaceMenu, targetOf, toneOf, viewJql, viewMenu, type TreeChild, type TreeMenuId, type TreeRow, type TreeSelection, type TreeView,
+  SHAPES, shapeOf, type TreeShape, type ViewCount,
 } from "../../lib/jiraTree.ts";
 import type { CardMenu } from "../../lib/prCardMenu.ts";
+import { gotoStep } from "./gotoKey.ts";
+import { jiraViewActiveNow } from "../../lib/jiraQueryPalette.ts";
+
+/** The sidebar search's words, marked where they sit in a row's name; the first match only, case ignored. */
+function hit(text: string, q: string): ReactNode {
+  const n = q.trim();
+  if (!n) return text;
+  const at = text.toLowerCase().indexOf(n.toLowerCase());
+  if (at < 0) return text;
+  return <>{text.slice(0, at)}<mark className="agx-jsb-hit">{text.slice(at, at + n.length)}</mark>{text.slice(at + n.length)}</>;
+}
 
 const ring = "color-mix(in srgb, var(--text) 14%, transparent)";
 const hair = "color-mix(in srgb, var(--text) 10%, transparent)";
@@ -37,6 +49,8 @@ export interface TreeOutside {
   meFace?: ReactNode;
   looked: number;
   sprint?: string;
+  /** Cards the panel already holds, by epic key. */
+  children?: Record<string, TreeChild[]>;
   /** Which of the outside rows is the lit one. */
   lit: { me?: boolean; looked?: boolean; sprint?: boolean; view?: string | null };
   onMe: () => void;
@@ -44,11 +58,21 @@ export interface TreeOutside {
   onSprint: () => void;
   onView: (id: string) => void;
   onTakeOffView: (id: string) => void;
-  /** A space, component or epic was chosen: the screen may want to follow. */
-  onPicked: (sel: TreeSelection) => void;
+  /** A space, component or epic was chosen: the screen may want to follow. The card is the one that matched a typed key. */
+  onPicked: (sel: TreeSelection, card?: TreeChild) => void;
   onReadMe: () => void;
   /** Rows the screen draws itself (folders and lists saved before spaces), under the tree. */
   legacy?: ReactNode;
+  /** What the server counted for each starred view; a view not in it is still being asked. */
+  counts?: Record<string, ViewCount>;
+  /** "Sync from Jira filter" on a row: read the filter's name and search again. */
+  onSyncFrom?: (id: string) => void;
+  /** "Sync to Jira filter", after the row's own confirm line: write the search in Jira. */
+  onSyncTo?: (id: string) => void;
+  /** What the filter sync last said, in one quiet line under the switch. */
+  note?: string;
+  /** "Sync with Jira filters": whether the favourites are listed, and the switch for it. */
+  sync?: { on: boolean; set: (on: boolean) => void };
 }
 
 const Tile = ({ children, tone, dashed, dim }: { children: ReactNode; tone?: string; dashed?: boolean; dim?: boolean }) => (
@@ -70,17 +94,63 @@ const count = (n: ReactNode, style?: CSSProperties) => (
   <span className="tabular-nums shrink-0" style={{ fontSize: 10.5, color: "var(--text4)", ...style }}>{n}</span>
 );
 
+/** A section caption; the optional hint sits at the right end (the keys that reach the section). */
+function SideCap({ label, hint, first }: { label: string; hint?: ReactNode; first?: boolean }) {
+  return <div role="presentation" className="agx-jsb-cap flex items-center" data-first={first ? "" : undefined}><span className="truncate min-w-0 flex-1">{label}</span>{hint}</div>;
+}
+
+/** Done over total as a ring; an empty track where the space has not been counted. */
+function Ring({ done, total, tone, letter }: { done?: number | undefined; total?: number | undefined; tone: string; letter: string }) {
+  const R = 8, L = 2 * Math.PI * R, f = total ? Math.min(1, (done ?? 0) / total) : 0;
+  return (
+    <svg aria-hidden viewBox="0 0 24 24" width={ICON.lg} height={ICON.lg} className="shrink-0 agx-jsb-ring" data-known={total ? "" : undefined}>
+      <circle cx={12} cy={12} r={R} fill="none" stroke="color-mix(in srgb, var(--text) 14%, transparent)" strokeWidth={3} />
+      {f > 0 && <circle cx={12} cy={12} r={R} fill="none" stroke={tone} strokeWidth={3} strokeLinecap="round" strokeDasharray={`${f * L} ${L}`} transform="rotate(-90 12 12)" />}
+      <text x={12} y={12} textAnchor="middle" dominantBaseline="central" fill="var(--text3)" style={{ font: "700 9px/1 var(--font-mono, ui-monospace, monospace)" }}>{letter}</text>
+    </svg>
+  );
+}
+
 export function JiraTree({ api, out, onCloseLegacyMenu }: { api: JiraTreeApi; out: TreeOutside; onCloseLegacyMenu?: () => void }) {
   const [menu, setMenu] = useState<{ row: TreeRow; x: number; y: number } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
+  /* "Sync to Jira filter" writes to the site, so the row asks first and names the change. */
+  const [confirmTo, setConfirmTo] = useState<{ id: string; label: string } | null>(null);
   const [focus, setFocus] = useState<string | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const p = api.prefs;
+  /* A closed space shows its ring too: its tree is read once in the background, one space at a time. */
+  useEffect(() => {
+    const k = nextRingRead(api.spaces, api.reads);
+    if (k) void api.read(k);
+  }, [api.spaces, api.reads]); // eslint-disable-line react-hooks/exhaustive-deps
+  const key = looksLikeCardKey(out.q);
+  const [found, setFound] = useState<{ asked: string; parent: string; card: TreeChild } | null>(null);
+  const askedFind = useRef("");
+  const children = found && found.asked === key
+    ? { ...out.children, [found.parent.toUpperCase()]: [found.card, ...(out.children?.[found.parent.toUpperCase()] ?? [])] }
+    : out.children;
   const rows = useMemo(() => buildRows({
     spaces: api.spaces, reads: api.reads, prefs: p, q: out.q, views: out.views.map((v) => ({ ...v, label: p.names[v.id] ?? v.label })),
-    meCount: out.meCount, looked: out.looked, sprint: out.sprint, listed: api.listed, listError: api.listError,
-  }), [api.spaces, api.reads, p, out.q, out.views, out.meCount, out.looked, out.sprint, api.listed, api.listError]);
-  const stops = useMemo(() => focusable(rows), [rows]);
+    meCount: out.meCount, looked: out.looked, sprint: out.sprint, listed: api.listed, listError: api.listError, children,
+  }), [api.spaces, api.reads, p, out.q, out.views, out.meCount, out.looked, out.sprint, api.listed, api.listError, children]);
+
+  /* A key that names no loaded child is read once through the server: its parent epic is then what the filter draws. */
+  useEffect(() => {
+    if (!key || out.connected === false) return;
+    if (rows.some((r) => r.kind === "epic" || r.kind === "component" || r.kind === "view")) return;
+    if (askedFind.current === key) return;
+    askedFind.current = key;
+    void jiraApi.jiraFind(key).then((r) => {
+      const t = r.ok ? r.task : undefined;
+      if (askedFind.current !== key || !t?.parent?.key) return;
+      setFound({ asked: key, parent: t.parent.key, card: { key: t.customId ?? key, id: t.id } });
+    }).catch(() => { /* a card the site could not name leaves the filter as it was */ });
+  }, [key, out.connected, rows]);
+
+  const sec = useMemo(() => sectionRows(rows), [rows]);
+  const ordered = useMemo(() => [...sec.views, ...sec.team, ...sec.me, ...sec.spaces, ...sec.more], [sec]);
+  const stops = useMemo(() => focusable(ordered), [ordered]);
   const stop = stops.some((r) => r.key === focus) ? focus : (stops.find((r) => out.lit.me ? r.kind === "me" : rowSelected(r, api.selection)) ?? stops[0])?.key ?? null;
   const site = api.site;
 
@@ -98,12 +168,25 @@ export function JiraTree({ api, out, onCloseLegacyMenu }: { api: JiraTreeApi; ou
     const t = targetOf(r);
     if (!t) return;
     api.select(t);
-    if (r.kind === "space" && !r.open) api.toggle(keyS(r.space.key), true);
+    if (r.kind === "space" && !r.open) api.toggle(keyS(r.space.key), true, r.space.key);
     if (r.kind === "component" && !r.open && r.hasKids) api.toggle(r.key, true);
-    out.onPicked(t);
+    out.onPicked(t, r.kind === "epic" ? r.card : undefined);
   };
+  /* `g` then 1-9 opens the Nth starred row. Captured on the window because the board's own bare-letter keys stop `g`; a field being typed in never counts. */
+  const goto = useRef<{ pick: (d: string) => void; at: number }>({ pick: () => {}, at: 0 });
+  const goable = [...sec.views, ...sec.team];
+  goto.current.pick = (d) => { const r = starredAt(goable, d); if (r) choose(r); };
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      const step = gotoStep(e, goto.current.at, Date.now(), jiraViewActiveNow());
+      goto.current.at = step.at;
+      if (step.digit && starredAt([...sec.views, ...sec.team], step.digit)) { e.preventDefault(); e.stopPropagation(); goto.current.pick(step.digit); }
+    };
+    window.addEventListener("keydown", h, true);
+    return () => window.removeEventListener("keydown", h, true);
+  }, [sec.views, sec.team]);
   const toggleRow = (r: TreeRow, to?: boolean) => {
-    if (r.kind === "space") api.toggle(r.key, to ?? !r.open);
+    if (r.kind === "space") api.toggle(r.key, to ?? !r.open, r.space.key);
     else if (r.kind === "component" && r.hasKids) api.toggle(r.key, to ?? !r.open);
   };
 
@@ -198,6 +281,8 @@ export function JiraTree({ api, out, onCloseLegacyMenu }: { api: JiraTreeApi; ou
         break;
       case "hideme": api.setPrefs((x) => ({ ...x, hideMe: true })); break;
       case "rename": if (r.kind === "view") setRenaming(r.view.id); break;
+      case "syncfrom": if (r.kind === "view") out.onSyncFrom?.(r.view.id); break;
+      case "syncto": if (r.kind === "view") setConfirmTo({ id: r.view.id, label: r.view.label }); break;
       case "edit": break;
     }
   };
@@ -266,27 +351,27 @@ export function JiraTree({ api, out, onCloseLegacyMenu }: { api: JiraTreeApi; ou
         return <div key={r.key} role="presentation" className="flex items-center" style={{ height: 22, padding: "0 8px", marginTop: 12, fontSize: 10.5, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--text4)" }}>{r.label}</div>;
       case "components":
         return (
-          <div key={r.key} role="presentation" className="flex items-center" style={{ height: 22, gap: 6, marginTop: 8, padding: "0 8px 0 24px", fontSize: 10.5, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--text4)" }}>
-            <span style={{ letterSpacing: 0, textTransform: "none" }}>View by</span>
-            <div role="radiogroup" aria-label="View this space by" className="flex items-center" style={{ height: 20, padding: 2, gap: 2, borderRadius: 8, background: "var(--surface-inset, var(--bg2))" }}>
+          <div key={r.key} role="presentation" className="flex flex-wrap items-center" style={{ minHeight: 22, gap: 6, marginTop: 8, padding: "0 8px 0 24px", fontSize: 10.5, letterSpacing: "0.04em", textTransform: "uppercase", color: "var(--text4)" }}>
+            <span className="shrink-0 whitespace-nowrap" style={{ letterSpacing: 0, textTransform: "none" }}>View by</span>
+            <div role="radiogroup" aria-label="View this space by" className="shrink-0 flex items-center" style={{ height: 20, padding: 2, gap: 2, borderRadius: 8, background: "var(--surface-inset, var(--bg2))" }}>
               {SHAPES.map((x) => {
                 const on = r.shape === x.id;
                 return (
                   <button key={x.id} role="radio" aria-checked={on} onClick={() => api.setShape(r.space, x.id)} data-tip={x.sub}
-                    className="agx-btn" style={{ height: 16, padding: "0 8px", borderRadius: 6, fontSize: 10.5, letterSpacing: 0, textTransform: "none", color: on ? "var(--text1, var(--text))" : "var(--text3)", background: on ? "var(--surface-raised, var(--bg))" : "transparent", fontWeight: on ? 600 : 400 }}>
+                    className="agx-btn whitespace-nowrap" style={{ height: 16, padding: "0 8px", borderRadius: 6, fontSize: 10.5, letterSpacing: 0, textTransform: "none", color: on ? "var(--text1, var(--text))" : "var(--text3)", background: on ? "var(--surface-raised, var(--bg))" : "transparent", fontWeight: on ? 600 : 400 }}>
                     {x.label}
                   </button>
                 );
               })}
             </div>
-            <span className="flex-1" />
-            {r.hid > 0 && <span style={{ letterSpacing: 0, textTransform: "none" }}>{r.hid} empty hidden</span>}
+            <span className="flex-1" style={{ minWidth: 0 }} />
+            {r.hid > 0 && <span className="shrink-0 whitespace-nowrap" style={{ letterSpacing: 0, textTransform: "none" }}>{r.hid} empty hidden</span>}
             {r.canHide && (
               <button onClick={() => api.flag("hideEmpty", r.space, !r.hideEmpty)} aria-pressed={r.hideEmpty}
                 aria-label={r.hideEmpty ? "Show components with no issues" : "Hide components with no issues"}
                 data-tip={r.hideEmpty ? "Show components with no issues" : "Hide components with no issues"}
                 className="agx-btn shrink-0 grid place-items-center"
-                style={{ width: 20, height: 20, borderRadius: 6, color: r.hideEmpty ? "var(--info-ink)" : "var(--text3)", background: r.hideEmpty ? "color-mix(in srgb, var(--info) 12%, transparent)" : undefined }}>
+                style={{ width: MIN_BOX, height: MIN_BOX, borderRadius: 6, color: r.hideEmpty ? "var(--info-ink)" : "var(--text3)", background: r.hideEmpty ? "color-mix(in srgb, var(--info) 12%, transparent)" : undefined }}>
                 {r.hideEmpty ? <EyeOffIcon size={ICON.xs} /> : <EyeIcon size={ICON.xs} />}
               </button>
             )}
@@ -310,19 +395,24 @@ export function JiraTree({ api, out, onCloseLegacyMenu }: { api: JiraTreeApi; ou
         </>, { label: r.label, tip: "The active sprint of the open board" });
       case "space": {
         const tone = toneOf(r.space.key);
+        const pg = spaceProgress(api.reads[r.space.key]);
+        const sub = [r.space.key, pg && pg.total ? `${pg.done}/${pg.total}` : null, pg ? `${pg.components} component${pg.components === 1 ? "" : "s"}` : null].filter(Boolean).join(" · ");
         return shell(r, <>
-          {twisty(r, r.open)}<Tile tone={tone}>{r.space.key[0]}</Tile>
-          <span className="truncate min-w-0 flex-1" data-tip={tipAttr(r.space.name)} style={{ fontWeight: 600, color: "var(--text)" }}>{r.space.name}</span>
+          {twisty(r, r.open)}<Ring done={pg?.done} total={pg?.total} tone={tone} letter={r.space.key[0] ?? "?"} />
+          <span className="min-w-0 flex-1 flex flex-col" style={{ gap: 2 }}>
+            <span className="truncate" data-tip={tipAttr(r.space.name)} style={{ fontWeight: 600, color: "var(--text)", lineHeight: 1.3 }}>{hit(r.space.name, out.q)}</span>
+            <span className="truncate tabular-nums" style={{ fontSize: 10.5, color: "var(--text3)", lineHeight: 1.3 }}>{sub}</span>
+          </span>
           {r.error
-            ? <span className="shrink-0 tabular-nums" data-tip={tipAttr(r.throttled ? "Jira is slowing us down. Showing the last read." : "Could not read this space")} style={{ fontSize: 10.5, color: "var(--error-ink)" }}>!</span>
+            ? <span className="shrink-0 tabular-nums" data-tip={tipAttr(r.throttled ? "Jira is slowing us down. Showing the last read." : r.error)} style={{ fontSize: 10.5, color: "var(--error-ink)" }}>!</span>
             : r.count != null && count(r.count)}
-        </>, { label: `${r.space.name}, ${r.space.key}`, expanded: r.open, busy: r.loading });
+        </>, { h: EPIC_H, label: `${r.space.name}, ${r.space.key}`, expanded: r.open, busy: r.loading });
       }
       case "component":
         return shell(r, <>
           {twisty(r, r.hasKids ? r.open : undefined)}
           <Tile dashed={r.none} dim={r.empty && !r.none}><BoxIcon size={ICON.xs} /></Tile>
-          <span className="truncate min-w-0 flex-1" data-tip={tipAttr(r.none ? "Issues with no component" : r.name)} style={{ opacity: r.empty && !r.none ? 0.55 : undefined }}>{r.name}</span>
+          <span className="truncate min-w-0 flex-1" data-tip={tipAttr(r.none ? "Issues with no component" : r.name)} style={{ opacity: r.empty && !r.none ? 0.55 : undefined }}>{hit(r.name, out.q)}</span>
           {count(r.issues, { opacity: r.empty && !r.none ? 0.55 : undefined })}
         </>, { label: `${r.name}, component`, expanded: r.hasKids ? r.open : undefined });
       case "epic": {
@@ -330,23 +420,23 @@ export function JiraTree({ api, out, onCloseLegacyMenu }: { api: JiraTreeApi; ou
         const tone = toneOf(r.epic.key);
         const tip = epicTip(r.epic, r.also);
         return shell(r, <>
-          {/* The lilac ring is the shared mark: this epic also sits under another component. */}
-          <span aria-hidden className="shrink-0" style={{ width: 8, height: 8, borderRadius: 999, background: tone, boxShadow: r.shared ? "0 0 0 2px var(--surface-nav), 0 0 0 3.5px var(--merged)" : undefined, marginLeft: 8 }} />
+          {/* As the mockup draws an epic: its progress as a ring in the epic's colour, the key and done/total under the name.
+              The lilac outline is the shared mark: this epic also sits under another component. */}
+          <span className="shrink-0 inline-flex rounded-full" style={{ marginLeft: 4, boxShadow: r.shared ? "0 0 0 1.5px var(--merged)" : undefined, opacity: r.dim ? 0.6 : undefined }}>
+            <Ring done={r.epic.done} total={r.epic.total} tone={tone} letter="" />
+          </span>
           <span className="min-w-0 flex-1 flex flex-col" style={{ gap: 2, opacity: r.dim ? 0.6 : undefined }}>
-            <span className="truncate" style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", lineHeight: 1.3 }}>{r.epic.summary}</span>
-            <span className="flex items-center" style={{ gap: 8, fontSize: 10.5, color: "var(--text3)", lineHeight: 1.3 }}>
-              <span className="tabular-nums">{r.epic.key}</span>
-              <span aria-hidden className="shrink-0 overflow-hidden" style={{ width: 48, height: 4, borderRadius: 2, background: pr.zero ? undefined : "color-mix(in srgb, var(--text) 14%, transparent)", boxShadow: pr.zero ? "inset 0 0 0 1px var(--border)" : undefined }}>
-                <i className="block h-full" style={{ width: `${pr.pct}%`, background: "var(--success)" }} />
-              </span>
-              <span className="tabular-nums">{pr.text}</span>
+            <span className="truncate" style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", lineHeight: 1.3 }}>{hit(r.epic.summary, out.q)}</span>
+            <span className="truncate min-w-0" style={{ fontSize: 10.5, color: "var(--text3)", lineHeight: 1.3 }}>
+              <span className="tabular-nums">{r.epic.key} · {pr.text}</span>{r.hint ? <span style={{ color: "var(--text4)" }}> · {r.hint}</span> : null}
             </span>
           </span>
-          {/* The assignee's face at the right end, 18 px; the row's own tip names both people. A muted ring where nobody holds it. */}
-          <span className="shrink-0 inline-flex" style={{ marginRight: 8, opacity: r.dim ? 0.6 : undefined }} data-epic-person="assignee">
-            {r.epic.assignee ? <Face m={{ name: r.epic.assignee.name, avatar: r.epic.assignee.avatar }} />
-              : <span aria-hidden className="shrink-0" style={{ width: ICON.lg, height: ICON.lg, borderRadius: 999, boxShadow: "inset 0 0 0 1px var(--border)", opacity: 0.6 }} />}
-          </span>
+          {/* The assignee's face at the right end; nothing where nobody holds it (an empty ring per row was noise). */}
+          {r.epic.assignee && (
+            <span className="shrink-0 inline-flex" style={{ marginRight: 8, opacity: r.dim ? 0.6 : undefined }} data-epic-person="assignee">
+              <Face m={{ name: r.epic.assignee.name, avatar: r.epic.assignee.avatar }} />
+            </span>
+          )}
         </>, { h: EPIC_H, tip, label: `${r.epic.key} ${r.epic.summary}, ${pr.text}, ${r.epic.assignee?.name ?? "unassigned"}` });
       }
       case "noepic":
@@ -376,13 +466,21 @@ export function JiraTree({ api, out, onCloseLegacyMenu }: { api: JiraTreeApi; ou
             ))}
           </div>
         );
-      case "view":
+      case "view": {
+        const c = out.counts?.[r.view.id];
+        const jql = viewJql(r.view);
         return shell(r, <>
-          {twisty(r, undefined)}
-          {r.view.kind === "board" ? <ListIcon size={ICON.sm} className="shrink-0" /> : <SearchIcon size={ICON.sm} className="shrink-0" />}
-          {renaming === r.view.id ? rename(r.view) : <span className="truncate min-w-0 flex-1" data-tip={tipAttr(r.view.label)}>{r.view.label}</span>}
-          {r.view.count != null && count(r.view.count)}
-        </>, { label: r.view.label });
+          <span aria-hidden className="shrink-0 grid place-items-center" style={{ width: 16, height: 16, color: "var(--jira-accent, var(--primary))" }}><StarIcon size={ICON.sm} filled /></span>
+          {renaming === r.view.id ? rename(r.view) : (
+            <span className="min-w-0 flex-1 relative" style={{ height: 16 }}>
+              <span className="truncate block absolute inset-0 agx-jsb-name" data-tip={tipAttr(r.view.label)}>{hit(r.view.label, out.q)}</span>
+              {jql && <span className="truncate block absolute inset-0 agx-jsb-jql" data-tip={tipAttr(jql)}>{jql}</span>}
+            </span>
+          )}
+          {r.view.kind === "filter" && <span className="agx-jsb-tag shrink-0" data-tip="Saved as a filter on the Jira site">Jira</span>}
+          <span className="agx-jsb-count tabular-nums shrink-0" data-count={c && c !== "err" ? (c.stale ? "stale" : c.more ? "more" : "ok") : "none"} aria-label={`${countLabel(c)} cards`}>{countLabel(c)}</span>
+        </>, { label: r.view.label, lv: 0 });
+      }
     }
   };
 
@@ -393,8 +491,28 @@ export function JiraTree({ api, out, onCloseLegacyMenu }: { api: JiraTreeApi; ou
   return (
     <>
       <div ref={root} role="tree" aria-label="Jira spaces" onKeyDown={onKey} style={{ padding: "8px 8px 16px" }}>
-        {rows.map((r) => <Fragment key={r.key}>{draw(r)}</Fragment>)}
-        {rows.length === 0 && out.q.trim() !== "" && <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text3)" }}>Nothing matches “{out.q.trim()}”.</div>}
+        <SideCap label="Starred filters" hint={<><kbd className="agx-jsb-kbd">g</kbd><kbd className="agx-jsb-kbd">1-9</kbd></>} first />
+        {sec.views.map((r) => <Fragment key={r.key}>{draw(r)}</Fragment>)}
+        {sec.views.length === 0 && out.q.trim() === "" && <div role="status" style={{ padding: "4px 8px", fontSize: 11, color: "var(--text3)" }}>No saved boards or filters yet.</div>}
+        {/* "Sync with Jira filters" is a setting, not a row: it lives in Settings > Jira (jira.syncFavourites). */}
+        {out.note && <div role="status" className="agx-jsb-note" style={{ padding: "2px 12px", fontSize: 11, color: "var(--text3)" }}>{out.note}</div>}
+        {confirmTo && (
+          <div role="alertdialog" aria-label="Write to Jira" className="flex items-center" style={{ gap: 6, padding: "4px 12px", fontSize: 11, color: "var(--text2)" }}>
+            <span className="min-w-0 flex-1">Replace the search of “{confirmTo.label}” in Jira with the one in the box?</span>
+            <button type="button" className="agx-btn px-2 rounded-md" style={{ minHeight: HIT }} onClick={() => { out.onSyncTo?.(confirmTo.id); setConfirmTo(null); }}>Replace</button>
+            <button type="button" className="agx-btn px-2 rounded-md" style={{ minHeight: HIT }} onClick={() => setConfirmTo(null)}>Cancel</button>
+          </div>
+        )}
+        {sec.team.length > 0 && <>
+          <SideCap label="Team" />
+          {sec.team.map((r) => <Fragment key={r.key}>{draw(r)}</Fragment>)}
+        </>}
+        {sec.me.map((r) => <Fragment key={r.key}>{draw(r)}</Fragment>)}
+        {sec.spaces.length > 0 && <SideCap label={site ? `Spaces · ${site}` : "Spaces"} />}
+        {sec.spaces.map((r) => <Fragment key={r.key}>{draw(r)}</Fragment>)}
+        {ordered.length === 0 && out.q.trim() !== "" && <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text3)" }}>Nothing matches “{out.q.trim()}”.</div>}
+        {(sec.more.length > 0 || out.legacy) && <SideCap label="More" />}
+        {sec.more.map((r) => <Fragment key={r.key}>{draw(r)}</Fragment>)}
         {out.legacy}
       </div>
       {menu && menuView && (

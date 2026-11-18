@@ -13,7 +13,7 @@
  * A web link opens in the app when it is something the app shows (a pull
  * request, a card) and in the browser otherwise.
  */
-import { useState, type MouseEvent, type ReactNode } from "react";
+import { useState, type MouseEvent, type ReactNode, useSyncExternalStore } from "react";
 import { followLink } from "../../lib/linkRouter.ts";
 import { ICON } from "../../lib/iconSize.ts";
 import { openCard } from "../../lib/openCard.ts";
@@ -21,6 +21,8 @@ import { prioLook, Flag } from "../../lib/priority.tsx";
 import type { CardLinked, CardWebLink, ProviderTask } from "../../../../shared/providers.ts";
 import { LINE } from "../workspace/Chrome.tsx";
 import { StateChip } from "./DockParts.tsx";
+import { tipAttr } from "../../lib/tip.ts";
+import { fleetNow, onFleet, workerFor } from "../../lib/jiraCardWork.ts";
 
 const KEY = "agx.jira.sectionsShut";
 
@@ -71,7 +73,7 @@ export function TypeMark({ type, size }: { type?: string; size?: number }) {
   /* `size` is the dock's tile (20 on a row, 22 in the header): a ring and a rounder corner; without it the small mark every list uses. */
   const box = size ?? ICON.sm;
   return (
-    <span title={type} aria-label={type} className="shrink-0 inline-flex items-center justify-center text-[10px] font-semibold"
+    <span data-tip={tipAttr(type)} aria-label={type} className="shrink-0 inline-flex items-center justify-center text-[10px] font-semibold"
       style={{
         width: box, height: box, borderRadius: size ? (size > 20 ? 7 : 6) : 4, color: `var(${tone})`, background: `color-mix(in srgb, var(${tone}) ${size ? 14 : 16}%, transparent)`,
         ...(size ? { boxShadow: `inset 0 0 0 1px color-mix(in srgb, var(${tone}) 30%, transparent)` } : null),
@@ -87,18 +89,24 @@ export function TypeMark({ type, size }: { type?: string; size?: number }) {
  * for it (a sub-task's own status), and `after` sits at the row's end, outside the button that opens the card (a remove control):
  * a control inside a button is not a control.
  */
-export function CardRow({ t, title, tail, after, note, onMenu }: { t: ProviderTask; title?: string; tail?: ReactNode; after?: ReactNode; note?: string; onMenu?: (e: MouseEvent, t: ProviderTask) => void }) {
+export function CardRow({ t, title, tail, after, note, meta, onMenu, onOpen }: { t: ProviderTask; title?: string; tail?: ReactNode; after?: ReactNode; note?: string; /** Beside the state: the pull request, who has it. */ meta?: ReactNode; onMenu?: (e: MouseEvent, t: ProviderTask) => void; /** Opens in place; absent falls back to the cross-view jump. */ onOpen?: (t: ProviderTask) => void }) {
   const k = t.customId ?? t.id;
   const done = t.statusKind === "done";
+  /* An agent on this card, as the board and the list say it: a dot, amber when it waits on you. A string snapshot, so a
+     fleet tick re-renders only the rows whose agent changed. */
+  const agent = useSyncExternalStore(onFleet, () => workerFor(k, fleetNow())?.status ?? null, () => null);
   return (
     <div className={`agx-dk-mini${done ? " agx-dk-done" : ""}`} onContextMenu={onMenu ? (e) => { e.preventDefault(); onMenu(e, t); } : undefined}>
-      <button onClick={() => openCard(k, k, "jira")} title={title ?? `Open ${k}`}
+      <button onClick={() => (onOpen ? onOpen(t) : openCard(k, k, "jira"))} data-tip={tipAttr(title ?? `Open ${k}`)}
         className="agx-btn flex items-center min-w-0 flex-1 text-left self-stretch" style={{ gap: 8 }}>
         <TypeMark type={t.issueType} size={20} />
         <span className="agx-dk-k tabular-nums shrink-0">{k}</span>
         <span className="agx-dk-t flex-1 min-w-0 truncate">{t.title}</span>
-        {t.priority && <span className="shrink-0 inline-flex" title={prioLook(t.priority).label}><Flag c={prioLook(t.priority).c} on /></span>}
+        {agent && <span className="shrink-0" role="img" aria-label={agent === "waiting" ? "Its agent needs you" : `Its agent is ${agent}`}
+          style={{ width: 6, height: 6, borderRadius: 99, background: agent === "waiting" ? "var(--warning)" : agent === "working" ? "var(--success)" : agent === "stalled" || agent === "errored" ? "var(--error)" : "var(--text4)" }} />}
+        {t.priority && <span className="shrink-0 inline-flex" role="img" aria-label={prioLook(t.priority).label} data-tip={tipAttr(prioLook(t.priority).label)}><Flag c={prioLook(t.priority).c} on /></span>}
         {note && <span className="shrink-0 text-[10.5px]" style={{ color: "var(--text4)" }}>{note}</span>}
+        {meta}
         {tail === undefined && <StateChip status={t.status} color={t.statusColor || undefined} done={done} />}
       </button>
       {tail}
@@ -120,12 +128,12 @@ export function Progress({ rows }: { rows: ProviderTask[] }) {
 }
 
 /** Subtasks with Jira's progress line: how many are done of how many there are. */
-export function SubtasksSection({ rows, onMenu }: { rows: ProviderTask[]; onMenu?: (e: MouseEvent, t: ProviderTask) => void }) {
+export function SubtasksSection({ rows, onMenu, onOpenCard }: { rows: ProviderTask[]; onMenu?: (e: MouseEvent, t: ProviderTask) => void; onOpenCard?: (t: ProviderTask) => void }) {
   if (!rows.length) return null;
   const done = rows.filter((r) => r.statusKind === "done").length;
   return (
     <JiraSection id="subtasks" title="Subtasks" aside={`${done} of ${rows.length} done`} meter={<Progress rows={rows} />}>
-      <div className="agx-dk-stack">{rows.map((s) => <CardRow key={s.id} t={s} onMenu={onMenu} />)}</div>
+      <div className="agx-dk-stack">{rows.map((s) => <CardRow key={s.id} t={s} onMenu={onMenu} onOpen={onOpenCard} />)}</div>
     </JiraSection>
   );
 }
@@ -161,7 +169,7 @@ export function WebLinksSection({ links, error }: { links: CardWebLink[] | null;
       {error && <div className="text-[10.5px] mb-1" role="status" style={{ color: "var(--warning-ink)" }}>{error}</div>}
       <div className="flex flex-col">
         {links.map((l) => (
-          <button key={l.id} onClick={(e) => followLink(l.url, e)} title={l.url}
+          <button key={l.id} onClick={(e) => followLink(l.url, e)} data-tip={tipAttr({ name: l.url, mono: true })}
             className="agx-btn flex items-center gap-2 min-w-0 w-full text-left text-[11px] py-1.5" style={{ borderBottom: LINE }}>
             <span className="shrink-0 inline-flex items-center justify-center text-[9px] font-medium rounded"
               style={{ width: ICON.sm, height: ICON.sm, background: "var(--bg4)", color: "var(--text3)" }} aria-hidden>{(l.host[0] ?? "?").toUpperCase()}</span>

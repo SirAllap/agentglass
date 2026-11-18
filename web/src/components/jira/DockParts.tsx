@@ -2,6 +2,7 @@
  * The small parts of the card dock that more than one Jira file draws: the icon-only button with the app's tooltip, and the
  * state chip. Icon-only always means a `data-tip` (name, one sentence) and an `aria-label`, never a native title.
  */
+import { statusText } from "../StatusPill.tsx";
 import type { CSSProperties, MouseEvent, ReactNode } from "react";
 import { DoneIcon } from "../../lib/glyphIcons.tsx";
 import { dataInk } from "../../lib/contrast.ts";
@@ -58,7 +59,7 @@ export function stateStyle(color: string | undefined, done: boolean, h: number):
 
 /** What a status chip says: a tick before a finished one. */
 export function StateLabel({ status, done }: { status: string; done: boolean }) {
-  return <>{done && <DoneIcon size={ICON.xs} />}<span className="truncate">{status}</span></>;
+  return <>{done && <DoneIcon size={ICON.xs} />}<span className="truncate">{statusText(status)}</span></>;
 }
 
 export function StateChip({ status, color, done, h = 22 }: { status: string; color?: string; done: boolean; h?: number }) {

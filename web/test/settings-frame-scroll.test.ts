@@ -34,7 +34,7 @@ const PAGES = [
 
 /** Boxes inside a page that scroll on purpose: how many, and what they scroll. */
 const INNER_SCROLLERS: Array<{ file: string; count: number; why: string }> = [
-  { file: "components/SettingsModal.tsx", count: 2, why: "two project pickers, each capped at 220px, scroll their own list" },
+  { file: "components/SettingsModal.tsx", count: 1, why: "the project picker, capped at 220px, scrolls its own list" },
   { file: "components/orchestration/RuleForm.tsx", count: 1, why: "the rule sheet's body scrolls inside the dialog raised over the page" },
 ];
 
@@ -63,7 +63,7 @@ const cssScrollerRules = (css: string) =>
 /** Every rule in the frame's own stylesheet, selector and body. */
 const cssRules = (css: string) => [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ sel: m[1]!.trim(), body: m[2]! }));
 /** Rules that reach inside the frame, where a page is drawn. */
-const IN_FRAME = /\.(?:agx-settings|agx-toc|agx-ph|agx-scard|agx-sp|agx-sn)\b/;
+const IN_FRAME = /\.(?:agx-settings|agx-ph|agx-scard|agx-sp|agx-sn)\b/;
 /** Selectors only: the prose above a rule is not part of it. */
 const CALC_CSS = CSS.replace(/\/\*[\s\S]*?\*\//g, "");
 
@@ -96,7 +96,7 @@ describe("the settings frame owns the page's one scroll region", () => {
     expect(rule).toMatch(/scroll-padding-top: calc\(var\(--agx-pin-stack\) \+ var\(--agx-pin-gap\)\)/);
     // One offset: a card that carried its own would be counted twice.
     expect(CSS).not.toMatch(/scroll-margin-top/);
-    expect(read("components/SettingsToc.tsx")).toContain("scrollIntoView");
+    expect(read("components/settings/shell/PageRail.tsx")).toContain("scrollIntoView");
   });
 
   test("nothing scrolls inside a page: the frame's region is the only one", () => {
@@ -129,29 +129,20 @@ describe("the settings frame owns the page's one scroll region", () => {
     expect(rule).not.toContain("backdrop-filter");
   });
 
-  test("the sticky index band is opaque, and the rail drops the fill it does not need", () => {
-    const base = CSS.match(/\.agx-toc\s*\{([^}]*)\}/)?.[1] ?? "";
-    expect(base).toContain("background: var(--surface-page)");
-    const railBlock = CSS.slice(CSS.indexOf("@media (min-width: 1760px)"));
-    const rail = railBlock.match(/\.agx-settings-page > \.agx-toc\s*\{([^}]*)\}/)?.[1] ?? "";
-    expect(rail).toContain("background: none");
-    expect(rail).toContain("top: calc(var(--agx-pin-top, 0px) + 16px)");
-  });
-
   test("the suppressed ring is suppressed on the element the frame focuses", () => {
     expect(CSS).toMatch(/\.agx-settings-scroll:focus\s*\{[^}]*outline:\s*none/);
     expect(CSS).not.toContain(".agx-settings-main:focus");
   });
 
-  test("the flight-plan chip rides in the scope bar's one row, not above it", () => {
+  test("the flight-plan chip rides in the scope strip's one row, not above it", () => {
     const pane = read("components/orchestration/OrchestrationPane.tsx");
-    const bar = pane.indexOf("<ScopeBar");
+    const bar = pane.indexOf("<ScopeControl");
     expect(bar).toBeGreaterThan(-1);
     // Handed to the bar, so it shares the bar's row; drawn beside the bar it was
-    // a second pinned row.
-    expect(pane.slice(bar, pane.indexOf("/>", bar))).toContain("lead={p.lead}");
+    // a second pinned row. It is handed the scope on screen: the line is about that scope.
+    expect(pane.slice(pane.indexOf("const scopeStrip"), pane.indexOf("const scopeStrip") + 400)).toContain("p.lead ? p.lead(root) : undefined");
     expect(pane).not.toMatch(/^\s*\{p\.lead\}/m);
-    expect(MODAL).toContain("lead={<FlightPlanLink");
+    expect(MODAL).toContain("lead={(root) => <FlightPlanLink root={root}");
   });
 });
 
@@ -197,8 +188,6 @@ describe("the Flow page fills the frame's one region instead of a viewport calcu
   test("the page wrapper and its content chain pass the frame's measured height down", () => {
     const page = ruleBody(ORCH, ".agx-settings-page:has(.agx-orch.agx-flow)");
     expect(page).toContain("height: 100%");
-    // Under 1760px the band takes its own row and the page takes the rest.
-    expect(ORCH).toMatch(/:has\(> \.agx-toc\) \{ grid-template-rows: auto minmax\(0, 1fr\); \}/);
     expect(ruleBody(ORCH, ".agx-settings-page:has(.agx-orch.agx-flow) > .agx-settings-content")).toContain("min-height: 0");
     expect(ORCH).toMatch(/\.agx-settings-col\[data-stable\] \{[^}]*flex: 1 1 0/);
   });

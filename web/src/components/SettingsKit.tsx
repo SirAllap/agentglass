@@ -154,11 +154,12 @@ export function SaveBar({ dirty, canSave = true, busy, onSave, onCancel, note, s
   );
 }
 
-export function StatusBadge({ tone, children }: { tone: StatusTone; children: ReactNode }) {
+/** `icon` takes the dot's place where the kind of state matters, not only that there is one. */
+export function StatusBadge({ tone, icon, children }: { tone: StatusTone; icon?: ReactNode; children: ReactNode }) {
   // The spinner is the house `.agx-spin`; it breathes instead of turning under reduced motion.
   return tone === "saving"
     ? <span className="agx-badge" data-tone="info"><span className="agx-spin" aria-hidden />{children}</span>
-    : <span className="agx-badge" data-tone={tone}><i aria-hidden />{children}</span>;
+    : <span className="agx-badge" data-tone={tone}>{icon ?? <i aria-hidden />}{children}</span>;
 }
 
 /**

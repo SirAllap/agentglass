@@ -42,7 +42,7 @@ beforeAll(async () => {
   usage = await import("../src/lib/usageStore.ts");
 });
 afterAll(() => { Object.assign(api.api as object, saved); });
-beforeEach(() => { reads = 0; timers.length = 0; });
+beforeEach(() => { reads = 0; timers.length = 0; store.__resetAccounts(); usage.__resetUsageStore(); });
 
 describe("refreshAccounts", () => {
   it("keeps what the server said and tells listeners", async () => {

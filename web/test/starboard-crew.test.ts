@@ -1,5 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { crewState, QUIET_AFTER_MS, ageWord, baseName, orreryLayout, RINGS, compareCrew } from "../src/lib/starboardCrew.ts";
+import { crewDetailRows, crewReminderInput, remindDisabled } from "../src/lib/crewDetail.ts";
 import type { LanternRow } from "../src/components/LanternView.tsx";
 
 const NOW = 1_000_000_000;
@@ -82,4 +83,24 @@ describe("the Crew list's order", () => {
     expect([row("done", 5, 1), row("ask", 1, 1), row("working", 1, 1)].sort(compareCrew).map((r) => r.state)).toEqual(["ask", "working", "done"]);
     expect([row("done", 5, 1), row("done", 5, 3)].sort(compareCrew).map((r) => r.cost)).toEqual([3, 1]);
   });
+});
+
+describe("crew detail", () => {
+  test("the detail rows say the state and skip what the board does not know", () => {
+    const rows = crewDetailRows(row({ project: "/code/orbit" }), "working", NOW - 5000, NOW);
+    expect(rows.find((x) => x.label === "State")?.value).toBe("working");
+    expect(rows.find((x) => x.label === "Project")?.value).toBe("orbit");
+    expect(rows.some((x) => x.label === "Branch" || x.label === "Model" || x.label === "Activity")).toBe(false);
+  });
+  test("the reminder line carries no Taskwarrior syntax from the name", () => {
+    expect(crewReminderInput(row({ name: "orbit-api" }))).toBe("Check on orbit-api +crew");
+    expect(crewReminderInput(row({ name: "x +urgent project:evil/a" }))).toBe("Check on x urgent project evil a +crew");
+    expect(crewReminderInput(row({ name: "+:" }))).toBe("Check on session +crew");
+  });
+});
+
+test("the reminder button is free again after a failure, and blocked only while busy or done", () => {
+  expect(remindDisabled("idle")).toBe(false);
+  expect(remindDisabled("busy")).toBe(true);
+  expect(remindDisabled("done")).toBe(true);
 });

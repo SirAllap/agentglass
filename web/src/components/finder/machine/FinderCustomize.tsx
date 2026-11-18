@@ -19,7 +19,7 @@ export function CustomizeDialog({ paths, names, isDir, onClose }: { paths: reado
   const kind = paths.length > 1 ? "Items" : isDir ? "Folder" : "File";
   const one = names.length === 1 ? names[0]! : `${names.length} items`;
   const none = !style.color && !style.icon && !style.emoji;
-  const swatch = (on: boolean) => ({ width: 26, height: 26, border: EDGE, boxShadow: on ? "0 0 0 2px var(--primary)" : undefined });
+  const swatch = (on: boolean) => ({ width: HIT, height: HIT, border: EDGE, boxShadow: on ? "0 0 0 2px var(--primary)" : undefined });
   return (
     <Sheet label={`Customize ${kind}`} onClose={onClose} width={480}>
       <DialogHead icon={<StrataIcon set="act" name="palette" size={ICON.md} />} title={`Customize ${kind}`} sub={one} onClose={onClose} />

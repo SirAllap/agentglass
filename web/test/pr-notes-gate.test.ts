@@ -6,8 +6,8 @@
  */
 import { beforeEach, describe, expect, it } from "bun:test";
 import { globalStubs } from "./stubGlobal";
-import { board, fileInLane } from "../src/lib/prLanes.ts";
-import { blockingOpen, chipFor, countsLine, gateFacts, gateReason, notReadyChip } from "../src/lib/prNotesChip.ts";
+import { board, fileInLane } from "../../shared/prLanes.ts";
+import { blockingOpen, chipFor, countsLine, gateFacts, gateReason, notReadyChip } from "../../shared/prNotesChip.ts";
 import type { PrSummary } from "../../shared/types.ts";
 import type { PrNotesSummary } from "../../shared/pluginUi.ts";
 

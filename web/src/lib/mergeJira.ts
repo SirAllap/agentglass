@@ -23,6 +23,8 @@ export interface JiraMergeCard {
   label: string;
   /** What the card store is keyed by, so the write's answer lands where the chip reads it. */
   query: string;
+  /** The pull request's repo: it names the Jira account every call here is made with. */
+  repo?: string;
   title: string;
   status: string;
   statusColor?: string;
@@ -69,9 +71,9 @@ export function movesOffered(card: Pick<JiraMergeCard, "options" | "step">): Sta
 export type JiraMergeLookup = { ok: true; card: JiraMergeCard } | { ok: false; why: string };
 
 /** Two reads in parallel and a third only when moving is allowed; none writes. */
-export async function lookUpJiraCard(ref: { label: string; query: string }): Promise<JiraMergeLookup> {
+export async function lookUpJiraCard(ref: { label: string; query: string; repo?: string }): Promise<JiraMergeLookup> {
   const [found, status, saved] = await Promise.all([
-    api.jiraFind(ref.query).catch(() => null),
+    api.jiraFind(ref.query, undefined, ref.repo).catch(() => null),
     api.jiraStatus().catch(() => null),
     api.jiraSteps().catch(() => null),
   ]);
@@ -82,12 +84,12 @@ export async function lookUpJiraCard(ref: { label: string; query: string }): Pro
   if (!task) return { ok: false, why: found?.error || "Jira could not find it" };
   const writes = status?.writes === true;
   const base = {
-    key: task.customId || task.id, label: ref.label, query: ref.query, title: task.title, status: task.status,
+    key: task.customId || task.id, label: ref.label, query: ref.query, ...(ref.repo ? { repo: ref.repo } : null), title: task.title, status: task.status,
     ...(task.statusColor ? { statusColor: task.statusColor } : null), updated: task.updated, writes,
   };
   const step = plan ? { step: { names: move?.names ?? [], ask: move?.ask === true, hasMove: !!move, extras: merge!.blocks.some((b) => b.type !== "move") } } : null;
   if (!writes) return { ok: true, card: { ...base, ...step, options: [] } };
-  const opts = await jiraStatusOptions(task);
+  const opts = await jiraStatusOptions(task, ref.repo);
   return { ok: true, card: opts.ok ? { ...base, ...step, options: opts.data ?? [] } : { ...base, ...step, options: [], cannot: opts.error } };
 }
 
@@ -97,7 +99,7 @@ export async function lookUpJiraCard(ref: { label: string; query: string }): Pro
  * the server resolves; "Leave it there" tells the step to skip its move and still run the rest.
  */
 export function jiraMergeMove(card: JiraMergeCard, pick: string) {
-  const base = { id: card.key, label: card.label, updated: card.updated, tracker: "jira" as const, query: card.query };
+  const base = { id: card.key, label: card.label, updated: card.updated, tracker: "jira" as const, query: card.query, ...(card.repo ? { repo: card.repo } : null) };
   if (pick === LEAVE_ALONE) {
     if (!card.step?.extras) return undefined;
     return { ...base, to: "", toLabel: card.status, step: true as const, stay: true as const };

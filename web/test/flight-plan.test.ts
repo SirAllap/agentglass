@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
-  canGo, capStop, goBlocker, groupPlans, historyRows, lineDiff, matches, needsYou, needsYouPlan, nogoReason, openCount, pollRows, splitPlan, stationStates, subline, titleFrom, toPlan, when,
+  canGo, capStop, goBlocker, groupPlans, historyRows, lineDiff, matches, needsYou, needsYouPlan, nogoReason, openCount, planSizes, pollRows, splitPlan, stationStates, subline, titleFrom, toPlan, when,
   type Finding, type Plan, type PlanDetail, type Run,
 } from "../src/lib/flightPlan.ts";
 
@@ -156,6 +156,13 @@ describe("what the plans list adds to a plan", () => {
     const none = toPlan({ id: "x", builder: "somewhere" });
     expect(none.builder).toBeUndefined();
     expect(none.reviewedVersion).toBeNull();
+  });
+});
+
+describe("a plan is only made at a size that is a plan", () => {
+  test("M and L are offered when the setting is ML, L alone when it is L", () => {
+    expect(planSizes("ML")).toEqual(["M", "L"]);
+    expect(planSizes("L")).toEqual(["L"]);
   });
 });
 

@@ -5,7 +5,8 @@
 import type { JiraBoardSprint, ListPlace, ListStatus, ProviderTask } from "../../../../../shared/providers.ts";
 import { looksLikeCardId } from "../../../lib/boardGroups.ts";
 import { fmtAgo } from "../../../lib/format.ts";
-import { sprintLine } from "../../../lib/jiraBoardContext.ts";
+import { dayOf, sprintLine } from "../../../lib/jiraBoardContext.ts";
+import { sprintShort } from "./tabsModel.ts";
 import { GROUP_BY, type GroupBy, type ThenBy } from "../../../lib/jiraAreas.ts";
 import { tipAttr, type TipSpec } from "../../../lib/tip.ts";
 import type { JiraListCounts, JiraListFilters } from "./model.ts";
@@ -25,6 +26,27 @@ export function sprintChip(s: JiraBoardSprint, now: number, totals?: { todo: num
   };
   return { name: s.name, left: line.left, late: line.late, tip: tipAttr(spec) };
 }
+
+/**
+ * The chip when the board has no active sprint, in the active chip's own style: the next planned sprint when there is
+ * one, else the board's kind (a kanban board has no sprints by design; a scrum board has not started its first). A board
+ * whose kind did not load reads as scrum. Never a bare "No active sprint".
+ */
+export function noSprintChip(next: { name: string; start: number } | undefined, boardType: string | undefined): { label: string; tip: string } {
+  if (next) {
+    const when = next.start ? ` starts ${dayOf(next.start)}` : " is planned";
+    return { label: `No sprint · ${sprintShort(next.name)}${when}`, tip: `No sprint is running now. ${next.name}${when}.` };
+  }
+  if ((boardType ?? "").toLowerCase() === "kanban") return { label: "Kanban · no sprints", tip: "A kanban board works without sprints." };
+  return { label: "No sprints yet", tip: "This board has not started its first sprint." };
+}
+
+/**
+ * Whether the "no sprint" chip is worth drawing. A cross-space view (Mine, Team) or an epic has no board of its own, so
+ * its missing sprint is not news: the chip there read "No sprints yet" over boards that have plenty. Only a board whose
+ * context loaded and is being looked at as a board says it.
+ */
+export const showNoSprintChip = (contextLoaded: boolean, inArea: boolean): boolean => contextLoaded && !inArea;
 
 /** "read 2m ago". Nothing before the first read. */
 export const readStamp = (at: number): string => (at ? `read ${fmtAgo(at) === "now" ? "just now" : `${fmtAgo(at)} ago`}` : "");
@@ -67,15 +89,26 @@ export function hitReason(t: ProviderTask, asked: string): "the card" | "mention
   return want && (key === want || key.endsWith(`-${want}`)) ? "the card" : "mentions it";
 }
 
-/** Group and Then, as the board offers them: Area only where the board has epics. */
-export function groupChoices(hasAreas: boolean): { value: GroupBy; label: string }[] {
-  return GROUP_BY.filter((g) => hasAreas || g.id !== "area").map((g) => ({ value: g.id, label: g.label }));
+/** Group and Then, as the board offers them: Area only where the board has epics, Project only on "Assigned to me", where the cards come from many, Agent everywhere. */
+export function groupChoices(hasAreas: boolean, assigned = false): { value: GroupBy; label: string }[] {
+  const out = GROUP_BY.filter((g) => hasAreas || g.id !== "area").map((g) => ({ value: g.id, label: g.label }));
+  // Agent reads the fleet, not Jira: every board can be split by where its cards stand with their agents.
+  const agent = { value: "agent" as const, label: "Agent" };
+  return assigned ? [...out, { value: "project" as const, label: "Project" }, agent] : [...out, agent];
 }
 export function thenChoices(by: GroupBy, hasAreas: boolean): { value: ThenBy; label: string }[] {
+  const area = hasAreas ? [{ value: "area" as const, label: "Area" }] : [];
   return by === "status"
-    ? [{ value: "none", label: "Nothing" }, ...(hasAreas ? [{ value: "area" as const, label: "Area" }] : [])]
+    ? [{ value: "none", label: "Nothing" }, ...area]
     : [{ value: "none", label: "Nothing" }, { value: "status", label: "Status" }];
 }
+/** The two outlines people ask for: every card by status, or by epic with the statuses inside each. */
+export const OUTLINES: readonly { id: "status" | "epic"; label: string; pick: Pick<JiraListFilters, "group" | "thenGroup"> }[] = [
+  { id: "status", label: "By status", pick: { group: "status", thenGroup: "none" } },
+  { id: "epic", label: "By epic, then status", pick: { group: "area", thenGroup: "status" } },
+];
+export const outlineOf = (f: Pick<JiraListFilters, "group" | "thenGroup">): "status" | "epic" | null =>
+  f.group === "status" && f.thenGroup === "none" ? "status" : f.group === "area" && f.thenGroup === "status" ? "epic" : null;
 /** Changing the first grouping resets the second: "Then" is a choice made against it. */
 export const withGroup = (by: GroupBy): Pick<JiraListFilters, "group" | "thenGroup"> => ({ group: by, thenGroup: "none" });
 

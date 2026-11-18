@@ -16,10 +16,10 @@ import { ICON } from "../lib/iconSize.ts";
 import { Button, Segmented } from "./workspace/Chrome.tsx";
 import { SettingsCard } from "./SettingsKit.tsx";
 import { PreviewCard, WithPreview } from "./settings/PreviewCard.tsx";
-import { AppearancePreview, LiveTabs, type LiveView } from "./settings/previews/index.ts";
+import { AppearancePreview } from "./settings/previews/index.ts";
 import { railItems } from "./settings/previews/MiniApp.tsx";
 import { loadRail, subscribeRail, SHIPPED_RAIL } from "./workspace/views.ts";
-import { ThemeIcon, SlidersIcon } from "./settingsNavIcons.tsx";
+import { ThemeIcon } from "./settingsNavIcons.tsx";
 
 /* Settings → Appearance.
  *
@@ -173,11 +173,10 @@ export function AppearancePane({ current, onChange, onAccent }: {
   const [, setTick] = useState(0);
   const followsSystem = reduceMotionChoice() === null;
 
-  const [view, setView] = useState<LiveView>("settings");
   const rail = useSyncExternalStore(subscribeRail, loadRail, () => SHIPPED_RAIL);
   return (
-    <WithPreview preview={<PreviewCard id="appearance" title="The real app" actions={<LiveTabs view={view} onView={setView} />}>
-      <AppearancePreview theme={current} accent={accent} density={density} fontPx={fontPx} translucent={translucent} view={view} rail={railItems(rail)} /></PreviewCard>}>
+    <WithPreview preview={<PreviewCard id="appearance" title="The real app">
+      <AppearancePreview theme={current} accent={accent} density={density} fontPx={fontPx} translucent={translucent} rail={railItems(rail)} /></PreviewCard>}>
       <SettingsCard title="Theme" icon={<ThemeIcon size={ICON.sm} />}>
         <SettingRow
           settingId="appearance.mode"
@@ -193,10 +192,6 @@ export function AppearancePane({ current, onChange, onAccent }: {
             options={[...(desk ? [{ id: "desktop" as ThemeMode, label: <DesktopMark source={desk.source} /> }] : []), ...MODES.map(({ m, label }) => ({ id: m, label }))]} />}
         />
         <PaletteRows current={current} onChange={choose} />
-      </SettingsCard>
-
-      <SettingsCard title="Accent" icon={<SlidersIcon size={ICON.sm} />}
-        desc={<>Laid over the theme's own colour. “Theme” means no override.</>}>
         {/* The first circle is the decision to follow the theme, drawn half
             dark and half light so it reads as "neither", and the seven after it
             are the colours to lay over. It replaces a switch beside them: a
@@ -204,7 +199,8 @@ export function AppearancePane({ current, onChange, onAccent }: {
             a circle that says "Theme" under the pointer says it in place. */}
         <SettingRow
           settingId="appearance.accent"
-          label="Colour" modified={!following}
+          label="Accent color" modified={!following}
+          detail={{ summary: "Details", body: <>Laid over the theme's own color. “Theme” means no override.</> }}
           hint={following
             ? <>Following {desk && mode === "desktop" ? <b style={{ color: "var(--text3)" }}>{desk.name}</b> : "your theme"}'s own primary</>
             : <>Laid over the theme's own primary</>}
@@ -223,7 +219,7 @@ export function AppearancePane({ current, onChange, onAccent }: {
         />
       </SettingsCard>
 
-      <SettingsCard title="Density & type" icon={<ThemeIcon size={ICON.sm} />}>
+      <SettingsCard title="Look" icon={<ThemeIcon size={ICON.sm} />}>
         <SettingRow
           settingId="appearance.density" label="Density" modified={density !== "comfortable"}
           hint="How much air rows and cards get."

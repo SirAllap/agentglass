@@ -37,7 +37,19 @@ describe("the rail in a window shorter than its buttons", () => {
 
   test("the rail is the scroller, and the cluster below the hairline is reachable through it", () => {
     expect(src).toContain("overflow-y-auto");
-    expect(src).toContain('className="shrink-0 flex flex-col gap-1"');
+    expect(src).toContain('className="shrink-0 flex flex-col gap-1 px-2 pb-2"');
+  });
+
+  test("the whole-slot trim is redone when the scroller resizes, not only the nav", () => {
+    expect(src).toContain("ro.observe(n);");
+    expect(src).toContain("ro.observe(el);");
+    expect(src).toContain("ro.disconnect()");
+  });
+
+  test("a window shorter than cluster + one slot scrolls the nav, so Settings stays reachable", () => {
+    expect(src).toMatch(/className="shrink-0 flex flex-col overflow-x-hidden overflow-y-auto agw-noscrollbar"/);
+    expect(src).not.toMatch(/className="shrink-0 flex flex-col overflow-hidden"/);
+    expect(src).toContain("minHeight: VIEW_SLOT + 8");
   });
 
   test("the rail keeps one width whether or not it can scroll", () => {

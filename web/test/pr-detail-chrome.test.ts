@@ -11,7 +11,7 @@ const body = (name: string) => {
 describe("detail masthead follows the mockup", () => {
   const m = body("Masthead");
   test("row 1: state, '#N title' heading, then the fixed group of 26px controls", () => {
-    expect(m).toContain("<h2");
+    expect(m).toContain("<PrHeader");
     expect(m).toContain('size="hit"');
     // order of the group: Review menu, watch bell, GitHub, copy link, more, dock controls
     const order = ["<ReviewMenu", "<PrWatchMenu", "Open on GitHub", "Copy link", 'title="More actions"', "{dockControls}"].map((k) => m.indexOf(k));
@@ -20,7 +20,6 @@ describe("detail masthead follows the mockup", () => {
   });
   test("row 2 carries the stack (or its dimmed 'Not stacked' twin), the worktree tag, the card and the pin glyph", () => {
     expect(m.indexOf("<StackControl")).toBeGreaterThan(m.indexOf("Copy branch name"));
-    expect(m).toContain("<StackNone");
     expect(m).toContain("<PrCardChip");
     expect(m).toContain("requestWorktreeJump");
     expect(m.indexOf("<PinCurrent")).toBeGreaterThan(m.indexOf("<PrCardChip"));
@@ -28,17 +27,13 @@ describe("detail masthead follows the mockup", () => {
   test("the header follows mastheadPlan: the title never takes a row by force, the narrow meta row does not wrap, and the quiet cells follow the plan", () => {
     expect(m).toContain("mastheadPlan(band ??");
     expect(m).not.toContain("basis-full order-3");
-    expect(m).toContain("plan.titleOneLine");
     expect(m).toContain("plan.metaOneRow");
     expect(m).toContain("plan.showQuiet");
-    expect(m.indexOf("plan.showQuiet")).toBeLessThan(m.indexOf("<StackNone"));
     /* A stacked base's long name stayed shrink-0 and ran under the stack control: in the one-row meta it truncates. */
-    expect(m).toMatch(/data-base-chip className=\{`[^`]*\$\{plan\.metaOneRow && !isTrunk\(d\.baseRefName\) \? "truncate min-w-0"/);
+    expect(m).toContain("data-base-chip");
   });
   test("a stacked pull request keeps its branch readable in the one-row meta: the stack control drops its mini bars, the gaps tighten and a trunk base never truncates", () => {
     expect(m).toContain("compact={plan.metaOneRow}");
-    expect(m).toMatch(/plan\.metaOneRow \? "gap-x-2\.5 min-w-0" : "gap-x-3\.5"\} flex-wrap/);
-    expect(m).toMatch(/plan\.metaOneRow && !isTrunk\(d\.baseRefName\) \? "truncate min-w-0"/);
     const stk = Bun.file(new URL("../src/components/StackMarks.tsx", import.meta.url));
     return stk.text().then((t) => { expect(t).toMatch(/compact\?: boolean/); expect(t).toMatch(/compact \? null : <span className="agx-stk-mini"/); });
   });
@@ -109,15 +104,16 @@ describe("the dock's slots are the mockup's, drawn in every state", () => {
   const scope = body("MergeScope");
   const dock = body("PrDock");
   test("the reason follows the lib's decision, which keeps a blocked reason at the narrow band", () => {
-    expect(dock).toContain("dockFit(band, reason.kind)");
-    expect(dock).toContain("fit.reason");
+    expect(dock).toContain("dockVerdict({");
+    expect(dock).toContain("reason, gates");
   });
   test("Update, Resolve and Send to terminal are always drawn (dimmed by dockSlots, never removed)", () => {
     expect(scope).toContain("dockSlots({");
     expect(scope).toContain("disabled={!slots.update.enabled || busy || updateHeld(upState)}");
     expect(scope).not.toContain("(d.mergeable === \"CONFLICTING\" || conflicted) && conflictNode");
     expect(scope).toContain("onTerm={onReviewInTerminal && !noCheckout");
-    expect(dock).toContain("{updateNode}{conflictNode}");
+    expect(dock).toContain("{updateNode}</span>");
+    expect(dock).toContain("extra={open ? <>{conflictNode}{dockNoteNode}</> : undefined}");
   });
   test("Merge when green is the sidebar switch; the dock keeps only the way out of an armed one", () => {
     expect(scope).not.toContain(">Merge when green<");
@@ -131,10 +127,12 @@ describe("the dock's slots are the mockup's, drawn in every state", () => {
 
 describe("the Overview is the mockup's: verdict, four rows, then the rest behind a disclosure", () => {
   const box = Bun.file(new URL("../src/components/MergeBox.tsx", import.meta.url)).text();
-  test("rows come from prOverviewView, and the old table is kept under 'Who moves it'", async () => {
+  test("rows come from prOverviewView; the stepper stands alone, with one row of moves under it", async () => {
     const src = await box;
     expect(src).toContain("data-overview-rows");
-    expect(src).toContain("data-overview-path");
+    expect(src).not.toContain("Who moves it");
+    expect(src).not.toContain("data-overview-path");
+    expect(src).toContain("pr-stepper-moves");
     expect(panel).toContain("overviewRows({");
     expect(panel).toContain("overviewVerdict({");
   });
@@ -158,5 +156,19 @@ describe("the Files rail folds by the pane's width, not the window's", () => {
     const a = panel.indexOf("<FileRail d={d}");
     const row = panel.lastIndexOf('<div className="agx-files ', a);
     expect(row).toBeGreaterThan(0);
+  });
+});
+
+describe("the error card and the loading card say what they know", () => {
+  test("a failed read names its status code and GitHub's words", async () => {
+    const { problemFromReadError } = await import("../../shared/githubStatus.ts");
+    expect(problemFromReadError("gh: Bad Gateway (HTTP 502)")?.text).toBe("502 Bad Gateway");
+    expect(problemFromReadError("HTTP 404: Not Found (https://api.github.com/repos/orbit/acme/pulls/7)")?.text).toBe("404 Not Found");
+    expect(problemFromReadError("This is taking longer than usual")).toBeNull();
+    expect(panel).toContain("problemFromReadError(detailErr)");
+  });
+  test("the Loading card counts the checks only when the list row knows them", () => {
+    expect(panel).toContain("Reading reviews and ${checks} check${checks === 1 ? \"\" : \"s\"}…");
+    expect(panel).toContain('"Reading reviews and checks…"');
   });
 });

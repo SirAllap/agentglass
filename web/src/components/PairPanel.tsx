@@ -1,14 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { SettingRow } from "./SettingRow.tsx";
-import { CommandLine, EmptyState, SettingsCard, SettingsForm, StatusBadge } from "./SettingsKit.tsx";
+import { useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { SettingRow } from "./settings/shell/SettingRow.tsx";
+import { CommandLine, SettingsForm, StatusBadge } from "./SettingsKit.tsx";
 import { api } from "../lib/api.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import { qrMatrix, qrSvgPath } from "../lib/qr.ts";
 import { fmtAgo } from "../lib/format.ts";
-import type { DeviceScope, PairedDevice, PairRequest, PairState, RemoteStatus, ServeResult } from "../../../shared/types.ts";
-import { Button } from "./workspace/Chrome.tsx";
-import { PhoneIcon, PlugIcon } from "./settingsNavIcons.tsx";
+import { cardView, deviceCards, pairButton, PAIR_BUTTON_MIN_W, SCOPE_CHOICES } from "../lib/remoteView.ts";
+import { rowId } from "../lib/settingsIndex.ts";
 import { ICON } from "../lib/iconSize.ts";
+import { PhoneIcon } from "./settingsNavIcons.tsx";
+import { DeviceIcon } from "./deviceIcons.tsx";
+import type { DeviceScope, PairedDevice, PairRequest, PairState, RemoteStatus, ServeResult } from "../../../shared/types.ts";
+import { Button, LINE } from "./workspace/Chrome.tsx";
+import { useVisibleInterval } from "../lib/visibleInterval.ts";
 
 /**
  * Adding a phone, from the machine's side.
@@ -33,7 +37,15 @@ import { ICON } from "../lib/iconSize.ts";
  * The full protocol, and what it does and does not defend against, is in
  * server/src/pairing.ts.
  */
-export function PairPanel({ baseUrl, variant = "hero", onPaired, canTurnOnHttps = false, onStatus }: {
+export function PairPanel({ baseUrl, variant = "hero", onPaired, canTurnOnHttps = false, onStatus, off = false, frame, active = true }: {
+  /** The page that holds it is on screen. Settings stays mounted when closed, and a
+   *  2 s status read for a closed modal is 30 requests a minute for nobody. */
+  active?: boolean;
+  /** Where the section-wide "Pair a phone" button goes. The Settings page puts it at the right of
+   *  its section heading; without a frame it is the first row. */
+  frame?: (action: ReactNode, body: ReactNode) => ReactElement;
+  /** Remote access is off: the cards stay, dim, and nothing can be started. */
+  off?: boolean;
   baseUrl: string;
   /** Tailscale is on this machine and no HTTPS route exists yet: offer the
    *  button that runs `tailscale serve` instead of a command to paste. */
@@ -51,7 +63,8 @@ export function PairPanel({ baseUrl, variant = "hero", onPaired, canTurnOnHttps 
   /** How many devices are actually paired, told upward — the page above uses it
    *  to decide which of those two faces to wear, and only this component talks
    *  to the pairing endpoint. */
-  onPaired?: (n: number) => void;
+  /** How many phones are paired, and the names of the ones not forgotten (the strip above names those, not raw connections). */
+  onPaired?: (n: number, names: string[]) => void;
 }) {
   const [ticket, setTicket] = useState<{ id: string; code: string; expiresAt: number } | null>(null);
   const [state, setState] = useState<PairState>({ ticket: null, pending: [], devices: [] });
@@ -97,13 +110,12 @@ export function PairPanel({ baseUrl, variant = "hero", onPaired, canTurnOnHttps 
   }, []);
 
   useEffect(() => {
-    poll();
-    // A second timer only for the countdown, so the digits tick every second
-    // without asking the server sixty times a minute.
-    const c = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(c);
-  }, [poll]);
-  usePoll(true, poll, 2000);
+    if (active) poll();
+  }, [poll, active]);
+  // A second timer only for the countdown, so the digits tick every second
+  // without asking the server sixty times a minute.
+  useVisibleInterval(() => setNow(Date.now()), 1000, active);
+  usePoll(active, poll, 2000);
 
   // Closing the pane closes the invitation. A QR left live because a window was
   // shut is exactly the code somebody scans off a screenshot later.
@@ -156,17 +168,22 @@ export function PairPanel({ baseUrl, variant = "hero", onPaired, canTurnOnHttps 
      choose between its two faces, and setting a parent's state while a child is
      rendering is the one thing React will not have. One frame late is right
      here: the frame it is late by is the one before the first paint. */
-  useEffect(() => { onPaired?.(state.devices.length); }, [state.devices.length, onPaired]);
+  const pairedNames = state.devices.filter((d) => !d.revokedAt).map((d) => d.label);
+  const namesKey = pairedNames.join("\n");
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- namesKey stands for pairedNames
+  useEffect(() => { onPaired?.(state.devices.length, pairedNames); }, [state.devices.length, namesKey, onPaired]);
 
-  return (
+  const btn = pairButton({ off, pairing: !!ticket, busy });
+  const action = <Button tone={btn.primary ? "primary" : undefined} onClick={start} disabled={btn.disabled} style={{ minWidth: PAIR_BUTTON_MIN_W }}>{btn.label}</Button>;
+  const cards = deviceCards(state.devices);
+  const host = baseUrl.replace(/^https?:\/\//, "").replace(/\/$/, "");
+
+  const body = (
     <>
-      <SettingsCard title="Pairing" icon={<PlugIcon size={ICON.sm} />} desc="Show a code, scan it, say yes here."
-        actions={ticket
-          ? <Button onClick={start} disabled={busy}>New code</Button>
-          : <Button tone="primary" onClick={start} disabled={busy}>{busy ? "Starting…" : "Show the code"}</Button>}>
-        {insecure && (
-          <SettingRow
-            /* Whose limitation this is, said in the first clause. It used to be
+      <>
+        {!off && insecure && (
+          <Block>
+            {/* Whose limitation this is, said in the first clause. It used to be
                phrased as something the PHONE could not do, which was a fact
                about the browser wearing the phone's clothes — and it stopped
                being true the moment there was an app, which does not ask a page
@@ -179,21 +196,28 @@ export function PairPanel({ baseUrl, variant = "hero", onPaired, canTurnOnHttps 
                mounts, it is about what a plain-HTTP origin is allowed to do, so
                the cockpit inherits it unchanged. The subject stays "… in a
                browser", which is what pair-secure-context.test.ts pins — the
-               clause that keeps this from sliding back to blaming the phone. */
-            label={<span style={{ color: "var(--error-ink)" }}>The cockpit in a browser cannot pair over this address.</span>}
-            status={<StatusBadge tone="err">Plain HTTP</StatusBadge>}
-            hint="A plain-HTTP page gets no WebCrypto, so a browser cannot start the handshake. The app pairs over it anyway."
-            detail={{ summary: "Why, and what to do", body: <>
-              Pairing has to encrypt the credential to the phone, and a plain-HTTP page has no primitives for
-              that. The agentglass app makes its own key. The traffic is still readable by anything else on this network.
-              {!tailnet && <span className="block mt-1">Serve the cockpit over HTTPS, or forward the port so the phone reaches it as <span className="t-mono">http://localhost</span>.</span>}
-            </> }}
-            below={canTurnOnHttps || tailnet ? (
+               clause that keeps this from sliding back to blaming the phone. */}
+            <div className="flex items-center gap-2">
+              <span className="text-[13px] font-medium" style={{ color: "var(--error-ink)" }}>The cockpit in a browser cannot pair over this address.</span>
+              <StatusBadge tone="err">Plain HTTP</StatusBadge>
+            </div>
+            <div className="text-[12px]" style={{ color: "var(--text2)" }}>A plain-HTTP page gets no WebCrypto, so a browser cannot start the handshake. The app pairs over it anyway.</div>
+            <details>
+              <summary className="cursor-pointer t-dim text-[12px]">Why, and what to do</summary>
+              <div className="mt-1 text-[12px]" style={{ color: "var(--text2)" }}>
+                Pairing has to encrypt the credential to the phone, and a plain-HTTP page has no primitives for
+                that. The agentglass app makes its own key. The traffic is still readable by anything else on this network.
+                {!tailnet && <span className="block mt-1">Serve the cockpit over HTTPS, or forward the port so the phone reaches it as <span className="t-mono">http://localhost</span>.</span>}
+              </div>
+            </details>
+            {(canTurnOnHttps || tailnet) && (
               <div className="flex flex-col gap-2 text-[12px]" style={{ color: "var(--text2)" }}>
                 {canTurnOnHttps && (
                   <div className="flex flex-col gap-1.5">
-                    <div>Tailscale is here. One click gives this machine an HTTPS address a browser can pair over.</div>
-                    <div><Button tone="primary" onClick={turnOnHttps} disabled={serving}>{serving ? "Turning on…" : "Turn on HTTPS"}</Button></div>
+                    <SettingRow kind="control" settingId="remote.serve"
+                      label="Publish this machine to your tailnet"
+                      help="Gives this machine an HTTPS address a browser can pair over."
+                      control={<Button tone="primary" onClick={turnOnHttps} disabled={serving}>{serving ? "Turning on…" : "Turn on HTTPS"}</Button>} />
                     {serveFail && (
                       <div className="flex flex-col gap-1" style={{ color: "var(--error-ink)" }}>
                         <div>{serveFail.message}</div>
@@ -221,8 +245,8 @@ export function PairPanel({ baseUrl, variant = "hero", onPaired, canTurnOnHttps 
                 </div>
                 </details>
               </div>
-            ) : undefined}
-          />
+            )}
+          </Block>
         )}
 
         {/* Requests come before the invitation. Somebody standing with a phone in
@@ -232,27 +256,21 @@ export function PairPanel({ baseUrl, variant = "hero", onPaired, canTurnOnHttps 
           <Request key={req.id} req={req} busy={busy} onDecide={decide} />
         ))}
 
-        {!ticket ? (
+        {off ? null : !ticket ? (
           /* The code is still not minted until it is asked for — opening
-             Settings should not burn a two-minute invitation — so what fills
-             the card is the ask, and the button that answers it is in the
-             header, where it stays once there is a code. */
-          <EmptyState>
-            {hero
-              ? "You get a QR code and six digits. Scan one, type the other, and say yes here — good for two minutes and one device."
-              : "A QR code and six digits, good for two minutes and one device."}
-          </EmptyState>
+             Settings should not burn a two-minute invitation. With nothing
+             paired the card says how it goes; afterwards the button says it. */
+          !cards.length && <FirstPair hero={hero} />
         ) : (
           /* Centred and large on first run, because it is the only thing to do;
              beside the words afterwards, because by then it is one task among
              several and the page has other rows to keep its shape. */
-          <SettingRow
-            label="Scan with the camera, then type the code on the phone"
-            hint="The code is not in the QR. Scanning it from a photo or a shared screen gets no further than asking for these six digits."
-            below={
+          <Block>
               <div className={`flex gap-5 ${hero ? "flex-col items-center text-center" : "items-start flex-wrap"}`}>
                 <div className="shrink-0"><Qr text={pairUrl} big={hero} /></div>
                 <div className={`min-w-0 flex flex-col gap-1 ${hero ? "items-center" : ""}`}>
+                  <div className="text-[13px] font-medium" style={{ color: "var(--text)" }}>Scan with the camera, then type the code on the phone</div>
+                  <div className="text-[12px] mb-1.5" style={{ color: "var(--text2)" }}>The code is not in the QR, so a photo of it is not enough.</div>
                   {/* The biggest thing on the page. It is being read off this
                       screen and copied onto another one, and every point of
                       size is a mis-typed digit that costs one of five attempts. */}
@@ -261,21 +279,65 @@ export function PairPanel({ baseUrl, variant = "hero", onPaired, canTurnOnHttps 
                   }}>
                     {ticket.code}
                   </div>
+                  <div aria-hidden className="mt-1 h-1 w-full max-w-[220px] overflow-hidden rounded-full" style={{ background: "var(--surface-inset)" }}>
+                    <div className="h-full rounded-full" style={{ width: `${Math.min(100, (left / 120) * 100)}%`, background: left <= 20 ? "var(--warning)" : "var(--primary)" }} />
+                  </div>
                   <div className="text-[12px]" style={{ color: left <= 20 ? "var(--warning-ink)" : "var(--text3)" }}>
-                    {left > 0 ? `Expires in ${left}s` : "Expired — start a new one"}
+                    {left > 0 ? <>Expires in {left}s · one device{host && <> · over <span className="t-mono">{host}</span></>}</> : "Expired — start a new one"}
                   </div>
                 </div>
               </div>
-            }
-          />
+          </Block>
         )}
 
-        {err && <SettingRow label="Could not start an invitation" status={<StatusBadge tone="err">Failed</StatusBadge>} hint={err} />}
-      </SettingsCard>
+        {!off && err && <Block alert><span className="text-[13px] font-medium">Could not start an invitation</span><span className="text-[12px]" style={{ color: "var(--error-ink)" }}>{err}</span></Block>}
+      </>
 
-      <Paired devices={state.devices} busy={busy} onForget={forget} />
+      <Paired devices={state.devices} busy={busy} onForget={forget} off={off} />
     </>
   );
+  /* In a heading the button is still the "Pair a phone" row search jumps to, so it carries that
+     row's anchor. Off, it stays in its place, disabled, with the reason beside it. */
+  if (frame) return frame(
+    <span data-row={rowId("Pair a phone")} className="flex items-center gap-2">
+      {btn.hint && <span className="text-[12px]" style={{ color: "var(--text3)" }}>{btn.hint}</span>}
+      {action}
+    </span>, body);
+  return (
+    <>
+      {!off && <SettingRow kind="control" agentExempt label="Pair a phone" help="Show a code, scan it, say yes here." control={action} />}
+      {body}
+    </>
+  );
+}
+
+/** Nothing paired yet and no code open: what pairing is, in three steps. The button is in the heading. */
+function FirstPair({ hero }: { hero: boolean }) {
+  return (
+    <div className="flex items-start gap-3.5 px-3.5 py-4" style={{ borderTop: LINE }}>
+      <span aria-hidden className="grid shrink-0 place-items-center rounded-xl" style={{ width: 48, height: 48, background: "var(--surface-inset)", color: "var(--primary)" }}>
+        <PhoneIcon size={ICON.rail} />
+      </span>
+      <div className="min-w-0">
+        <div className="text-[13px] font-medium" style={{ color: "var(--text)" }}>Pair your first phone</div>
+        <p className="m-0 mt-0.5 text-[12px]" style={{ color: "var(--text2)" }}>
+          {hero ? "You get a QR code and six digits. Good for two minutes and one device." : "A QR code and six digits, good for two minutes and one device."}
+        </p>
+        <ol className="m-0 mt-2.5 flex list-none flex-wrap gap-x-4 gap-y-1.5 p-0 text-[12px]" style={{ color: "var(--text2)" }}>
+          {["Scan the QR", "Type the six digits", "Say yes here"].map((t, i) => (
+            <li key={t} className="inline-flex items-center gap-1.5">
+              <span aria-hidden className="grid place-items-center rounded-full text-[11px] font-semibold" style={{ width: 18, height: 18, background: "var(--surface-inset)", color: "var(--text)" }}>{i + 1}</span>{t}
+            </li>
+          ))}
+        </ol>
+      </div>
+    </div>
+  );
+}
+
+/** A block of a section that is a form or a read-out, not one label and one control. */
+function Block({ children, alert }: { children: React.ReactNode; alert?: boolean }) {
+  return <div {...(alert ? { role: "alert" } : null)} className="px-3 py-2.5 flex flex-col gap-2" style={{ borderTop: LINE }}>{children}</div>;
 }
 
 /**
@@ -292,28 +354,24 @@ function Request({ req, busy, onDecide }: {
 }) {
   const [scope, setScope] = useState<DeviceScope>("answer");
   return (
-    <SettingRow
-      label={`${req.label} wants to connect`}
-      status={
+    <Block>
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[13px] font-medium" style={{ color: "var(--text)" }}>{req.label} wants to connect</span>
         <span className="t-mono" style={{ fontSize: 17, letterSpacing: "0.16em", color: "var(--text)" }}>{req.code}</span>
-      }
-      hint={<>
+      </div>
+      <div className="text-[12px]" style={{ color: "var(--text2)" }}>
         <span className="block">{req.agent ? `${req.agent.slice(0, 80)} · ` : ""}from {req.ip || "an unknown address"}</span>
-        <span className="block mt-1">
-          Check those six digits are the ones on the phone. If they are not, this is not the device you
-          are holding — decline it.
-        </span>
-      </>}
-      below={
-        /* Chosen here rather than assumed, because this is the one moment
+        <span className="block mt-1">Check those six digits are the ones on the phone. If they are not, decline it.</span>
+      </div>
+        {/* Chosen here rather than assumed, because this is the one moment
            somebody is already thinking about what this device is for. The
            default is the narrow one: a phone that answers gates does not need a
            terminal, and a default of "everything" is how every device ends up
-           with everything. */
+           with everything. */}
         <SettingsForm label={`Let ${req.label} in`} onSubmit={() => onDecide(req, scope)}>
           <div role="radiogroup" aria-label="Give it" className="flex flex-col gap-1">
             <span className="agx-field-l">Give it</span>
-            {SCOPES.map((s) => (
+            {SCOPE_CHOICES.map((s) => (
               <label key={s.key} className="flex items-start gap-2 px-2 py-1.5 rounded-lg cursor-pointer" style={{
                 background: scope === s.key ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",
               }}>
@@ -331,24 +389,9 @@ function Request({ req, busy, onDecide }: {
             <Button tone="danger" disabled={busy} onClick={() => onDecide(req, null)}>Decline</Button>
           </div>
         </SettingsForm>
-      }
-    />
+    </Block>
   );
 }
-
-/** The three levels, in the words that say what changes rather than what the
- *  field is called. See server/src/devices.ts for why there are only three. */
-const SCOPES: { key: DeviceScope; title: string; what: string }[] = [
-  { key: "answer", title: "Answer things", what: "Everything below, plus approving gates. What a phone is for." },
-  { key: "read", title: "Look only", what: "Sessions, costs, changes, pull requests. It cannot approve anything or send anything." },
-  { key: "full", title: "Everything this machine can do", what: "A terminal, git write access, docker control, merging pull requests. Give this to a laptop you trust, not to a phone." },
-];
-
-const SCOPE_WORD: Record<DeviceScope, string> = {
-  read: "Look only",
-  answer: "Answers gates and replies",
-  full: "Full access — terminal, git, docker",
-};
 
 /**
  * What is paired, and the button that ends one of them.
@@ -358,29 +401,68 @@ const SCOPE_WORD: Record<DeviceScope, string> = {
  * "that tablet is in a drawer". Forgetting one device leaves the others alone,
  * which is the difference between a control people use and one they put off.
  */
-function Paired({ devices, busy, onForget }: {
-  devices: PairedDevice[]; busy: boolean; onForget: (d: PairedDevice) => void;
+function Paired({ devices, busy, onForget, off }: {
+  devices: PairedDevice[]; busy: boolean; onForget: (d: PairedDevice) => void; off: boolean;
 }) {
   const [confirming, setConfirming] = useState<string | null>(null);
-  if (!devices.length) return null;
+  const cards = deviceCards(devices);
+  if (!cards.length) return null;
+  /* One table: device, access, status, and an action column of fixed width so "Forget" and its
+     "Forget it / Keep" confirm sit in the same place on every row. */
+  const cols = "52px minmax(0, 1fr) auto 84px 156px";
+  const head = "px-2 py-1.5 text-[11px] font-medium";
   return (
-    <SettingsCard title="Devices" icon={<PhoneIcon size={ICON.sm} />} desc="Phones that can reach this machine, and what each may do.">
-      {devices.map((d) => (
-        <SettingRow key={d.id}
-          label={d.label}
-          hint={`${SCOPE_WORD[d.scope]} · ${d.lastSeenAt ? `last used ${fmtAgo(d.lastSeenAt)}` : "not used yet"}`}
-          status={<StatusBadge tone={d.lastSeenAt && Date.now() - d.lastSeenAt < 2 * 60_000 ? "ok" : "off"}>{d.lastSeenAt && Date.now() - d.lastSeenAt < 2 * 60_000 ? "Active" : "Idle"}</StatusBadge>}
-          actions={confirming === d.id ? (
-            <>
-              <Button tone="danger" onClick={() => { setConfirming(null); onForget(d); }} disabled={busy}>Forget it</Button>
-              <Button onClick={() => setConfirming(null)}>Keep</Button>
-            </>
-          ) : (
-            <Button onClick={() => setConfirming(d.id)}>Forget</Button>
-          )}
-        />
-      ))}
-    </SettingsCard>
+    <div role="table" aria-label="Paired devices" className="grid items-center" style={{ gridTemplateColumns: cols, borderTop: LINE, opacity: off ? 0.55 : 1 }}>
+      <div role="row" className="contents">
+        <span role="columnheader" className={head} />
+        <span role="columnheader" className={head} style={{ color: "var(--text3)" }}>Device</span>
+        <span role="columnheader" className={head} style={{ color: "var(--text3)" }}>Access</span>
+        <span role="columnheader" className={head} style={{ color: "var(--text3)" }}>Status</span>
+        <span role="columnheader" className={head}><span className="sr-only">Action</span></span>
+      </div>
+      {cards.map((d) => {
+        const v = cardView(d, Date.now(), fmtAgo);
+        const cell = { borderTop: LINE } as const;
+        return (
+          <div key={d.id} role="row" data-device={d.id} className="contents">
+            <span role="cell" className="flex h-full items-center py-2.5 pl-3" style={cell}>
+              <span aria-hidden className="relative grid place-items-center rounded-lg" style={{ width: 34, height: 34, background: "var(--surface-inset)", color: "var(--primary)" }}>
+                <DeviceIcon kind={v.kind} size={ICON.xl} />
+                <span className="absolute rounded-full" style={{ right: -2, bottom: -2, width: 9, height: 9, background: v.active ? "var(--success)" : "var(--text4)", boxShadow: "0 0 0 2px var(--surface-card)" }} />
+              </span>
+            </span>
+            <span role="cell" className="flex h-full min-w-0 flex-col justify-center px-2 py-2.5" style={cell}>
+              <span className="block break-words text-[13px] font-medium" style={{ color: v.name === "Unnamed phone" ? "var(--text3)" : "var(--text)" }}>{v.name}</span>
+              <span className="block break-words text-[12px]" style={{ color: "var(--text2)" }}>{v.used}</span>
+            </span>
+            <span role="cell" className="flex h-full items-center px-2 py-2.5" style={cell}><ScopeChip tone={v.tone}>{v.chip}</ScopeChip></span>
+            <span role="cell" className="flex h-full items-center px-2 py-2.5" style={cell}>
+              <StatusBadge tone={v.active ? "ok" : "off"}>{v.active ? "Active" : "Idle"}</StatusBadge>
+            </span>
+            <span role="cell" className="flex h-full items-center justify-end gap-1.5 py-2.5 pr-3" style={cell}>
+              {confirming === d.id ? (
+                <>
+                  <Button tone="danger" onClick={() => { setConfirming(null); onForget(d); }} disabled={busy}>Forget it</Button>
+                  <Button onClick={() => setConfirming(null)}>Keep</Button>
+                </>
+              ) : (
+                <Button onClick={() => setConfirming(d.id)} aria-label={`Forget ${v.name}`}>Forget</Button>
+              )}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** A scope as a chip: the default level in the accent, full access as a warning, look only plain. */
+export function ScopeChip({ tone, children }: { tone: "acc" | "warn" | "off"; children: ReactNode }) {
+  const hue = tone === "acc" ? "var(--primary)" : tone === "warn" ? "var(--warning)" : null;
+  return (
+    <span className="t-mono inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold" style={hue
+      ? { background: `color-mix(in srgb, ${hue} 14%, transparent)`, color: tone === "acc" ? "color-mix(in srgb, var(--primary) 78%, var(--text))" : "var(--warning-ink)" }
+      : { background: "var(--surface-inset)", color: "var(--text2)" }}>{children}</span>
   );
 }
 

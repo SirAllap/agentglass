@@ -25,9 +25,9 @@ describe("the range of the dock", () => {
     expect(clampDock(Number.NaN, 1400)).toBe(DOCK_PX);
   });
   test("a chosen width is the dock's width, clamped to a smaller window rather than rewritten", () => {
-    expect(dockWidth(1400, 900)).toBe(900);
+    expect(dockWidth(1400, 800)).toBe(800);
     expect(dockWidth(1000, 900)).toBe(1000 - LANE_PX);
-    expect(dockWidth(1400, 900)).toBe(900);
+    expect(dockWidth(1400, 800)).toBe(800);
     expect(dockWidth(FULL_ONLY_PX, 900)).toBeNull();
   });
 });

@@ -154,6 +154,11 @@ export function WarningIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><path d="M7 1.9l5.4 9.6H1.6z" /><path d="M7 5.6v2.6M7 9.9v.1" /></svg>;
 }
 
+/** A cloud with a cross: a remote list that did not answer. */
+export function CloudOffIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><path d="M4.3 10.5H4a2.4 2.4 0 0 1-.3-4.8 3.2 3.2 0 0 1 6.2.7 2.1 2.1 0 0 1 .3 4.1h-.5" /><path d="M5.7 8.4l2.6 2.6M8.3 8.4l-2.6 2.6" /></svg>;
+}
+
 /** 🔒 ⚿, open when `open` (🔓). */
 export function LockIcon({ size = ICON.sm, className, open }: P & { open?: boolean }) {
   return (
@@ -213,6 +218,23 @@ export function ExpandIcon({ size = ICON.sm, className, shrink }: P & { shrink?:
         : <path d="M8.6 2.2h3.2v3.2M11.8 2.2L8.2 5.8M5.4 11.8H2.2V8.6M2.2 11.8l3.6-3.6" />}
     </svg>
   );
+}
+
+/** ⤢⇤ Max width / restore: outward arrows at rest, inward when `restore`. */
+export function MaxWidthIcon({ size = ICON.sm, className, restore }: P & { restore?: boolean }) {
+  return (
+    <svg {...svg(size, className)}>
+      <path d="M1.6 4.4V2.2h2.2M12.4 4.4V2.2h-2.2M1.6 9.6v2.2h2.2M12.4 9.6v2.2h-2.2" />
+      {restore
+        ? <path d="M6 7H1.6M6 7 4.6 5.6M6 7 4.6 8.4M8 7h4.4M8 7l1.4-1.4M8 7l1.4 1.4" />
+        : <path d="M4.6 7h4.8M4.6 7L6 5.6M4.6 7 6 8.4M9.4 7 8 5.6M9.4 7 8 8.4" />}
+    </svg>
+  );
+}
+
+/** ⬓ Split a box in two down the middle. */
+export function SplitIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><rect x="1.6" y="2.4" width="10.8" height="9.2" rx="1.4" /><path d="M7 2.4v9.2" /></svg>;
 }
 
 /** ⊘ ⛔ */
@@ -320,6 +342,11 @@ export function UndoIcon({ size = ICON.sm, className, redo }: P & { redo?: boole
       <path d="M4.4 3.8L2.2 6l2.2 2.2" /><path d="M2.2 6h6.2a3.2 3.2 0 0 1 0 6.4H6" />
     </svg>
   );
+}
+
+/** A bin: delete. */
+export function TrashIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><path d="M2.4 4h9.2M5.4 4V2.6h3.2V4M3.6 4l.6 7.6h5.6l.6-7.6M5.8 6.2v3.4M8.2 6.2v3.4" /></svg>;
 }
 
 /** ⇄ */
@@ -538,6 +565,11 @@ export function UserMinusIcon({ size = ICON.sm, className }: P) {
 /** → — the route from a branch to its base, and "Open". */
 export function ArrowRightIcon({ size = ICON.sm, className }: P) {
   return <svg {...svg(size, className)}><path d="M2.5 7h9M8 3.5L11.5 7 8 10.5" /></svg>;
+}
+
+/** ← — Back: the card opened before this one. */
+export function BackIcon({ size = ICON.sm, className }: P) {
+  return <svg {...svg(size, className)}><path d="M11.5 7h-9M6 3.5L2.5 7 6 10.5" /></svg>;
 }
 
 /** Three sheets, one over another: a stack of pull requests. */

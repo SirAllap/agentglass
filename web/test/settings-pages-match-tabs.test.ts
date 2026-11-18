@@ -12,7 +12,7 @@ import { SETTINGS_PAGES } from "../src/lib/settingsRows.gen.ts";
 
 function loadTabs(): { id: string; label: string }[] {
   const src = readFileSync(new URL("../src/components/SettingsModal.tsx", import.meta.url).pathname, "utf8");
-  const re = /\{ id: "([a-z-]+)"(?: as const)?, label: "([^"]*)", group: "[^"]*"(?: as const)?, kw: "([^"]*)"/g;
+  const re = /\{ id: "([A-Za-z-]+)"(?: as const)?, label: "([^"]*)", group: "[^"]*"(?: as const)?, kw: "([^"]*)"/g;
   const out: { id: string; label: string }[] = [];
   for (const m of src.matchAll(re)) out.push({ id: m[1]!, label: m[2]! });
   return out.sort((a, b) => a.id.localeCompare(b.id));

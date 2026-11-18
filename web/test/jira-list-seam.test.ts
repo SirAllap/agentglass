@@ -159,7 +159,10 @@ describe("Looked up and the card the body wants open", () => {
     const t = strip(at("../src/components/jira/JiraCard.tsx"));
     expect(t).toContain("const took = useCallback((task: ProviderTask) => { setDetail((d) => (d ? { ...d, task } : d)); onTaskRef.current(task); }, []);");
     expect(t).toContain("onTask={took}");
-    expect(t).toContain("onTask: took })");
+    // `updatedAt` (for "Updated N min ago") was added after `onTask: took` on
+    // this same call, so the literal closing `})` right after it is gone;
+    // `took` still reaches the header either way.
+    expect(t).toContain("onTask: took, updatedAt:");
     expect(strip(at("../src/components/jira/list/JiraDock.tsx"))).toContain("onTask={r.onTask}");
   });
 });

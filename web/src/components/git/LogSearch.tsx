@@ -23,7 +23,7 @@ export function ListSearch({ q, onQ, placeholder, count, total, note }: {
         <span className="text-[10.5px] whitespace-nowrap" style={{ color: "var(--text3)" }}>{count} of {total}</span>
       )}
     </div>
-    {note && <div className="mt-1 text-[10.5px] truncate" style={{ color: "var(--warning)" }} title={note}>{note}</div>}
+    {note && <div className="mt-1 text-[10.5px] truncate" style={{ color: "var(--warning)" }} data-tip={note}>{note}</div>}
     </div>
   );
 }

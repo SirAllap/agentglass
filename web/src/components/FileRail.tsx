@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { EmptyState } from "./ui/EmptyState.tsx";
 import { MIN_BOX } from "../lib/iconSize.ts";
 // The column beside the diff, scoped to the file under the cursor.
 //
@@ -291,6 +292,11 @@ export function FileRail({
       ? "No line comments queued — the verdict goes on its own."
       : "The verdict goes with whatever you have queued.";
 
+  /* Nothing said, no thread and no failing check on this file: one calm line,
+     not three empty boxes. While anything is still loading the sections keep
+     their "still reading" lines: "clean" would be a claim not yet made. */
+  const quiet = !!path && !loading && !listedOnly && !cap.comments && !cap.threads && !cap.checks && said.length === 0 && threads.length === 0 && failing.length === 0;
+
   return (
     /*
      * 1180, which is the mockup's own number — `@media(max-width:1180px)
@@ -302,15 +308,15 @@ export function FileRail({
     <aside className="agx-rail agx-col3 flex-col shrink-0 agx-scroll"
       style={{ width: 320, borderLeft: LINE }}>
       {!path && (
-        <Sec title="Nothing selected">
-          <p className="m-0 text-[10.5px]" style={{ color: "var(--text4)" }}>
-            Pick a file and this column fills with what the rest of the pull request says about it.
-          </p>
+        <Sec title="This pull request">
+          <EmptyState hint="The column fills with what the rest of the pull request says about it.">Select a file to see what touches it.</EmptyState>
         </Sec>
       )}
 
       {path && (
         <>
+          {quiet && <Sec title="On this file"><EmptyState tone="ok" hint="Nothing names it, no thread sits on its lines, no check is failing.">Clean: 0 threads, 0 failing, 0 comments</EmptyState></Sec>}
+          {!quiet && (
           <Sec title="Said about this file"
             action={said.length ? { label: "Timeline", on: onGoConversation } : undefined}>
             {said.length === 0 ? (
@@ -380,12 +386,14 @@ export function FileRail({
               </>
             )}
           </Sec>
+          )}
 
           {/* The threads are drawn under their own lines in the diff as well,
               which is where you answer them. What they cannot do from there is
               tell you how many are waiting on a file you have already scrolled
               past the top of — a count is the one number that decides whether
               to read before you go on. */}
+          {!quiet && (
           <Sec title="Threads on this file"
             action={threads.length ? { label: "Conversation", on: onGoConversation } : undefined}>
             {threads.length === 0 ? (
@@ -426,6 +434,7 @@ export function FileRail({
               </>
             )}
           </Sec>
+          )}
 
           {/* The mockup's heading, and the data cannot always keep its promise:
               a check carries a name and a workflow and no log. The red ones are
@@ -434,6 +443,7 @@ export function FileRail({
               one thing the reader cannot get anywhere else on this screen — and
               when none of them names the file the section says so above the
               list, so the heading is never left claiming a link on its own. */}
+          {!quiet && (
           <Sec title="Checks blaming this file" action={{ label: "All checks", on: onGoChecks }}>
             {failing.length === 0 ? (
               <p className="m-0 text-[10.5px]" style={{ color: "var(--text4)" }}>
@@ -472,6 +482,7 @@ export function FileRail({
               </>
             )}
           </Sec>
+          )}
 
           {/* Only when the caller holds a review to ask about. An absent prop
               and an empty queue are different answers and must not share a

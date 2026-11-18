@@ -4,7 +4,7 @@
 // context drops to canvas — not DOM — so nobody who hit the white-out once is
 // stranded on the slow renderer. These pin that table down by faking
 // navigator.userAgent and localStorage.
-import { test, expect, beforeEach, afterAll } from "bun:test";
+import { test, expect, beforeEach, afterAll, describe } from "bun:test";
 import { globalStubs } from "./stubGlobal";
 const stubGlobal = globalStubs();
 
@@ -86,4 +86,17 @@ test("Compatibility still forces DOM — canvas does not override an explicit DO
   mockEnv(LINUX); setRendererPref("dom");
   expect(wantsWebgl()).toBe(false);
   expect(wantsCanvas()).toBe(false); // the user asked for DOM; honour it
+});
+
+import { rendererToHold } from "../src/lib/termRenderer.ts";
+describe("rendererToHold", () => {
+  test("a hidden shell holds nothing, whatever the preference", () => {
+    expect(rendererToHold(true, false, false)).toBe("none");
+    expect(rendererToHold(false, true, false)).toBe("none");
+  });
+  test("on screen: webgl beats canvas, canvas beats dom", () => {
+    expect(rendererToHold(true, false, true)).toBe("webgl");
+    expect(rendererToHold(false, true, true)).toBe("canvas");
+    expect(rendererToHold(false, false, true)).toBe("none");
+  });
 });

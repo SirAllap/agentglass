@@ -3,12 +3,13 @@
 // The header says what the selected thing is and what can be done with it; the
 // body (PreviewBody) reads it by what it is. The panel never edits: "Open in
 // nvim" opens the bench, which is where editing lives.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../../../lib/api.ts";
+import { offersBrowser, offersScripts, openFileInBrowser } from "../../../lib/pageLink.ts";
 import { TYPE_GROUPS, strataWhen, canEditRow, itemsLabel, isFolder, previewMetaLine, typeGroup, type Row } from "../../../lib/finderMiller.ts";
 import { PathIcon, StrataIcon } from "./StrataIcon.tsx";
 import type { FileFacts } from "../../../../../shared/types.ts";
-import { looksSecret, type ReadWidth } from "../../../lib/finderPreview.ts";
+import { looksSecret, previewWait, type ReadWidth } from "../../../lib/finderPreview.ts";
 import { BarButton, PreviewBar } from "./PreviewBar.tsx";
 import { PreviewBody, Placeholder } from "./PreviewBody.tsx";
 
@@ -38,6 +39,7 @@ export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, o
 }) {
   const [facts, setFacts] = useState<FileFacts | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
+  const picked = useRef(0);
   const folder = !!row && isFolder(row);
   /* A name that says it may hold a secret is not read until Show is pressed, for that file only. */
   const [shown, setShown] = useState<string | null>(null);
@@ -45,12 +47,18 @@ export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, o
 
   useEffect(() => {
     setFacts(null); setFailed(null);
+    // A selection passing through (a held arrow key) is not read; one that stays is. See previewWait.
+    const now = Date.now();
+    const wait = previewWait(now - picked.current);
+    picked.current = now;
     if (!path || !row || folder || row.locked || gated) return;
-    let live = true;
-    void api.previewFacts(path)
-      .then((f) => { if (live) { if (f.ok) setFacts(f); else setFailed(f.error ?? "could not be read here"); } })
-      .catch(() => { if (live) setFailed("could not be read here"); });
-    return () => { live = false; };
+    const leave = new AbortController();
+    const read = () => void api.previewFacts(path, leave.signal)
+      .then((f) => { if (!leave.signal.aborted) { if (f.ok) setFacts(f); else setFailed(f.error ?? "could not be read here"); } })
+      .catch(() => { if (!leave.signal.aborted) setFailed("could not be read here"); });
+    const timer = wait ? setTimeout(read, wait) : null;
+    if (!timer) read();
+    return () => { leave.abort(); if (timer) clearTimeout(timer); };
   }, [path, row?.name, folder, row?.locked, gated]);
 
   /* Strata gives a folder no preview: its contents are the next column, and the panel says so. */
@@ -69,6 +77,8 @@ export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, o
   const bar = {
     lead: <PathIcon path={path} name={row.name} isDir={false} size={20} />, name: row.name, meta, title: path, onClose,
     onOpen: row.locked ? undefined : () => { void api.previewOpen(path); },
+    onBrowser: offersBrowser(row.name, row.locked) ? () => { void openFileInBrowser(path).then((ok) => { if (!ok) void api.previewOpen(path); }); } : undefined,
+    onBrowserScripts: offersBrowser(row.name, row.locked) && offersScripts(row.name) ? () => { void openFileInBrowser(path, true).then((ok) => { if (!ok) void api.previewOpen(path); }); } : undefined,
     onNvim: canEditRow(row) && !row.locked ? () => onBench(path, "edit") : undefined,
   };
   return (
@@ -88,7 +98,7 @@ export function QuickLook({ path, row, rows, root, savedTab, onTab, onEditing, o
         </>
       ) : failed || !facts ? (
         <>
-          <PreviewBar lead={bar.lead} name={bar.name} meta={bar.meta} title={path} dragPath={path} onOpen={bar.onOpen} onClose={onClose} />
+          <PreviewBar lead={bar.lead} name={bar.name} meta={bar.meta} title={path} dragPath={path} onBrowser={bar.onBrowser} onBrowserScripts={bar.onBrowserScripts} onOpen={bar.onOpen} onClose={onClose} />
           <Placeholder icon={bar.lead} state={failed ? "failed" : "loading"} reason={failed ?? undefined} />
         </>
       ) : (

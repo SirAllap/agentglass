@@ -28,7 +28,7 @@ export function JiraStrip({ model, onRefresh }: JiraStripProps) {
   const note = staleNote(model);
   const busy = model.refreshing || model.phase === "loading";
   return (
-    <div data-slot="strip" className="flex flex-col shrink-0" style={{ gap: 12 }}>
+    <div data-slot="strip" data-busy={busy} className="flex flex-col shrink-0" style={{ gap: 12 }}>
       <div className="agx-jl-ld" role="progressbar" aria-label="Reading" aria-hidden={!busy} aria-busy={busy}>{busy && <i />}</div>
       {note && <Note tone={note.tone} text={note.text}><Ctl compact onClick={onRefresh}>Try now</Ctl></Note>}
       {model.said && (

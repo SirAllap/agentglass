@@ -1,8 +1,10 @@
 /*
  * MANY PROJECTS AT ONCE. The decisions the Flight plan view makes when more than
- * one project is in scope: which projects, which one Settings opens on, and how
- * the Preflight moments are read and written. Pure, so the tests can pin them.
+ * one project is in scope: which projects, which one Settings opens on, how
+ * the Preflight moments are read and written, and what the Settings link's line
+ * says about the scope on screen. Pure, so the tests can pin them.
  */
+import { projectName } from "./flightPlan.ts";
 
 /** Every project the view speaks of, each once, in the order given: the one the person is in, the open ones, then those that only have plans. */
 export const projectRoots = (...lists: string[][]): string[] => [...new Set(lists.flat().filter(Boolean))];
@@ -32,4 +34,42 @@ export const momentsLine = (on: Moment[]): string => (on.length ? MOMENTS.filter
 export function pillWording(masterOn: boolean, on: number, total: number): string {
   if (!masterOn || on === 0) return "Off in every project";
   return on === total ? "On in every project" : `On in ${on} of ${total} projects`;
+}
+
+/** Where both switches live, named once so the line and its tip send a person to the same place. */
+export const FLIGHT_PLAN_SETTINGS = "Flight plan \u203a Settings";
+
+/** The sentence every tip starts with: what the feature is for. */
+const WHAT = "Flight plan: a fresh reviewer reads plans before Launch.";
+
+/** The two switches the line is about, as the scope on screen reads them. */
+export interface SwitchRead {
+  /** `flightPlan.enabled`, the app's own switch: null until read. */
+  master: boolean | null;
+  /** `flightPlan.project.enabled` for the project on screen; null for All projects, or until read. */
+  project: boolean | null;
+  /** The project on screen; "" is All projects. */
+  root: string;
+}
+
+/** What Settings ▸ Orchestration's Flight plan line says, and the tip that explains it. */
+export interface SwitchLine { word: "On" | "Off" | ""; tip: string }
+
+/**
+ * The line reads what the project on screen actually allows, which is two
+ * switches and not one: the app's, and the project's. A start refused with
+ * "this project is out of Flight plan" under a line that said On is what this
+ * answers. Off names the switch that is off, and where to turn it on.
+ *
+ * A read that failed says nothing rather than claiming On: an unread project
+ * switch may be off.
+ */
+export function flightPlanLine(s: SwitchRead): SwitchLine {
+  const name = projectName(s.root);
+  if (s.master === null) return { word: "", tip: WHAT };
+  if (!s.master) return { word: "Off", tip: `Flight plan is off in every project: the app's own switch is off. Turn it on in ${FLIGHT_PLAN_SETTINGS}, under Use Flight plan.` };
+  if (!s.root) return { word: "On", tip: `${WHAT} The app's own switch is on; each project still has its own switch, under Projects, and a project with it off refuses a start.` };
+  if (s.project === null) return { word: "", tip: `${WHAT} This project's own switch was not read.` };
+  if (!s.project) return { word: "Off", tip: `Flight plan is off in ${name}: this project's own switch is off. Turn it on in ${FLIGHT_PLAN_SETTINGS}, on its row under Projects.` };
+  return { word: "On", tip: `${WHAT} On in ${name}.` };
 }

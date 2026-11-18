@@ -30,6 +30,8 @@ export interface CardJump {
   n: number;
   /** Which tracker's tab the card is in. Absent means ClickUp. */
   tracker?: "jira";
+  /** Open the Tasks view itself, never the bench, even when the bench shows a board ("Open in Tasks"). */
+  view?: true;
 }
 
 let listener: ((j: CardJump) => void) | null = null;
@@ -41,6 +43,6 @@ export function onOpenCard(fn: ((j: CardJump) => void) | null): () => void {
 }
 
 /** Open the Tasks view on this card, in the tracker it belongs to. */
-export function openCard(query: string, label?: string, tracker?: "jira"): void {
-  listener?.({ query, label: label || query, n: ++seq, ...(tracker ? { tracker } : null) });
+export function openCard(query: string, label?: string, tracker?: "jira", opts?: { view?: boolean }): void {
+  listener?.({ query, label: label || query, n: ++seq, ...(tracker ? { tracker } : null), ...(opts?.view ? { view: true as const } : null) });
 }

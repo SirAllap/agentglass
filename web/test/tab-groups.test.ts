@@ -7,6 +7,7 @@
  * checked at source level: the panel mounts xterm and a socket.
  */
 import { afterAll, describe, expect, test } from "bun:test";
+import { modalSource } from "./settingsSource.ts";
 import { readFileSync } from "node:fs";
 import type { TmuxWindow } from "../../shared/types.ts";
 
@@ -30,7 +31,7 @@ const lib = await import("../src/lib/tabGroups.ts");
 const { buildGroups, groupOf, parseRules, worthGrouping, OTHER } = lib;
 
 const panel = await Bun.file(new URL("../src/components/TerminalPanel.tsx", import.meta.url).pathname).text();
-const settings = await Bun.file(new URL("../src/components/SettingsModal.tsx", import.meta.url).pathname).text();
+const settings = modalSource();
 
 let n = 0;
 const win = (over: Partial<TmuxWindow>): TmuxWindow => {
@@ -225,7 +226,9 @@ describe("the strip draws them", () => {
   });
 
   test("Settings can switch it off and hold the name rules", () => {
-    expect(settings).toContain('label="Group tabs by project"');
-    expect(settings).toContain(`onBlur={() => { setting("terminal.tabGroupRules").set(groupRules); }}`);
+    // The shell page binds the rows by id; the label lives in the row table, the rules save through the list editor.
+    expect(settings).toContain('{...row("terminal.tabGroups")}');
+    expect(readFileSync(new URL("../src/components/settings/pages/terminalRows.ts", import.meta.url), "utf8")).toContain('label: "Group tabs by project"');
+    expect(settings).toContain('setting("terminal.tabGroupRules").set(v)');
   });
 });

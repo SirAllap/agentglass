@@ -42,7 +42,7 @@ export function StashInspector({ stash, files, overlap, clashPaths, onRetry }: {
           <div key={f.path} className="flex items-center gap-2 min-w-0 text-[11px]">
             <span className="shrink-0 grid place-items-center rounded text-[10px] font-semibold" aria-label={f.status}
               style={{ width: 18, height: 18, color: STATUS_TONE[f.status] ? inkOver(STATUS_TONE[f.status]) : "var(--text3)", background: wash(STATUS_TONE[f.status] ?? "--text", 14) }}>{f.status}</span>
-            <span className="min-w-0 break-all" title={f.path} style={{ fontFamily: MONO, color: "var(--text2)" }}>{f.path}</span>
+            <span className="min-w-0 break-all" data-tip={f.path} style={{ fontFamily: MONO, color: "var(--text2)" }}>{f.path}</span>
           </div>
         ))}
       </div>

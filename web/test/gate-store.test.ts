@@ -215,17 +215,18 @@ test("importing the store does not start a poll; subscribing does", async () => 
     // every change), so waiting a tick out would make this test 30 s long.
     // What is pinned instead: a next tick is armed, and nothing cancels it.
     const realSetTimeout = globalThis.setTimeout;
-    const realClearTimeout = globalThis.clearTimeout;
+    const realSetInterval = globalThis.setInterval;
+    const realClearInterval = globalThis.clearInterval;
     const armed = new Set<unknown>();
     let cancelled = 0;
-    (globalThis as any).setTimeout = (fn: () => void, ms?: number, ...rest: unknown[]) => {
-      const h = realSetTimeout(fn, ms, ...rest);
+    (globalThis as any).setInterval = (fn: () => void, ms?: number, ...rest: unknown[]) => {
+      const h = realSetInterval(fn, ms, ...rest);
       if (typeof ms === "number" && ms >= 1_000) armed.add(h);
       return h;
     };
-    (globalThis as any).clearTimeout = (h: any) => {
+    (globalThis as any).clearInterval = (h: any) => {
       if (armed.has(h)) cancelled++;
-      return realClearTimeout(h);
+      return realClearInterval(h);
     };
     const off = s.subscribeGates(() => {});
     await new Promise((r) => realSetTimeout(r, 30));
@@ -236,11 +237,11 @@ test("importing the store does not start a poll; subscribing does", async () => 
     // moment you opened the workspace.
     off();
     await new Promise((r) => realSetTimeout(r, 30));
-    globalThis.setTimeout = realSetTimeout;
-    globalThis.clearTimeout = realClearTimeout;
+    globalThis.setInterval = realSetInterval;
+    globalThis.clearInterval = realClearInterval;
     expect(armed.size, "no next tick was armed").toBeGreaterThan(0);
     expect(cancelled, "the poll stopped when the last subscriber left").toBe(0);
-    for (const h of armed) realClearTimeout(h as any);
+    for (const h of armed) realClearInterval(h as any);
   } finally {
     globalThis.fetch = realFetch;
     stubGlobal("window", realWindow);

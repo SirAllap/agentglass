@@ -32,6 +32,15 @@ export const LAYER = {
    */
   pane: 10005,
 
+  /** The side pane beside a terminal: under the terminal's own floating notes, over the grid. */
+  paneSide: 10004,
+
+  /**
+   * What floats over the PR board's lanes: the selection bar, its "Tell me when…" and the toast after it.
+   * Not a portal, like `pane`: positioned inside the board, so it only orders them over the lanes, under every panel.
+   */
+  board: 10003,
+
   /**
    * A file, open over whatever you were looking at.
    *
@@ -87,25 +96,6 @@ export const LAYER = {
   paletteImage: 10045,
 
   /**
-   * The plan-usage popover under the strip in the title bar.
-   *
-   * It was a literal 10050 in TopBar, one of five panels that happened to pick
-   * the same number. Named so the source guard can hold it: above the picture
-   * and the toast band (10040), below the "waiting on you" panel, which has to
-   * stay readable over it.
-   */
-  usage: 10050,
-
-  /**
-   * The "waiting on you" panel under the title-bar chip.
-   *
-   * Above the workspace's own layers because it is raised from the bar over
-   * whatever view is open; below the catalog and every sheet, which are opened
-   * on purpose and should not be covered by something that was not.
-   */
-  needs: 10055,
-
-  /**
    * The Skills explorer.
    *
    * Above the workspace's own portal rather than merely after it: the rail
@@ -124,11 +114,10 @@ export const LAYER = {
    * still on top, and to the person clicking it the gear did nothing and the
    * app went black.
    *
-   * The trade, stated because it is real: this puts Settings above the toast
-   * band (10040–10060) that it used to sit under, so a note toast that arrives
-   * while Settings is open is now behind it. That is the same place the catalog
-   * has always been, so the two rail sheets at least behave alike; moving the
-   * toasts above both is a bigger change than this one.
+   * This put Settings above the toast band (10040–10060) it used to sit under,
+   * and a note card that arrived while Settings was open was drawn behind it.
+   * The note cards and the bell panel now have rungs of their own above it —
+   * see `noteToasts`.
    */
   settings: 10120,
 
@@ -152,6 +141,46 @@ export const LAYER = {
    * is still seen.
    */
   flowEditor: 10125,
+
+  /**
+   * The note cards in the top-right corner, and the bell panel they come from.
+   *
+   * Above Settings, the Flow editor and the catalog: each is a full window with
+   * an opaque background, and a card drawn under one was never seen. Measured
+   * with Volume Normal and Settings open — the note was in the bell list and its
+   * card sat behind the page for its seven seconds. The bell panel stays above
+   * the cards, so opening the list never fights a card for the corner. Both stay
+   * below the dialogs raised from Settings and below the menus.
+   */
+  noteToasts: 10130,
+  /** The "tell me when" banners (AskedBanners): a watch the person armed by
+   *  hand always reaches them, so it cannot sit under Settings either. */
+  askedBanners: 10132,
+  /**
+   * The "waiting on you" panel under the title-bar chip.
+   *
+   * Raised from the bar over whatever view is open. It sat at 10055, below the
+   * catalog and every sheet, and so also below the note cards once those moved
+   * above Settings: a card in the top-right corner covered the panel the person
+   * had just opened. Opened by a click and closed by its scrim, so it now sits
+   * above the cards and the asked banners, under the usage popover (never open
+   * together), the bell panel and the Settings dialogs.
+   */
+  needs: 10133,
+  /**
+   * The plan-usage popover under the strip in the title bar.
+   *
+   * It was a literal 10050 in TopBar, one of five panels that picked the same
+   * number, then a name at 10050, under the note
+   * cards once those moved above Settings: a card in the same top-right corner
+   * covered the popover the person had just opened. It is opened by a click and
+   * closed by its scrim, so it sits above the cards and the asked banners, under
+   * the bell panel (the two are never open together) and the Settings dialogs.
+   * The "waiting on you" panel is just below it; neither can be open while
+   * the other's scrim is up.
+   */
+  usage: 10134,
+  notesPanel: 10135,
 
   settingsDialog: 10140,
 
@@ -202,4 +231,48 @@ export const LAYER = {
    * you happen to have open is a promise quietly broken.
    */
   alarm: 10300,
+} as const;
+
+/**
+ * What floats over the browser's own page box, lowest first.
+ *
+ * Not in LAYER for the same reason as SHEET_ROWS: these order things inside
+ * the browser panel (the page, its split, the tools drawn over it), never
+ * against another portal. The numbers are the ones each element had written
+ * on it; naming them did not move anything. The two menu rungs sit inside a
+ * Portal, so they only order the scrim under its own menu.
+ */
+export const BROWSER = {
+  /** A tab kept painting behind the one on screen, because an agent drives it. */
+  tabBehind: 0,
+  /** The tab on screen. */
+  tabFront: 1,
+  /** The grip between the page and the side bar. */
+  sideGrip: 5,
+  /** The handle between two split pages, and the tools beside it. */
+  splitGrip: 12,
+  splitTools: 13,
+  /** An agent's lane, watched live over the page; under the island (18) so the overview still opens. */
+  laneWatch: 15,
+  /** The link under the pointer, and the zoom note: corner notes over the page. */
+  note: 20,
+  /** The side bar peeking over the page, the markup layer, the element picker. */
+  overlay: 30,
+  /** The screenshot cutter, over the markup layer. */
+  shooter: 32,
+  /** Find in page. */
+  find: 34,
+  /** The address box over the page, and its scrim. */
+  omniScrim: 38,
+  omni: 39,
+  /** A menu's scrim and the menu, inside their Portal. */
+  menuScrim: 40,
+  menu: 41,
+  /** A closed folder's pages, peeked on hover. */
+  peep: 45,
+  /** "Bring a space" and its scrim. */
+  bringScrim: 48,
+  bring: 49,
+  /** What is in hand while dragging, over everything in the panel. */
+  carry: 60,
 } as const;

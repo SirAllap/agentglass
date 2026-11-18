@@ -33,7 +33,7 @@
  * fails until it is. Order of rows inside the rail's drawers, and the one-click
  * resets, are row actions and not settings, so they are marked agentExempt.
  */
-import { diffSplit, setDiffSplit, diffWrap, setDiffWrap, diffThemePref, setDiffThemePref, DEFAULT_SPLIT, DEFAULT_WRAP } from "./diffPrefs.ts";
+import { diffSplit, setDiffSplit, diffWrap, setDiffWrap, diffThemePref, setDiffThemePref, DEFAULT_SPLIT, DEFAULT_WRAP, diffGroupBy, setDiffGroupBy, diffShowIgnored, setDiffShowIgnored, diffShowOutside, setDiffShowOutside, DEFAULT_GROUP_BY } from "./diffPrefs.ts";
 import { THEMES as SYNTAX_THEMES } from "./highlight.ts";
 import { rendererPref, setRendererPref, type RendererPref } from "./termRenderer.ts";
 import {
@@ -52,18 +52,21 @@ import { paneActionsMode, setPaneActionsMode, paneMarker, setPaneMarker, type Pa
 import { PANE_BAR_MODES, type PaneBarMode } from "./paneChip.ts";
 import { tabGroupsOn, setTabGroupsOn, tabGroupRulesText, setTabGroupRulesText } from "./tabGroups.ts";
 import {
-  copyOnSelect, setCopyOnSelect, currentNoteEditor, setNoteEditor, NOTE_EDITORS, currentScrollback, setScrollback,
+  copyOnSelect, setCopyOnSelect, benchLinks, setBenchLinks, otherLinks, setOtherLinks, OTHER_LINKS, type OtherLinks, currentNoteEditor, setNoteEditor, NOTE_EDITORS, currentScrollback, setScrollback,
   SCROLLBACK_SIZES, DEFAULT_SCROLLBACK, currentWordSeparators, setWordSeparators, DEFAULT_WORD_SEPARATORS, type NoteEditor,
 } from "./termPrefs.ts";
 import { COUNTED_VIEWS, railBadgeOn, setRailBadge } from "./railBadges.ts";
 import { notifyQuiet, setNotifyQuiet, appNotify, setAppNotify } from "./sysNotify.ts";
+import { getNotifyPrefs, saveNotifyPrefs } from "./notifyPrefsStore.ts";
 import { ciOnlyApproved, setCiOnlyApproved, CI_ONLY_APPROVED_DEFAULT } from "./ciNotifyPref.ts";
 import { talkNotify, setTalkNotify, TALK_NOTIFY_DEFAULT, type TalkNotify } from "./talkNotify.ts";
-import { searchEngine, setSearchEngine } from "./browserPrefs.ts";
+import { searchEngine, setSearchEngine, agentsWithoutScreen, setAgentsWithoutScreen } from "./browserPrefs.ts";
 import { DEFAULT_SEARCH_ENGINE, SEARCH_ENGINE_LABELS, type SearchEngine } from "./browserUrl.ts";
 import { countedSpacesNow, countedSpacesText, setCountedSpaces } from "./clickupPrefs.ts";
 import { countedUnitsNow, setCountedUnits } from "./jiraUnits.ts";
 import { treeShapesNow, setTreeShapes } from "./useJiraTree.ts";
+import { syncFavouritesNow, setSyncFavourites, DEFAULT_SYNC_FAVOURITES } from "./jiraFavourites.ts";
+import { confirmBoardMovesNow, setConfirmBoardMoves, DEFAULT_CONFIRM_BOARD_MOVES } from "./jiraBoardMovePref.ts";
 import { parseShapes, shapesText, SHAPES } from "./jiraTree.ts";
 import { sessionReadReposNow, setSessionReadRepos } from "./sessionReads.ts";
 import { taskLanding, setTaskLanding, type TaskLanding } from "./taskLanding.ts";
@@ -246,7 +249,7 @@ const appearance: SettingDef[] = [
     capture: captureTheme, restore: restoreTheme,
   }),
   defineSetting({
-    id: "appearance.accent", page: "appearance", section: "Accent", label: "Accent", level: 2, default: "",
+    id: "appearance.accent", page: "appearance", section: "Theme", label: "Accent color", level: 2, default: "",
     read: () => currentAccent(),
     validate: oneOf(ACCENT_IDS),
     // The pref is stored, then the theme is laid again so the overlay (or its
@@ -254,18 +257,18 @@ const appearance: SettingDef[] = [
     write: (v) => { setAccentPref(v as string); applyTheme(currentThemeId()); },
   }),
   defineSetting({
-    id: "appearance.density", page: "appearance", section: "Density & type", label: "Density", level: 2, default: DEFAULT_DENSITY,
+    id: "appearance.density", page: "appearance", section: "Look", label: "Density", level: 2, default: DEFAULT_DENSITY,
     read: () => densityPref(), validate: oneOf(DENSITIES), write: (v) => setDensityPref(v as Density),
   }),
   defineSetting({
-    id: "appearance.fontSize", page: "appearance", section: "Density & type", label: "Interface font size", level: 2, default: DEFAULT_UI_FONT,
+    id: "appearance.fontSize", page: "appearance", section: "Look", label: "Interface font size", level: 2, default: DEFAULT_UI_FONT,
     read: () => uiFontPref(),
     validate: accepting((raw) => (typeof raw === "number" && UI_FONT_SIZES.includes(raw) ? raw : null), `one of ${UI_FONT_SIZES.join(", ")}`),
     write: (v) => setUiFontPref(v as number),
     display: (v) => `${v} px`,
   }),
   defineSetting({
-    id: "appearance.translucent", page: "appearance", section: "Density & type", label: "Translucent window", level: 2, default: false,
+    id: "appearance.translucent", page: "appearance", section: "Look", label: "Translucent window", level: 2, default: false,
     read: () => translucentPref(),
     // Where the window cannot see through (a browser tab), only off is a value: an agent hears why.
     validate: accepting((raw) => (typeof raw === "boolean" && (!raw || translucentSupported()) ? raw : null),
@@ -273,7 +276,7 @@ const appearance: SettingDef[] = [
     write: (v) => setTranslucentPref(v as boolean),
   }),
   defineSetting({
-    id: "appearance.reduceMotion", page: "appearance", section: "Density & type", label: "Reduce motion", level: 2, default: false,
+    id: "appearance.reduceMotion", page: "appearance", section: "Look", label: "Reduce motion", level: 2, default: false,
     // What is in force: until somebody chooses, the system's own setting.
     read: () => reduceMotionPref(), validate: bool, write: (v) => setReduceMotionPref(v as boolean),
   }),
@@ -298,11 +301,23 @@ const diff: SettingDef[] = [
     id: "diff.syntaxTheme", page: "diff", section: "How a diff opens", label: "Diff syntax theme", level: 2, default: "auto",
     read: () => diffThemePref(), validate: oneOf(SYNTAX_IDS), write: (v) => setDiffThemePref(v as string),
   }),
+  defineSetting({
+    id: "diff.groupBy", page: "diff", section: "How a diff opens", label: "Group by", level: 2, default: DEFAULT_GROUP_BY,
+    read: () => diffGroupBy(), validate: oneOf(["worktree", "time", "folder"] as const), write: (v) => setDiffGroupBy(v as "worktree" | "time" | "folder"),
+  }),
+  defineSetting({
+    id: "diff.showIgnored", page: "diff", section: "How a diff opens", label: "Show ignored", level: 2, default: false,
+    read: () => diffShowIgnored(), validate: bool, write: (v) => setDiffShowIgnored(v as boolean),
+  }),
+  defineSetting({
+    id: "diff.showOutside", page: "diff", section: "How a diff opens", label: "Show outside the worktree", level: 2, default: false,
+    read: () => diffShowOutside(), validate: bool, write: (v) => setDiffShowOutside(v as boolean),
+  }),
 ];
 
 // ── terminal: how it draws ──────────────────────────────────────────────────
 
-const DRAWS = "How it draws";
+const DRAWS = "Look";
 const FONT_IDS = TERM_FONTS.map((f) => f.id);
 // The faces the row offers: bundled ones, and the system ones this machine has.
 const fontOffered = (id: string) => { const f = TERM_FONTS.find((x) => x.id === id); return !!f && (f.bundled || fontAvailable(f.family) || id === ""); };
@@ -370,8 +385,8 @@ const railBadges: SettingDef[] = (Object.keys(COUNTED_VIEWS) as (keyof typeof CO
 // ── terminal: the rest of the pane ──────────────────────────────────────────
 
 const MOUSE = "Mouse and clipboard";
-const TABS = "Tab groups";
-const HISTORY = "History and selection";
+const TABS = "Tabs";
+const HISTORY = "History";
 /** The longest free text one of these may be (rules and separators, not prose). */
 const MAX_TEXT = 200;
 const text = accepting((raw: unknown): string | null => (typeof raw === "string" && raw.length <= MAX_TEXT ? raw : null), `a string of at most ${MAX_TEXT} characters`);
@@ -382,12 +397,12 @@ const terminalMore: SettingDef[] = [
     read: () => focusFollowsMouse(), validate: bool, write: (v) => setFocusFollowsMouse(v as boolean),
   }),
   defineSetting({
-    id: "terminal.paneBar", page: "terminal", section: MOUSE, label: "Pane bar", level: 2, default: "summary",
+    id: "terminal.paneBar", page: "terminal", section: "Look", label: "Pane bar", level: 2, default: "summary",
     // The default is "summary" for a machine with no history; a machine that already had state reads "edge" (see paneActionsPref).
     read: () => paneActionsMode(), validate: oneOf(PANE_BAR_MODES), write: (v) => setPaneActionsMode(v as PaneBarMode),
   }),
   defineSetting({
-    id: "terminal.paneBarMarker", page: "terminal", section: MOUSE, label: "Edge line marker", level: 2, default: "line",
+    id: "terminal.paneBarMarker", page: "terminal", section: "Tabs", label: "Edge line marker", level: 2, default: "line",
     read: () => paneMarker(), validate: oneOf(["line", "arrow"] as const), write: (v) => setPaneMarker(v as PaneMarker),
   }),
   defineSetting({
@@ -395,12 +410,20 @@ const terminalMore: SettingDef[] = [
     read: () => copyOnSelect(), validate: bool, write: (v) => setCopyOnSelect(v as boolean),
   }),
   defineSetting({
-    id: "terminal.noteEditor", page: "terminal", section: "Bench note", label: "Note editor", level: 2, default: "builtin",
+    id: "terminal.noteEditor", page: "terminal", section: "History", label: "Note editor", level: 2, default: "builtin",
     read: () => currentNoteEditor(), validate: oneOf(NOTE_EDITORS.map((e) => e.v) as NoteEditor[]), write: (v) => setNoteEditor(v as NoteEditor),
   }),
   defineSetting({
-    id: "terminal.benchButton", page: "terminal", section: "Bench note", label: "Floating button", level: 2, default: "always",
+    id: "terminal.benchButton", page: "terminal", section: "History", label: "Floating button", level: 2, default: "always",
     read: () => benchState().fabMode, validate: oneOf(FAB_MODES), write: (v) => setBenchFabMode(v as FabMode),
+  }),
+  defineSetting({
+    id: "terminal.benchLinks", page: "terminal", section: "History", label: "Open PR and card links on the bench", level: 2, default: false,
+    read: () => benchLinks(), validate: bool, write: (v) => setBenchLinks(v as boolean),
+  }),
+  defineSetting({
+    id: "terminal.otherLinks", page: "terminal", section: "History", label: "Open web links in", level: 2, default: "default",
+    read: () => otherLinks(), validate: oneOf(OTHER_LINKS.map((o) => o.v) as OtherLinks[]), write: (v) => setOtherLinks(v as OtherLinks),
   }),
   defineSetting({
     id: "terminal.tabGroups", page: "terminal", section: TABS, label: "Group tabs by project", level: 2, default: true,
@@ -434,24 +457,30 @@ const terminalMore: SettingDef[] = [
 // Each decides whether an agent that is blocked on the owner can reach them.
 const notifications: SettingDef[] = [
   defineSetting({
-    id: "notifications.quiet", page: "notifications", section: "How it reaches you", label: "Quiet — only what is stopped interrupts", level: 2, default: true,
+    id: "notifications.quiet", page: "notifications", section: "Pop-ups", label: "News pop-ups off: only an agent that waits pops up", level: 2, default: true,
     read: () => notifyQuiet(), validate: bool, write: (v) => setNotifyQuiet(v as boolean),
   }),
   // The two switches under one word. Quiet is `notifications.quiet`; with it off,
   // "agentglass's own notifications" (branches behind, checks going
   // red) decides whether the rest interrupts: off is Normal, on is Loud.
   defineSetting({
-    id: "notifications.volume", page: "notifications", section: "How it reaches you", label: "Volume", level: 2, default: "quiet",
-    read: () => (notifyQuiet() ? "quiet" : appNotify() ? "loud" : "normal"),
-    validate: oneOf(["quiet", "normal", "loud"] as const),
-    write: (v) => { setNotifyQuiet(v === "quiet"); if (v !== "quiet") setAppNotify(v === "loud"); },
+    id: "notifications.volume", page: "notifications", section: "Pop-ups", label: "Volume (old name: Off is Silence all, Quiet is News pop-ups off)", level: 2, default: "quiet",
+    read: () => (getNotifyPrefs().none ? "off" : notifyQuiet() ? "quiet" : appNotify() ? "loud" : "normal"),
+    validate: oneOf(["off", "quiet", "normal", "loud"] as const),
+    // "off" is the stored Silence all (`none` in the notification diet); any other level turns it back off.
+    write: (v) => {
+      const prefs = getNotifyPrefs();
+      if (prefs.none !== (v === "off")) void saveNotifyPrefs({ ...prefs, none: v === "off" }).catch(() => {});
+      if (v === "off") return;
+      setNotifyQuiet(v === "quiet"); if (v !== "quiet") setAppNotify(v === "loud");
+    },
   }),
   defineSetting({
-    id: "notifications.ciOnlyApproved", page: "notifications", section: "Pull requests", label: "Checks: only when the pull request is approved", level: 2,
+    id: "notifications.ciOnlyApproved", page: "git", section: "Watching", label: "Checks fail", level: 2,
     default: CI_ONLY_APPROVED_DEFAULT, read: () => ciOnlyApproved(), validate: bool, write: (v) => setCiOnlyApproved(v as boolean),
   }),
   defineSetting({
-    id: "notifications.talk", page: "notifications", section: "Pull requests", label: "Conversation: when somebody says something", level: 2, default: TALK_NOTIFY_DEFAULT,
+    id: "notifications.talk", page: "git", section: "Watching", label: "Conversation", level: 2, default: TALK_NOTIFY_DEFAULT,
     read: () => talkNotify(), validate: oneOf(["everything", "reviews", "off"] as TalkNotify[]), write: (v) => setTalkNotify(v as TalkNotify),
   }),
 ];
@@ -465,6 +494,10 @@ const browser: SettingDef[] = [
     id: "browser.searchEngine", page: "browser", section: "Where it opens", label: "Search engine", level: 2, default: DEFAULT_SEARCH_ENGINE,
     read: () => searchEngine(), validate: oneOf(Object.keys(SEARCH_ENGINE_LABELS) as SearchEngine[]), write: (v) => setSearchEngine(v as SearchEngine),
   }),
+  defineSetting({
+    id: "browser.agentsWithoutScreen", page: "browser", section: "For agents", label: "Let agents browse with the pane closed", level: 2, default: false,
+    read: () => agentsWithoutScreen(), validate: bool, write: (v) => setAgentsWithoutScreen(v as boolean),
+  }),
 ];
 
 // ── tasks: what the view shows ──────────────────────────────────────────────
@@ -472,11 +505,11 @@ const browser: SettingDef[] = [
 const TASK_LANDINGS = ["last", "all", ...TASK_SOURCES.map((s) => s.id)] as TaskLanding[];
 const tasks: SettingDef[] = [
   defineSetting({
-    id: "tasks.landing", page: "tasks", section: "Opens on", label: "Tasks view opens on", level: 2, default: "last",
+    id: "tasks.landing", page: "tasks", section: "Sources", label: "Tasks view opens on", level: 2, default: "last",
     read: () => taskLanding(), validate: oneOf(TASK_LANDINGS), write: (v) => setTaskLanding(v as TaskLanding),
   }),
   ...TASK_SOURCES.map((src) => defineSetting({
-    id: `tasks.source.${src.id}`, page: "tasks", section: "Task sources", label: `${src.label} in the Tasks view`, level: 2, default: true,
+    id: `tasks.source.${src.id}`, page: "tasks", section: "Sources", label: `${src.label} in the Tasks view`, level: 2, default: true,
     read: () => taskSourceShown(src.id), validate: bool,
     // The module keeps the last visible source and says nothing; an agent, and
     // the row, are told instead of being shown a switch that did not move.
@@ -501,7 +534,7 @@ const splitIds = (v: SettingValue): string[] => String(v).split(",").filter(Bool
 
 const clickup: SettingDef[] = [
   defineSetting({
-    id: "clickup.statusSpaces.counted", page: "clickup", section: "", label: "Spaces that count for statuses", level: 2, default: "",
+    id: "clickup.statusSpaces.counted", page: "clickup", section: "Reading cards", label: "Spaces that count for statuses", level: 2, default: "",
     read: () => countedSpacesNow().join(","), validate: spaceIds,
     // The same save the page's buttons make, through /clickup/prefs; the pick is re-read locally, never from ClickUp.
     write: (v) => { setCountedSpaces(splitIds(v)); },
@@ -527,18 +560,28 @@ const treeShapes = accepting((raw: unknown): string | null => {
 
 const jira: SettingDef[] = [
   defineSetting({
-    id: "jira.statusUnits.counted", page: "jira", section: "", label: "Projects that count for statuses", level: 2, default: "",
+    id: "jira.statusUnits.counted", page: "jira", section: "Connection", label: "Projects that count for statuses", level: 2, default: "",
     read: () => countedUnitsNow().join(","), validate: projectKeys,
     // The local settings file only; the pick is re-answered from what the server holds, and Jira is asked for nothing.
     write: (v) => { void setCountedUnits(splitIds(v)); },
     display: (v) => (splitIds(v).join(", ") || "where your cards live"),
   }),
   defineSetting({
-    id: "jira.tree.shapes", page: "jira", section: "", label: "How each space's tree is laid out", level: 2, default: "",
+    id: "jira.tree.shapes", page: "jira", section: "Connection", label: "How each space's tree is laid out", level: 2, default: "",
     read: () => treeShapesNow(), validate: treeShapes,
     // This window's sidebar only; Jira is asked for nothing.
     write: (v) => { setTreeShapes(parseShapes(v as string) ?? {}); },
     display: (v) => (v ? String(v).replace(/,/g, ", ") : "components, then epics, in every space"),
+  }),
+  defineSetting({
+    id: "jira.syncFavourites", page: "jira", section: "Connection", label: "Sync with Jira filters", level: 2, default: DEFAULT_SYNC_FAVOURITES,
+    // This window's sidebar only: the favourites are read, never changed on the site.
+    read: () => syncFavouritesNow(), validate: bool, write: (v) => setSyncFavourites(v as boolean),
+  }),
+  defineSetting({
+    id: "jira.board.confirmMoves", page: "jira", section: "Board", label: "Confirm board moves", level: 2, default: DEFAULT_CONFIRM_BOARD_MOVES,
+    // This window's board only: on, a drop waits for a yes before it writes; off, it writes at once.
+    read: () => confirmBoardMovesNow(), validate: bool, write: (v) => setConfirmBoardMoves(v as boolean),
   }),
 ];
 
@@ -556,7 +599,7 @@ const reviewSessions: SettingDef[] = [
   // Level 3: an agent can read which repositories are shared, never widen it. What a review
   // plugin may read about the owner's work is the owner's alone to allow.
   defineSetting({
-    id: "plugins.sessionReads.repos", page: "review-prompts", section: "Review sessions", label: "Let review plugins read the authoring session", default: "",
+    id: "plugins.sessionReads.repos", page: "recipes", section: "Review sessions", label: "Let review plugins read the authoring session", default: "",
     read: () => sessionReadReposNow().join(","), validate: repoNames,
     // Saved through /plugins/session-reads; a refusal puts the old list back.
     write: (v) => { setSessionReadRepos(splitIds(v)); },
@@ -591,7 +634,7 @@ const about: SettingDef[] = [
 
 const prefs: SettingDef[] = [
   defineSetting({
-    id: "prefs.diskWarn", page: "prefs", section: "Disk space", label: "Warn when free disk is under", level: 2, default: DISK_WARN_DEFAULT,
+    id: "prefs.diskWarn", page: "privacy", section: "Disk space", label: "Warn when free disk is under", level: 2, default: DISK_WARN_DEFAULT,
     read: () => diskWarnPct(),
     // "off" is the word the row shows for 0, so it is also a word that is taken back.
     validate: accepting((raw) => { const n = raw === "off" ? 0 : raw; return typeof n === "number" && DISK_WARN_CHOICES.includes(n) ? n : null; },
@@ -607,7 +650,7 @@ const prefs: SettingDef[] = [
  *  switch's value comes from the same `showInBar` the strip asks: an unset
  *  provider follows "ever had a reading" (usageBarPref.ts). */
 const usageBar: SettingDef[] = USAGE_BAR_PROVIDERS.map((p) => defineSetting({
-  id: `usage.bar.${p.id}`, page: "budgets", section: "Usage bar",
+  id: `usage.bar.${p.id}`, page: "engines", section: "Usage bar",
   label: `${p.label} in the usage bar`, level: 2, default: true,
   read: () => showInBar(p.id), validate: bool,
   write: (v) => setShowInBar(p.id as UsageBarProvider, v as boolean),
@@ -628,26 +671,29 @@ export const MIGRATED: Readonly<Record<string, "all" | readonly string[]>> = {
   browser: "all",
   tasks: "all",
   /* Only what is not the connection: the page's own refusals are in NEVER_ON_PAGE. */
-  clickup: [""],
+  clickup: ["Reading cards"],
   /* Only what is not the connection: the token, the site and the write switch are in NEVER_ON_PAGE. */
-  jira: [""],
+  jira: ["Connection"],
   /* Only the section about what a review plugin may be given; the prompt editor is not a setting yet. */
-  "review-prompts": ["Review sessions"],
+  recipes: ["Review sessions"],
   keys: "all",
-  /* Only the disk warning: the display size, fullscreen and start at login are the window's own. */
-  prefs: ["Disk space"],
+  /* Only the watching section: the rest of the Git page is not a stored setting. */
+  git: ["Watching"],
+  /* Only the disk warning, on Data & privacy: the rest of that page is not a setting an agent reaches. */
+  privacy: ["Disk space"],
   /* Only the build's own section: the credits and the log digest are not settings. */
   about: ["This build"],
   /* Only the per-provider switches: the OpenCode key is a credential and the
      Codex refresh spends quota, so neither is an agent's setting. */
-  budgets: ["Usage bar"],
+  engines: ["Usage bar"],
 };
 
 /** The panes with nothing migrated yet. Every Settings page is on exactly one of
  *  the two lists, so adding a page forces a decision rather than a silent gap. */
 export const NOT_YET_MIGRATED = [
-  "hooks", "understudy", "recipes",
-  "saved-replies", "connections", "engines", "orchestration", "gaps", "polaris", "git", "remote", "plugins", "tmux", "privacy", "log", "onboarding",
+  "hooks", "understudy", "review-prompts", "saved-replies", "onboarding",
+  "connections", "budgets", "orchestration", "gaps", "polaris", "polarisPrs", "remote", "plugins", "tmux", "prefs", "log",
+  "finder", "perm", "permMain", "permWorkers", "permBrowser", "permOut", "workers", "fplan", "tracker", "devices", "advanced", "inspect",
 ] as const;
 
 /**
@@ -662,7 +708,6 @@ export const NOT_EXPOSED_ON_PURPOSE: Readonly<Record<string, string>> = {
   hooks: "the gate and the hook install decide what an agent may do without asking: no agent edits its own leash",
   understudy: "consent and the level at which a stand-in may decide for the owner",
   tmux: "which tmux the terminal runs on and its config text: it changes what runs a shell",
-  privacy: "retention and data export: what the app keeps and gives away",
 };
 
 
@@ -677,6 +722,10 @@ export const NEVER_ON_PAGE: Readonly<Record<string, { pattern: RegExp; why: stri
   jira: {
     pattern: /token|connect|site|account|credential|secret|remote|writes?\b/i,
     why: "the Jira token, the site it is sent to and the switch that lets agentglass write to a card: what the app is allowed to do with the owner's account is the owner's alone (the steps have their own door, GET/POST /jira/steps)",
+  },
+  privacy: {
+    pattern: /retention|keyring|secret|credential|erase|export|cache|ledger|days\b/i,
+    why: "retention, the keyring, erasing history and data export: what the app keeps and gives away is the owner's alone. Only the disk warning on this page is a setting an agent may change",
   },
   clickup: {
     pattern: /token|connect|workspace|account|credential|secret|remote|writes?\b/i,
@@ -698,6 +747,8 @@ export function isMigrated(pane: string, section: string): boolean {
 export function settingIdResolves(id: string, defs: readonly SettingDef[] = SETTING_DEFS): boolean {
   // A server setting (server/src/serverSettings.ts) has no def in the window; its class row is the proof it exists.
   if (Object.hasOwn(SETTING_CLASSES, id)) return true;
+  // …or a family row (`agents.role.*`) that names it: a door key's members are those the server owns, not defs.
+  if (!id.endsWith(".*") && Object.keys(SETTING_CLASSES).some((k) => k.endsWith(".*") && id.startsWith(k.slice(0, -1)))) return true;
   return id.endsWith(".*") ? defs.some((d) => d.id.startsWith(id.slice(0, -1))) : defs.some((d) => d.id === id);
 }
 

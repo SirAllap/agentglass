@@ -46,8 +46,12 @@ import { BranchIcon } from "../../lib/glyphIcons.tsx";
 /** `workspaces` is every open project, empty while none is — or while the server
  *  has not answered, in which case no row is marked open, which is the honest
  *  rendering: the picker does not know either. */
-export function ProjectsModal({ open, workspaces, known, onClose }: { open: boolean; workspaces: readonly string[]; known: boolean; onClose: () => void }) {
+export function ProjectsModal({ open: wantOpen, workspaces, known, onClose, startPane, hidden: cardShown }: { open: boolean; workspaces: readonly string[]; known: boolean; onClose: () => void; hidden?: boolean; startPane?: "folder" | "clone" | "new" | null }) {
+  // The card is showing instead: the modal stays closed until it is asked for a form.
+  const open = wantOpen && !cardShown;
   const m = useProjectsModal({ open, workspaces, known, onClose });
+  // Opened from the project card's footer: straight onto the step it asked for.
+  useEffect(() => { if (open && startPane) { m.setPane(startPane); m.setError(""); } /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open, startPane]);
   const remotes = useRemoteList();
   const remoteTicks = useRemoteTicks();
   const remoteState = useRemoteRefresh(open && m.pane === "list");
@@ -85,7 +89,9 @@ export function ProjectsModal({ open, workspaces, known, onClose }: { open: bool
   );
   const items = useMemo(() => flatten(groups), [groups]);
   const shown = useMemo(() => uniqueRoots(groups), [groups]);
-  const counts = useMemo(() => railCounts(repos ?? [], folders, workspaces, hidden), [repos, folders, workspaces, hidden]);
+  const isFirstRun = firstRun(repos, roots, false, known ? workspaces : null);
+  const hero = repos !== null && showFirstRunHero(isFirstRun, remotes.length);
+  const counts = useMemo(() => railCounts(repos ?? [], folders, workspaces, hidden, hero), [repos, folders, workspaces, hidden, hero]);
 
   // The highlight follows what is on screen: a search puts it on the first match.
   useEffect(() => {
@@ -95,7 +101,6 @@ export function ProjectsModal({ open, workspaces, known, onClose }: { open: bool
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items]);
 
-  const isFirstRun = firstRun(repos, roots, false, known ? workspaces : null);
   const pending = nextScope(ticked, workspaces);
   const openRemote = (repo: string) => { requestRemoteOpen(repo); openPrs(""); m.close(); };
   const openTicked = () => { if (pending) void m.openScope(pending); else if (remoteTicks[0]) openRemote(remoteTicks[0]); else if (!ticked.length) return; else m.close(); };
@@ -171,7 +176,7 @@ export function ProjectsModal({ open, workspaces, known, onClose }: { open: bool
     const rows = remotes.filter((r) => terms.every((t) => r.repo.toLowerCase().includes(t)));
     right = <GithubShelf rows={rows} total={remotes.length} ticks={remoteTicks} busy={m.busy} state={remoteState} onOpen={openRemote} onAdd={() => addRoute("github")} />;
   } else if (m.forgotFolder && !roots.length) right = <ForgotFolder path={m.forgotFolder.path} count={m.forgotFolder.count} onUndo={() => m.toast?.undo?.()} onAdd={() => addRoute("folder")} />;
-  else if (repos !== null && showFirstRunHero(isFirstRun, remotes.length)) right = <FirstRun busy={m.busy} onChooser={() => void browse()} onTyped={() => m.setPane("folder")} onAgents={() => m.setSource({ kind: "agents" })} onGithub={() => m.setSource({ kind: "gh" })} />;
+  else if (hero) right = <FirstRun busy={m.busy} onChooser={() => void browse()} onTyped={() => m.setPane("folder")} onAgents={() => m.setSource({ kind: "agents" })} onGithub={() => m.setSource({ kind: "gh" })} />;
   else right = (
     <ProjectList tabs={m.tabs} loading={repos === null} items={items} groups={groups} total={counts.all} query={query} setQuery={m.setQuery} searchRef={searchRef} hot={hot} setHot={m.setHot}
       ticked={ticked} setTicked={m.setTicked} toggleTick={m.toggleTick} hidden={hidden} workspaces={workspaces} busy={m.busy} now={now} hiddenCount={counts.hidden}

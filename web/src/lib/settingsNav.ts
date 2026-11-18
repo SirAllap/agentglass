@@ -15,8 +15,8 @@ import { SETTINGS_ROWS, expandWord, rowId, rowMatches, searchSettings, type Sett
 
 /* ── groups ── */
 
-export type NavGroupId = "general" | "workspace" | "agents" | "library" | "connections" | "system";
-export type NavGroupName = "General" | "Workspace" | "Agents" | "Library" | "Connections" | "System";
+export type NavGroupId = "general" | "workspace" | "agents" | "library" | "connections" | "system" | "advanced";
+export type NavGroupName = "General" | "Workspace" | "Agents" | "Library" | "Connections" | "System" | "Advanced";
 
 export interface NavGroup {
   id: NavGroupId;
@@ -36,7 +36,9 @@ export const NAV_GROUPS: readonly NavGroup[] = [
 ];
 /** Pinned under the scroller, never collapses: Data & privacy and About. */
 export const SYSTEM_GROUP: NavGroup = { id: "system", name: "System", icon: "cog" };
-const ALL_GROUPS: readonly NavGroup[] = [...NAV_GROUPS, SYSTEM_GROUP];
+/** Pinned under System, its own area: the machine rows and the read-outs. */
+export const ADVANCED_GROUP: NavGroup = { id: "advanced", name: "Advanced", icon: "cog" };
+const ALL_GROUPS: readonly NavGroup[] = [...NAV_GROUPS, SYSTEM_GROUP, ADVANCED_GROUP];
 
 export const groupByName = (name: string): NavGroup | undefined => ALL_GROUPS.find((g) => g.name === name);
 /** The CSS custom property that tints a group (`--g-agents`), light and dark values in index.css. */
@@ -91,15 +93,22 @@ export interface NavFacts {
   connectionsNeed: number | null;
   /** A paired device is connected right now. */
   remoteLive: boolean | null;
+  /** Paired phones (forgotten ones excluded) and how many are connected now. Either can be `null`: not read yet. */
+  remotePaired?: number | null;
+  remoteLiveCount?: number | null;
+  /** The "Allow remote access" switch. `false` wins over any paired count: the page says it is off. `null`: not known. */
+  remoteOn?: boolean | null;
   /** Crash loops and spikes in the server log; 0 is quiet. */
   clickupConnected: boolean | null;
   jiraConnected: boolean | null;
   lanternWatching: boolean | null;
   updateAvailable: boolean | null;
   notificationsOn: boolean | null;
-  /** Plugins running now, and plugins waiting on a person's approval. */
+  /** Plugins running now, and the plugins that need a person (the page's "Needs you" tally). */
   pluginsRunning: number | null;
   pluginsNeed: number | null;
+  /** What the Needs-you count is made of ("1 stopped · 1 update"); absent: an approval-only count. */
+  pluginsNeedTitle?: string | null;
 }
 
 export const NO_FACTS: NavFacts = {
@@ -107,6 +116,12 @@ export const NO_FACTS: NavFacts = {
   clickupConnected: null, jiraConnected: null, lanternWatching: null, updateAvailable: null, notificationsOn: null,
   pluginsRunning: null, pluginsNeed: null,
 };
+
+/** The nav badge's words for Remote & devices: what is paired first, then what is live. Only 0 paired says "No device". */
+export function remoteBadgeText(paired: number, live: number): string {
+  if (paired <= 0) return "No device";
+  return live > 0 ? `${paired} paired · ${Math.min(live, paired)} live` : `${paired} paired`;
+}
 
 const onOff = (v: boolean | null): PageMark | null => (v === null ? null : { state: v ? "on" : "off" });
 
@@ -127,11 +142,17 @@ export function navMarks(f: NavFacts): Record<string, PageMark> {
     ? { state: "on" } : { state: "needs", count: 1, title: "tmux is not on this machine" });
   set("connections", f.connectionsNeed === null || f.connectionsNeed <= 0 ? null
     : { state: "needs", count: f.connectionsNeed, title: `${f.connectionsNeed} ${f.connectionsNeed === 1 ? "tool or service needs" : "tools or services need"} setup` });
-  set("remote", onOff(f.remoteLive));
+  set("remote", f.remoteOn === false
+    ? { state: "off", title: "Remote access is off" }
+    : f.remotePaired == null
+    ? onOff(f.remoteLive)
+    : f.remotePaired > 0
+      ? { state: "on", title: remoteBadgeText(f.remotePaired, f.remoteLiveCount ?? 0) }
+      : { state: "off" });
   set("clickup", f.clickupConnected ? { state: "on" } : null);
   set("jira", onOff(f.jiraConnected));
   set("notifications", onOff(f.notificationsOn));
-  if (f.pluginsNeed) set("plugins", { state: "needs", count: f.pluginsNeed, title: `${f.pluginsNeed} ${f.pluginsNeed === 1 ? "plugin waits" : "plugins wait"} for your approval` });
+  if (f.pluginsNeed) set("plugins", { state: "needs", count: f.pluginsNeed, title: f.pluginsNeedTitle || `${f.pluginsNeed} ${f.pluginsNeed === 1 ? "plugin waits" : "plugins wait"} for your approval` });
   else if (f.pluginsRunning) set("plugins", { state: "on", count: f.pluginsRunning, title: `${f.pluginsRunning} running` });
   if (f.updateAvailable) set("about", { state: "update", title: "An update is ready" });
   return out;
@@ -177,10 +198,11 @@ export function withProblems(marks: Readonly<Record<string, PageMark>>, problems
   return out;
 }
 
-export interface NavPageIn { id: string; label: string; group: string }
+/** `sub` is a thin-line label that heads a run of pages inside a group (Agents: "Each agent", "Orchestration"). */
+export interface NavPageIn { id: string; label: string; group: string; sub?: string }
 export interface NavPage extends NavPageIn { mark: PageMark }
 export interface NavSection { group: NavGroup; pages: NavPage[]; shut: boolean; rollup: number }
-export interface NavModel { sections: NavSection[]; system: NavSection | null }
+export interface NavModel { sections: NavSection[]; system: NavSection | null; advanced: NavSection | null }
 
 /**
  * The nav, ready to draw: pages filed under their group in the order given
@@ -192,11 +214,12 @@ export function buildNav(pages: readonly NavPageIn[], marks: Readonly<Record<str
   const section = (g: NavGroup): NavSection | null => {
     const ps = pages.filter((p) => p.group === g.name).map((p) => ({ ...p, mark: marks[p.id] ?? NO_MARK }));
     if (!ps.length) return null;
-    return { group: g, pages: ps, shut: g.id !== "system" && shut.has(g.id), rollup: rollup(ps.map((p) => p.mark)) };
+    return { group: g, pages: ps, shut: g.id !== "system" && g.id !== "advanced" && shut.has(g.id), rollup: rollup(ps.map((p) => p.mark)) };
   };
   return {
     sections: NAV_GROUPS.map(section).filter((s): s is NavSection => s !== null),
     system: section(SYSTEM_GROUP),
+    advanced: section(ADVANCED_GROUP),
   };
 }
 
@@ -230,6 +253,7 @@ function markChips(id: string, mark: PageMark): HeaderChip[] {
   if (mark.state === "err") return [{ tone: "err", text: mark.chip ?? "Not reachable" }];
   const w = STATE_WORDS[id] ?? {};
   if (id === "plugins" && mark.state === "on") return [{ tone: "ok", text: `${mark.count} running` }];
+  if (id === "remote" && mark.state === "on" && mark.title) return [{ tone: "ok", text: mark.title }];
   if (mark.state === "on" && w.on) return [{ tone: "ok", text: w.on }];
   if (mark.state === "off" && w.off) return [{ tone: "off", text: w.off }];
   if (mark.state === "needs") {
@@ -344,6 +368,8 @@ const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").
  * ok, warn and err draw one; off and checking do not, since nothing in them
  * asks for a look.
  */
+/** The index (chip bar, or the rail at the right) is for a page long enough to get lost in: more than five cards. */
+export const TOC_MIN_CARDS = 6;
 export function tocItems(cards: readonly CardInfo[]): TocItem[] {
   const seen = new Map<string, number>();
   const items = cards.filter((c) => c.title.trim()).map((c) => {
@@ -353,7 +379,7 @@ export function tocItems(cards: readonly CardInfo[]): TocItem[] {
     const dot: TocItem["dot"] = c.tone === "ok" || c.tone === "warn" || c.tone === "err" ? c.tone : null;
     return { id: n === 1 ? base : `${base}-${n}`, label: c.title.trim(), dot };
   });
-  return items.length < 2 ? [] : items;
+  return items.length < TOC_MIN_CARDS ? [] : items;
 }
 
 /** The entry that is current: of the cards whose top has reached `line` (a
@@ -366,4 +392,18 @@ export function currentToc(tops: readonly number[], line: number): number {
   let cur = 0, best = -Infinity;
   tops.forEach((t, i) => { if (t <= line && t > best) { cur = i; best = t; } });
   return cur;
+}
+
+/** One slot of the settings icon rail, in px: group chip and page icon alike (index.css `.agx-sn-scroll .agx-sn-it`). */
+export const RAIL_SLOT = 36;
+/** The scroller's top plus bottom padding on the rail (index.css `.agx-sn-scroll`). */
+export const RAIL_PAD = 8;
+
+/** One view button (h-11) plus the gap-1 under it on the main view rail, in px: the pitch its scroller snaps and trims to. */
+export const VIEW_SLOT = 48;
+
+/** The px to take off the bottom of a rail scroller `avail` px tall so its visible height is the padding plus a whole number of slots: no icon shows cut. `slot`/`pad` default to the settings rail; the view rail passes its own. */
+export function railTrim(avail: number, slot: number = RAIL_SLOT, pad: number = RAIL_PAD): number {
+  const room = avail - pad;
+  return room <= slot ? 0 : room % slot;
 }

@@ -5,6 +5,8 @@ import { DoneIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { api } from "../lib/api.ts";
 import { openExternal } from "../lib/externalUrl.ts";
+import { DotStrip } from "./git/DotStrip.tsx";
+import { unstickDots } from "../lib/gitStrips.ts";
 import { putCard } from "../lib/prCardStore.ts";
 import {
   NO_WORDS, RARE_LINE, STEP_LABEL, UNSTICK_CONFIRM, UNSTICK_EFFECTS, cardSentence, runUnstick, unstickWhy,
@@ -145,6 +147,12 @@ export function UnstickDialog(props: UnstickDialogProps) {
             <div className="text-[13px] font-medium" style={{ color: "var(--text)" }}>
               {refused ? "This pull request does not need unsticking" : (phase === "ask" ? `Unstick #${p.number}?` : `Unstick #${p.number}`)}
             </div>
+
+            {!refused && (() => {
+              const t = unstickDots(Object.keys(STEP_LABEL), steps);
+              return <div className="mt-2.5"><DotStrip dots={t.dots} tone="primary" label="The steps: done, running, waiting"
+                caption={`${t.done} of ${t.dots.length} steps done`} /></div>;
+            })()}
 
             {phase === "ask" && (
               <>

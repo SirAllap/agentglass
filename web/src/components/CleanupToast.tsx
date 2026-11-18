@@ -1,10 +1,11 @@
 /*
  * The one line that closes a cleanup: "Cleaned ORBIT-1042 · 6.4 GB freed", with
- * Details unfolding what was removed. It replaces the Done screen for a run that
- * went through without a look (CleanupDialog's finished step in Ask mode, the
- * direct run at merge time). Bottom right like UpdateToast; the two share a
- * corner and a release note arriving in the same second would sit under this one,
- * which a dismiss clears.
+ * Details unfolding what was removed and Undo for what a run can put back (the
+ * briefs it moved to archive/). It replaces the Done screen for a run that went
+ * through without a look (CleanupDialog's finished step in Ask mode, the direct
+ * run at merge time) and announces an automatic run when it finishes. Bottom
+ * right like UpdateToast; the two share a corner and a release note arriving in
+ * the same second would sit under this one, which a dismiss clears.
  */
 import { useEffect, useState, useSyncExternalStore, type ReactElement } from "react";
 import { currentCleanupNote, showCleanupNote, subscribeCleanupNote } from "../lib/cleanupEvents.ts";
@@ -13,7 +14,7 @@ import { DoneIcon, SparkleIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { CloseButton } from "./CloseButton.tsx";
 import { EDGE } from "./workspace/Chrome.tsx";
 
-/** A clean line goes by itself; one with problems waits for the person. */
+/** A clean line goes by itself; one with problems, or one offering Undo, waits for the person. */
 const HOLD_MS = 10_000;
 
 export function CleanupToast(): ReactElement | null {
@@ -21,7 +22,7 @@ export function CleanupToast(): ReactElement | null {
   const [open, setOpen] = useState(false);
   useEffect(() => {
     setOpen(false);
-    if (!note || note.tone !== "ok") return;
+    if (!note || note.tone !== "ok" || note.undo) return;
     const t = setTimeout(() => showCleanupNote(null), HOLD_MS);
     return () => clearTimeout(t);
   }, [note]);
@@ -34,6 +35,9 @@ export function CleanupToast(): ReactElement | null {
         <span style={{ color: note.tone === "warn" ? "var(--warning)" : note.tone === "run" ? "var(--text3)" : "var(--success)", marginTop: 2 }}>{note.tone === "warn" ? <WarningIcon size={ICON.sm} /> : note.tone === "run" ? <SparkleIcon size={ICON.sm} /> : <DoneIcon size={ICON.sm} />}</span>
         <span>{note.text}</span>
       </div>
+      {note.undo && (
+        <button type="button" onClick={() => { note.undo!.run(); showCleanupNote(null); }} className="text-[11.5px] mt-1.5 mr-3 underline font-semibold" style={{ color: "var(--primary-ink)" }} data-cleanup-undo="">{note.undo.label}</button>
+      )}
       {note.lines.length > 0 && (
         <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="text-[11.5px] mt-1.5 underline" style={{ color: "var(--primary-ink)" }}>{open ? "Hide details" : "Details"}</button>
       )}

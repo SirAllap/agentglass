@@ -270,7 +270,7 @@
 .agv .legend { display: flex; gap: 16px; align-items: center; font-size: 11.5px; color: var(--text3); padding: 10px 18px; }
 /* the rules section: a card per project, the design's own sizes */
 .agv .sc { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px; border-radius: 99px; font-size: 11.5px; font-weight: 600; white-space: nowrap; background: var(--bg3); color: var(--text2); }
-.agv .sc.chat { background: var(--agv-info-bg); color: var(--info); } .agv .sc.first { background: var(--agv-warn-bg); color: var(--warning); } .agv .sc.always { background: var(--agv-ok-bg); color: var(--success); }
+.agv .sc.chat { background: var(--agv-info-bg); color: var(--info); } .agv .sc.first { background: var(--agv-warn-bg); color: var(--warning); } .agv .sc.always { background: var(--agv-ok-bg); color: var(--success); } .agv .sc.all { background: var(--agv-info-bg); color: var(--info); }
 .agv .learnhow { display: grid; grid-template-columns: auto repeat(3, 1fr); gap: 14px; align-items: center; padding: 12px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); margin-bottom: 16px; }
 .agv .learnhow .lab { font-weight: 700; display: flex; align-items: center; gap: 8px; }
 .agv .learnhow .st { display: grid; gap: 4px; font-size: 12px; color: var(--text3); }
@@ -371,4 +371,6 @@
 .agv .pr-t { min-width: 0; }
 .agv .pr-t b { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agv .pr-t .mut { font-size: 12px; margin-top: 2px; }
+/* A quiet line from the Signals door: it adds a fact and never changes the row's class. */
+.agv .pr-sig { font-size: 11.5px; color: var(--text3); margin-top: 3px; }
 .agv .pr-act { display: inline-flex; align-items: center; gap: 8px; }

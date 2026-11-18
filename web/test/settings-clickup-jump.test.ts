@@ -16,7 +16,7 @@ const code = modal.split("\n").filter((l) => !l.trim().startsWith("/*") && !l.tr
 describe("the way off a ClickUp page that is not there", () => {
   it("leaves the page alone when ClickUp is connected, and any other page whatever the answer", () => {
     expect(paneWhenClickupKnown("clickup", true)).toBe("clickup");
-    expect(paneWhenClickupKnown("clickup", false)).toBe("connections");
+    expect(paneWhenClickupKnown("clickup", false)).toBe("tasks");
     expect(paneWhenClickupKnown("terminal", false)).toBe("terminal");
   });
 

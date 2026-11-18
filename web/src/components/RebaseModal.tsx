@@ -17,6 +17,8 @@ import { UNREACHABLE } from "../lib/gitDialog.ts";
 import { api } from "../lib/api.ts";
 import { Button, INPUT, INPUT_STYLE, EDGE } from "./workspace/Chrome.tsx";
 import { Select } from "./Select.tsx";
+import { DotStrip } from "./git/DotStrip.tsx";
+import { rebaseDots } from "../lib/gitStrips.ts";
 
 export type RebaseStep = { action: "pick" | "squash" | "fixup" | "drop" | "reword" | "edit"; hash: string; subject: string; newMessage?: string };
 
@@ -90,7 +92,7 @@ export function RebaseModal({ root, base, branch, onClose, onDone }: {
   const n = steps?.length ?? 0;
   return (
     <GitDialog
-      title={`Rebase ${branch}?`}
+      title={n ? `Rewrite ${n} commit${n === 1 ? "" : "s"} on ${branch}?` : `Rebase ${branch}?`}
       subtitle={n ? `Replays ${n} commit${n === 1 ? "" : "s"} above the base, in the order and with the actions you pick.` : "Reads the commits above the base."}
       tone="warn" width={640}
       confirmLabel={busy ? "Rebasing…" : "Start rebase"} confirmDisabled={!n || busy} onConfirm={start}
@@ -98,6 +100,8 @@ export function RebaseModal({ root, base, branch, onClose, onDone }: {
       locked={busy} onClose={onClose}
     >
       <RefStrip head={branch} base={base.slice(0, 7)} tone="warn" />
+      {n > 0 && <DotStrip dots={rebaseDots(steps!)} tone="warn" label="The commits in their new order"
+        caption={`${after} in the result${drops ? `, ${drops} dropped (hollow)` : ""}${steps!.some((x) => x.action === "squash" || x.action === "fixup") ? ", squashed ones merged into the one above" : ""}`} />}
       {steps === null && <DialogSkeleton rows={4} label="Reading commits…" />}
       {err && !n && <DialogError message={err} onRetry={() => setAttempt((a) => a + 1)} />}
       {n > 0 && (

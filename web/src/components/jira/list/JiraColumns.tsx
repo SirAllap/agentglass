@@ -19,17 +19,17 @@ export function useColumns(ref: RefObject<HTMLElement | null>, live: boolean): C
   return columnsFor(width);
 }
 
-export function JiraColumns({ cols, third }: { cols: Cols; third: string }) {
+export function JiraColumns({ cols }: { cols: Cols; third?: string }) {
   return (
     <div className="agx-jl-caps" aria-hidden>
       <div className="agx-jl-capsin">
         <span />
+        <span>Key</span>
         <span>Card</span>
-        {cols.epic && <span>{third}</span>}
+        {cols.status && <span>Status</span>}
+        {cols.agent && <span>Agent</span>}
         {cols.pr && <span>PR</span>}
         {cols.who && <span>Who</span>}
-        {cols.due && <span>Due</span>}
-        {cols.pts && <span className="pts">Pts</span>}
       </div>
     </div>
   );

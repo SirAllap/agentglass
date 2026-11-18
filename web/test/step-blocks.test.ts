@@ -10,8 +10,9 @@
 import { describe, expect, test } from "bun:test";
 import type { ClickUpStepBlock as StepBlock } from "../../shared/providers.ts";
 import { BLOCK_INFO, blockRefusal, blocksFromLegacy, blocksOf, blocksProblem, legacyFromBlocks, MAX_BLOCKS, planOf, touchesPeople, type StepTrigger } from "../../shared/stepBlocks.ts";
-import { blocksSentence, moveBlock, peopleButtonLabel } from "../src/lib/stepBlocksView.ts";
-import { stepChanges, resolveEnsure } from "../src/lib/stepAssign.ts";
+import { blocksSentence, moveBlock, peopleButtonLabel, suggestedAssign } from "../src/lib/stepBlocksView.ts";
+import { ASSIGN_LABEL, ASSIGN_WHO, assignWords, stepChanges, resolveEnsure } from "../src/lib/stepAssign.ts";
+import { newAssign, hintOf } from "../src/components/StepBlocks.tsx";
 import { clickupSteps } from "../src/lib/clickupWorkflow.ts";
 import { movesNothing, needsStatus, isActive, moments } from "../src/lib/workflowMap.ts";
 import { CLICKUP } from "../src/lib/clickupWorkflow.ts";
@@ -47,6 +48,46 @@ describe("which blocks a place can take", () => {
     expect(blocksProblem("menu", [move("qa"), off("all")])).toMatch(/^block 2 \(unassign\)/);
     expect(blocksProblem("move", [assign("me"), assign("author")])).toMatch(/^block 2 \(assign\)/);
     expect(blocksProblem("move", Array(MAX_BLOCKS + 1).fill(move("a")))).toMatch(/more than/);
+  });
+});
+
+describe("the assign a Jira review step offers", () => {
+  const jira = { reviewButton: true };
+  test("the map offers it while the step says nothing about who is on the card, and the row then reads as an ask", () => {
+    expect(suggestedAssign("menu", [move("code review")], jira)).toEqual({ type: "assign", who: "reviewer", ask: true });
+    expect(suggestedAssign("menu", [], jira)).toEqual({ type: "assign", who: "reviewer", ask: true });
+    const said = blocksSentence({ lead: "Press it:", trigger: "menu", blocks: [move("code review"), suggestedAssign("menu", [move("code review")], jira)!], item: "card", status: "code review" });
+    expect(said).toBe("Press it: move the card to code review, then ask who to assign it to, starting at the reviewer’s Jira account.");
+  });
+  test("never once the step names somebody or takes somebody off, and never for another step or tracker", () => {
+    expect(suggestedAssign("menu", [move("code review"), assign("me")], jira)).toBeNull();
+    expect(suggestedAssign("menu", [move("code review"), off("all")], jira)).toBeNull();
+    expect(suggestedAssign("move", [move("code review")], jira)).toBeNull();
+    expect(suggestedAssign("menu", [move("code review")], { reviewButton: false })).toBeNull();
+  });
+});
+
+describe("a new assign block on a Jira review step", () => {
+  test("asks, starting at the reviewer; every other step keeps the person pressing", () => {
+    expect(newAssign("menu", "jira")).toEqual({ type: "assign", who: "reviewer", ask: true });
+    expect(newAssign("menu", "clickup")).toEqual({ type: "assign", who: "me" });
+    expect(newAssign("move", "jira")).toEqual({ type: "assign", who: "me" });
+    expect(newAssign("merge", "jira")).toEqual({ type: "assign", who: "me" });
+  });
+  test("its row says it replaces whoever is on the card: a Jira card holds one person", () => {
+    expect(hintOf("assign", "menu", { item: "card" }, "jira")).toBe("Replaces whoever is assigned: a Jira card holds one person");
+    expect(hintOf("assign", "merge", { item: "card" }, "jira")).toBe("Replaces whoever is assigned: a Jira card holds one person");
+    // ClickUp ensures a member and leaves the rest alone, so its words stay.
+    expect(hintOf("assign", "menu", { item: "card" }, "clickup")).toBe("Added if missing");
+    expect(hintOf("assign", "merge", { item: "card" }, "clickup")).toBe("Added if missing, when the merge moves the card");
+  });
+  test("the Start at menu offers the reviewer on a Jira question only, and it says what it is", async () => {
+    expect(ASSIGN_WHO).toContain("reviewer");
+    expect(ASSIGN_LABEL.reviewer).toBe("the reviewer — learned Jira account");
+    expect(assignWords({ who: "reviewer" })).toBe("the reviewer’s Jira account");
+    // Read from source: the menu is a portal, and there is no renderer here that would draw it.
+    const src = await Bun.file(new URL("../src/components/StepBlocks.tsx", import.meta.url).pathname).text();
+    expect(src).toContain('withReviewer={cur.ask === true && p.tracker === "jira"}');
   });
 });
 
@@ -89,7 +130,7 @@ describe("a file from before blocks is the same step", () => {
     expect(blocksFromLegacy("move", legacy({ enabled: false, statusNames: ["qa"], unassign: "me" }))).toEqual([move("qa"), off("me")]);
   });
   test("round trip: blocks to the three keys and back lose nothing, for every combination the page can build", () => {
-    const person = { who: "person" as const, person: { id: 7, name: "Sam Rivera" } };
+    const person = { who: "person" as const, person: { id: 7, name: "Sam Orbit" } };
     for (const names of [[], ["qa"], ["qa", "testing"]]) for (const un of ["none", "me", "all"] as const) for (const as of [{ who: "none" as const }, { who: "me" as const }, person]) {
       const g = legacy({ statusNames: names, unassign: un, assign: as });
       const blocks = blocksFromLegacy("move", g);
@@ -135,7 +176,7 @@ describe("a step with no move block", () => {
 });
 
 describe("however many blocks, one write", () => {
-  const people = [{ id: 1, me: true, name: "Me" }, { id: 2, name: "Sam Rivera" }];
+  const people = [{ id: 1, me: true, name: "Me" }, { id: 2, name: "Sam Orbit" }];
   const orders = (xs: StepBlock[]): StepBlock[][] => (xs.length <= 1 ? [xs] : xs.flatMap((x, i) => orders([...xs.slice(0, i), ...xs.slice(i + 1)]).map((r) => [x, ...r])));
   test("every order of the same blocks makes the same single write", () => {
     const blocks = [move("qa"), off("all"), assign("me")];

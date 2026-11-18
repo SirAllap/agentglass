@@ -61,15 +61,15 @@ describe("the door on the engine", () => {
     const start = server.indexOf('pathname === "/browse" || pathname === "/browse/list"');
     expect(start).toBeGreaterThan(0);
     const gate = server.slice(start, server.indexOf('if (pathname === "/browse/list")', start));
-    expect(gate).toContain("FS_BROWSE_ENABLED");
+    expect(gate).toContain("fsBrowseEnabled()");
     expect(gate).toContain("heldBackFrom");
   });
   test("/preview/file sits inside that gate, reads through previewSlice, and never serves a script", () => {
     const gateAt = server.indexOf('pathname === "/browse" || pathname === "/browse/list"');
     const at = server.indexOf('if (pathname === "/preview/file") {');
     expect(at).toBeGreaterThan(gateAt);
-    // Still inside the same `if` as FS_BROWSE_ENABLED: nothing closes it in between.
-    expect(server.indexOf("FS_BROWSE_ENABLED", gateAt)).toBeLessThan(at);
+    // Still inside the same `if` as fsBrowseEnabled(): nothing closes it in between.
+    expect(server.indexOf("fsBrowseEnabled()", gateAt)).toBeLessThan(at);
     const body = server.slice(at, server.indexOf('if (pathname === "/preview/raw"', at));
     expect(body).toContain("previewSlice(");
     expect(body).toContain("localBrowse");

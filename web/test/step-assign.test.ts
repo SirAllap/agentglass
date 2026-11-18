@@ -6,7 +6,7 @@
  * saved shape (a step saved before the row existed reads as "leave as is"), the
  * words the map and the preview use, and the places that press it: one write
  * for the card, and a member read only when the choice is the author.
- * People are invented (Ada Test, Sam Rivera); nothing here reaches a tracker.
+ * People are invented (Ada Test, Sam Orbit); nothing here reaches a tracker.
  */
 import { describe, expect, test } from "bun:test";
 import React from "react";
@@ -23,7 +23,7 @@ import {
 const member = (id: number, name: string, extra: Partial<ListMember> = {}): ListMember => ({ id, name, initials: name.slice(0, 2), ...extra });
 const MEMBERS: ListMember[] = [
   member(1, "Ada Test", { email: "ada@orbit.example", me: true }),
-  member(2, "Sam Rivera", { email: "sam@orbit.example" }),
+  member(2, "Sam Orbit", { email: "sam@orbit.example" }),
   member(3, "Zoë Okafor"),
   member(4, "Lee Wong"), member(5, "lee  wong"),
   member(6, "Kim One", { email: "shared@orbit.example" }), member(7, "Kim Two", { email: "shared@orbit.example" }),
@@ -35,7 +35,7 @@ describe("which member the pull request's author is", () => {
   });
   test("else the full profile name, whatever its case, spacing or accents", () => {
     expect(authorMember({ login: "zokafor", name: "ZOE OKAFOR" }, MEMBERS)?.id).toBe(3);
-    expect(authorMember({ login: "sr", name: "sam   rivera" }, MEMBERS)?.id).toBe(2);
+    expect(authorMember({ login: "sr", name: "sam   orbit" }, MEMBERS)?.id).toBe(2);
   });
   test("a login, a single word or a partial name is not evidence", () => {
     expect(authorMember({ login: "sam" }, MEMBERS)).toBeNull();
@@ -46,12 +46,12 @@ describe("which member the pull request's author is", () => {
     expect(authorMember({ login: "lw", name: "Lee Wong" }, MEMBERS)).toBeNull();
   });
   test("an email two members share is nobody, even when the name would have been unique", () => {
-    expect(authorMember({ login: "x", email: "shared@orbit.example", name: "Sam Rivera" }, MEMBERS)).toBeNull();
+    expect(authorMember({ login: "x", email: "shared@orbit.example", name: "Sam Orbit" }, MEMBERS)).toBeNull();
   });
   test("a wrong email does not fall through to a lucky name; no members is nobody", () => {
-    expect(authorMember({ login: "x", email: "nobody@orbit.example", name: "Sam Rivera" }, MEMBERS)?.id).toBe(2);
-    expect(authorMember({ login: "x", name: "Sam Rivera" }, [])).toBeNull();
-    expect(authorMember({ login: "x", name: "Sam Rivera" }, null)).toBeNull();
+    expect(authorMember({ login: "x", email: "nobody@orbit.example", name: "Sam Orbit" }, MEMBERS)?.id).toBe(2);
+    expect(authorMember({ login: "x", name: "Sam Orbit" }, [])).toBeNull();
+    expect(authorMember({ login: "x", name: "Sam Orbit" }, null)).toBeNull();
     expect(authorMember(null, MEMBERS)).toBeNull();
   });
 });
@@ -61,16 +61,16 @@ describe("who the choice means", () => {
     expect(resolveEnsure({ who: "none" }, {})).toEqual({ kind: "none" });
     expect(resolveEnsure(undefined, {})).toEqual({ kind: "none" });
     expect(resolveEnsure({ who: "me" }, {})).toEqual({ kind: "me" });
-    expect(resolveEnsure({ who: "person", person: { id: 2, name: "Sam Rivera" } }, {})).toEqual({ kind: "person", id: 2, name: "Sam Rivera" });
+    expect(resolveEnsure({ who: "person", person: { id: 2, name: "Sam Orbit" } }, {})).toEqual({ kind: "person", id: 2, name: "Sam Orbit" });
   });
   test("the author is the member they map to", () => {
-    expect(resolveEnsure({ who: "author" }, { author: { login: "sr", name: "Sam Rivera" }, members: MEMBERS })).toEqual({ kind: "person", id: 2, name: "Sam Rivera" });
+    expect(resolveEnsure({ who: "author" }, { author: { login: "sr", name: "Sam Orbit" }, members: MEMBERS })).toEqual({ kind: "person", id: 2, name: "Sam Orbit" });
   });
   test("an author who cannot be told says so and assigns nobody", () => {
     const e = resolveEnsure({ who: "author" }, { author: { login: "octo-bot" }, members: MEMBERS });
     expect(e.kind).toBe("unmapped");
     expect((e as { why: string }).why).toBe("No ClickUp member matches “octo-bot”, so nobody was assigned.");
-    expect(resolveEnsure({ who: "author" }, { author: { login: "sr", name: "Sam Rivera" }, members: null }).kind).toBe("unmapped");
+    expect(resolveEnsure({ who: "author" }, { author: { login: "sr", name: "Sam Orbit" }, members: null }).kind).toBe("unmapped");
   });
   test("for a form that already holds the members, the id is read without a request", () => {
     expect(ensureIds({ kind: "me" }, MEMBERS)).toEqual([1]);
@@ -83,7 +83,7 @@ describe("who the choice means", () => {
 
 describe("what the one write carries", () => {
   const on = [{ id: 1, me: true }, { id: 2 }, { id: 4 }];
-  const sam: Ensure = { kind: "person", id: 2, name: "Sam Rivera" };
+  const sam: Ensure = { kind: "person", id: 2, name: "Sam Orbit" };
   const lee: Ensure = { kind: "person", id: 6, name: "Lee Park" };
   const final = (people: { id?: number }[], w: { add?: number[]; rem?: number[] }) =>
     [...new Set([...people.map((p) => p.id!).filter((id) => !(w.rem ?? []).includes(id)), ...(w.add ?? [])])].sort();
@@ -139,7 +139,7 @@ describe("the words", () => {
     expect(assignLabel({ who: "none" })).toBe("leave as is");
     expect(assignLabel({ who: "me" })).toBe("me — whoever presses it");
     expect(assignLabel({ who: "author" })).toBe("the pull request’s author");
-    expect(assignLabel({ who: "person", person: { id: 2, name: "Sam Rivera" } })).toBe("Sam Rivera");
+    expect(assignLabel({ who: "person", person: { id: 2, name: "Sam Orbit" } })).toBe("Sam Orbit");
     expect(assignWords({ who: "none" })).toBeNull();
   });
   test("the press sentence says exactly what will happen", () => {
@@ -147,7 +147,7 @@ describe("the words", () => {
     expect(pressSentence({ lead: "Press it:", status: "ready for deployment", item: "card", assign: a })).toBe("Press it: moves the card to ready for deployment and assigns the pull request’s author.");
     expect(pressSentence({ lead: "Press it:", status: "qa", item: "card", unassign: "all", assign: { who: "me" } })).toBe("Press it: moves the card to qa, takes everyone off and assigns whoever presses it.");
     expect(pressSentence({ lead: "Press it:", status: "qa", item: "card", unassign: "me", assign: { who: "none" } })).toBe("Press it: moves the card to qa and takes only you off.");
-    expect(pressSentence({ lead: "Press it:", status: "qa", item: "card", assign: { who: "person", person: { id: 2, name: "Sam Rivera" } } })).toBe("Press it: moves the card to qa and assigns Sam Rivera.");
+    expect(pressSentence({ lead: "Press it:", status: "qa", item: "card", assign: { who: "person", person: { id: 2, name: "Sam Orbit" } } })).toBe("Press it: moves the card to qa and assigns Sam Orbit.");
     expect(pressSentence({ lead: "Confirm the merge:", status: null, item: "card" })).toBe("Confirm the merge: leaves the card where it is.");
   });
 });
@@ -165,7 +165,7 @@ describe("what is saved", () => {
     expect(steps.map((s) => s.assign)).toEqual(Array(5).fill({ who: "none" }));
   });
   test("a step carries what was saved on it, and only the steps that move a status", () => {
-    const pick = { who: "person", person: { id: 2, name: "Sam Rivera" } } as const;
+    const pick = { who: "person", person: { id: 2, name: "Sam Orbit" } } as const;
     const steps = clickupSteps(base({
       handoff: { enabled: true, statusNames: ["qa"], unassign: "none", assign: { who: "me" } }, review: { enabled: true, statusNames: ["review"], assignReviewer: false, assign: { who: "me" } },
       merge: { enabled: true, statusNames: ["done"], assign: pick },
@@ -190,7 +190,7 @@ describe("the map", () => {
   const p = {
     handoff: { enabled: true, statusNames: ["ready for deployment"], unassign: "all", assign: { who: "me" } },
     review: { enabled: true, statusNames: ["code review"], assignReviewer: true, assign: { who: "none" } },
-    merge: { enabled: true, statusNames: ["done"], assign: { who: "person", person: { id: 2, name: "Sam Rivera" } } },
+    merge: { enabled: true, statusNames: ["done"], assign: { who: "person", person: { id: 2, name: "Sam Orbit" } } },
     flows: { noteOnCard: true },
   };
   const html = draw(p);
@@ -202,12 +202,12 @@ describe("the map", () => {
   });
   test("the row says the saved choice, and an unassigned step has no assign row at all", () => {
     expect(card("move")).toContain(">me — whoever presses it<");
-    expect(card("merge")).toContain(">Sam Rivera<");
+    expect(card("merge")).toContain(">Sam Orbit<");
   });
   test("the sentence reads what will happen, in the order of the blocks", () => {
     expect(card("move")).toContain("Press it: move the card to ready for deployment, take everyone off the card, then assign it to you.");
     expect(card("menu")).toContain("Pick it: move the card to code review.");
-    expect(card("merge")).toContain("Confirm the merge: preselect done, then assign it to Sam Rivera.");
+    expect(card("merge")).toContain("Confirm the merge: preselect done, then assign it to Sam Orbit.");
   });
   test("a step still waiting for a status says so in its sentence and its badge", () => {
     const h = draw({ ...p, handoff: { ...p.handoff, blocks: [{ type: "move", statusNames: [] }] } });
@@ -238,7 +238,7 @@ describe("the places that press it", () => {
     expect(dialog).toContain('mergeAssign?.who === "author"');
     const panel = await read("components/PrPanel.tsx");
     const run = panel.slice(panel.indexOf("const runMerge = async"), panel.indexOf("const doAutoMerge"));
-    expect(run).toContain("move.write ? api.clickupCard(move.id, move.write, move.updated) : api.clickupStatus(move.id, move.to, move.updated)");
+    expect(run).toContain("move.write ? api.clickupCard(move.id, move.write, move.updated, repo?.nameWithOwner) : api.clickupStatus(move.id, move.to, move.updated, repo?.nameWithOwner)");
     expect(run.match(/api\.clickup(Card|Status)\(/g)?.length).toBe(2);
   });
   test("the assignment rides on the move: with no move, the dialog sends no card at all", async () => {

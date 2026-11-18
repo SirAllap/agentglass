@@ -2204,7 +2204,7 @@ describe("the interactive inventory", () => {
     const run = (code: string) => new Function("window", "document", "location", "getComputedStyle", "innerWidth", "innerHeight", `return ${code}`)(
       win, document, { href: "https://example.com/login" }, (n: N) => ({ display: n.attributes.hidden !== undefined ? "none" : "block", visibility: "visible", opacity: "1" }), 1200, 800);
     const el = fakeGuest((code) => (code.includes("__agxLog = log") ? 1 : run(code)));
-    return { el, win, nodes: { user, pw, remember, plan, token, go, form, search, link, dead, ghost } };
+    return { el, win, body, nodes: { user, pw, remember, plan, token, go, form, search, link, dead, ghost } };
   }
 
   test("interactive lists what can be acted on, with what an agent needs to act: href, value, checked, options", async () => {
@@ -2259,6 +2259,20 @@ describe("the interactive inventory", () => {
     // Every id is an id a verb will take.
     expect(/^e\d+$/.test(String(f.submit[0]!.e))).toBe(true);
     expect(/^e\d+$/.test(String(f.fields[0]!.e))).toBe(true);
+  });
+
+  test("forms lists an app-drawn checkbox or switch with its checked state, a read guide mode allows", async () => {
+    resetStableIds();
+    const page = buildPage();
+    page.body.children.push(
+      node("div", { role: "switch", "aria-checked": "true", "aria-label": "Notify me" }),
+      node("span", { role: "checkbox", "aria-checked": "false" }, [], "Accept terms"),
+    );
+    const r = await runBrowserAsk(page.el, ask("forms", {}));
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    const loose = (r.value as { loose: Record<string, unknown>[] }).loose;
+    expect(loose.find((x) => x.type === "switch")).toMatchObject({ label: "Notify me", checked: true });
+    expect(loose.find((x) => x.type === "checkbox")).toMatchObject({ label: "Accept terms", checked: false });
   });
 
   test("attr answers the attributes asked for, null for one that is not there, and all of them when none is named", async () => {

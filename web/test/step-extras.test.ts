@@ -27,19 +27,19 @@ const FIELDS: ListField[] = [
   { id: "f-budget", name: "Budget (DO NOT EDIT)", type: "number", readOnly: true },
   { id: "f-who", name: "Reviewer", type: "users", readOnly: false },
 ];
-const CTX = prContext({ pr: { number: 318, title: "Retry the webhook", url: "https://example.test/pr/318" }, author: { login: "srivera", name: "Sam Rivera" }, status: "ready for qa", me: "Ada Test" });
+const CTX = prContext({ pr: { number: 318, title: "Retry the webhook", url: "https://example.test/pr/318" }, author: { login: "sorbit", name: "Sam Orbit" }, status: "ready for qa", me: "Ada Test" });
 
 describe("the template", () => {
   test("every placeholder is filled from what the place knows", () => {
     expect(PLACEHOLDERS).toEqual(["pr", "pr_url", "author", "status", "me"]);
-    expect(fillTemplate("{pr} by {author} is {status}: {pr_url} — {me}", CTX)).toEqual({ text: "#318 Retry the webhook by Sam Rivera is ready for qa: https://example.test/pr/318 — Ada Test", missing: [] });
+    expect(fillTemplate("{pr} by {author} is {status}: {pr_url} — {me}", CTX)).toEqual({ text: "#318 Retry the webhook by Sam Orbit is ready for qa: https://example.test/pr/318 — Ada Test", missing: [] });
   });
   test("one that cannot be filled stays as written and is named; an unknown one is left alone", () => {
     expect(fillTemplate("{author} {status} {nope}", { status: "done" })).toEqual({ text: "{author} done {nope}", missing: ["author"] });
   });
   test("a value that looks like a placeholder is posted as written, not filled in a second time", () => {
     // A pull request title is text somebody else typed; "{me}" in it is not ours to expand.
-    expect(fillTemplate("{pr}", { pr: "fix {me} and {author}", me: "Ada Test", author: "Sam Rivera" })).toEqual({ text: "fix {me} and {author}", missing: [] });
+    expect(fillTemplate("{pr}", { pr: "fix {me} and {author}", me: "Ada Test", author: "Sam Orbit" })).toEqual({ text: "fix {me} and {author}", missing: [] });
   });
   test("a fixed comment with a gap is not posted, and says why; a whole one is", () => {
     expect(resolveComment("{pr} {author}", prContext({ pr: { number: 1, title: "t" } }))).toEqual({ skip: "the comment names {author}, which is not known here" });

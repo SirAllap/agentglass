@@ -75,7 +75,7 @@ describe("the sections, against the mockup", () => {
    * add a third is to drop it wherever the JSX happened to end.
    */
   test("the four the mockup draws are there, spelled and ordered as it spells them", () => {
-    const html = render({ drafts: [] });
+    const html = render({ drafts: [], loading: true });
     for (const t of ["Said about this file", "Checks blaming this file", "Your review", "Merge"]) {
       expect(head(html, t)).toBeGreaterThan(-1);
     }
@@ -91,7 +91,7 @@ describe("the sections, against the mockup", () => {
      * verdict underneath is about to send, so it belongs above it. Anywhere else
      * and the four above stop reading in the order the mockup put them in.
      */
-    const html = render({ drafts: [] });
+    const html = render({ drafts: [], loading: true });
     expect(head(html, "Said about this file")).toBeLessThan(head(html, "Threads on this file"));
     expect(head(html, "Threads on this file")).toBeLessThan(head(html, "Checks blaming this file"));
     expect(head(html, "Queued by you")).toBeLessThan(head(html, "Your review"));
@@ -123,9 +123,10 @@ describe("while the detail is still arriving", () => {
   });
 
   test("and once it has landed it commits to an answer", () => {
+    // A clean file is said once, not as three empty boxes.
     const html = render();
-    expect(html).toContain("Nothing in the conversation names it");
-    expect(html).toContain("Nothing is failing");
+    expect(html).toContain("Clean");
+    expect(html).not.toContain("Nothing is failing");
     expect(html).not.toContain("Still reading");
   });
 
@@ -198,7 +199,7 @@ describe("when GitHub only sent one page of it", () => {
     // The control: the caveat must not become the default, or every rail on
     // every small pull request starts hedging about a page nobody hit.
     const html = render();
-    expect(html).toContain("Nothing in the conversation names it.");
+    expect(html).toContain("Clean");
     expect(html).not.toContain("caps the page");
   });
 });
@@ -370,8 +371,8 @@ describe("what a machine wrote to itself, and what a roster is not", () => {
     const listed = render({ path: PY, d: detail({ reviews: [review(ROSTER)] as never }) });
     expect(listed).toContain("Named only in a list of files — nothing argues about it.");
     expect(listed).not.toContain("Nothing in the conversation names it");
-    // And a pull request that never mentions it keeps the plain sentence.
-    expect(render({ path: PY })).toContain("Nothing in the conversation names it");
+    // And a pull request that never mentions it is just clean.
+    expect(render({ path: PY })).toContain("Clean");
   });
 });
 

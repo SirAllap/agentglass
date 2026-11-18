@@ -13,25 +13,26 @@ import { useEffect, useState } from "react";
 import { api } from "../lib/api.ts";
 import { bumpSavedReplies } from "./PrPanel.tsx";
 import { Button, INPUT, INPUT_STYLE } from "./workspace/Chrome.tsx";
-import { Field, SettingsForm, helpIdFor } from "./SettingsKit.tsx";
-import { EditorFoot, EditorPanel, ListBar, ListEditorSplit, ListPanel, NewButton, NothingSelected, differs } from "./SettingsListEditor.tsx";
-import { QuoteIcon } from "./settingsNavIcons.tsx";
-import { useReportHead, useReportSaving } from "./SettingsPageState.tsx";
-import { ICON } from "../lib/iconSize.ts";
+import { FormInput } from "./settings/shell/FormInput.tsx";
+import { Section } from "./settings/shell/Section.tsx";
+import { SettingRow } from "./settings/shell/SettingRow.tsx";
+import { DangerAction, GroupActions } from "./settings/save/index.ts";
+import { useReportSaving } from "./SettingsPageState.tsx";
+import { differs } from "./SettingsListEditor.tsx";
 
 interface Reply { id: string; title: string; text: string }
 
+/** Saved replies as shell rows: one row per reply with Edit and Delete, and the editor as a section of its own rows. */
 export function SavedRepliesPane({ open }: { open: boolean }) {
   const [replies, setReplies] = useState<Reply[] | null>(null);
   const [busy, setBusy] = useState(false);
   useReportSaving("saved-replies", busy);
   const [err, setErr] = useState("");
-  /** The one being edited, by id — or `""` for the new one being written; null until one is picked. */
+  /** The one being edited, by id, or `""` for the new one being written; null when none is open. */
   const [editing, setEditing] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
   const [q, setQ] = useState("");
-  useReportHead("saved-replies", { action: { label: "New reply" } }, () => newOne());
 
   useEffect(() => {
     if (!open) return;
@@ -44,13 +45,8 @@ export function SavedRepliesPane({ open }: { open: boolean }) {
   const clear = () => { setEditing(null); setTitle(""); setText(""); setErr(""); };
   const newOne = () => { setEditing(""); setTitle(""); setText(""); setErr(""); };
 
-  /* The first reply is open when the page is: an editor with nothing in it, beside a list, reads as broken. */
-  useEffect(() => {
-    if (replies?.length && editing === null) editRow(replies[0]!);
-  }, [replies, editing]);
-
   /* Every write answers with the whole list, so the pane never has to guess what the
-     file now says — and the composer's cache is dropped, or a reply saved here would
+     file now says, and the composer's cache is dropped, or a reply saved here would
      not be in the menu until the window was reloaded. */
   const after = (list: Reply[] | undefined, keep?: string) => {
     setReplies(list ?? []);
@@ -80,53 +76,49 @@ export function SavedRepliesPane({ open }: { open: boolean }) {
   const ql = q.trim().toLowerCase();
   const shown = (replies ?? []).filter((r) => !ql || `${r.title} ${r.text}`.toLowerCase().includes(ql));
 
-  /* A list beside the editor, like the other pages that keep a list of your own words:
-     the replies on the left, the one open on the right. The form is always there, so
-     adding is not behind a button. Delete is in the editor's head, apart from Save. */
   return (
     <>
-      <ListBar q={q} onQ={setQ} placeholder={`Filter ${replies?.length ?? 0} replies`} label="Filter saved replies" />
-      <ListEditorSplit
-        list={<ListPanel selected={editing || null} onSelect={(id) => { const r = replies?.find((x) => x.id === id); if (r) editRow(r); }}
-          nothing={replies === null ? "Reading…" : "Nothing matches."}
-          blank={replies?.length === 0 ? {
-            icon: <QuoteIcon size={ICON.xl} />, title: "No saved replies yet",
-            text: "A saved reply is a sentence you type often, one click away in every composer. Nothing ships in this list: these go out under your name, so every one is yours.",
-            action: <NewButton onClick={newOne} disabled={busy}>New reply</NewButton>,
-          } : undefined}
-          sections={[{
-            id: "replies", title: "Replies", onAdd: newOne, addLabel: "New reply",
-            entries: shown.map((r) => ({
-              id: r.id, title: r.title || <i>Untitled</i>,
-              /* The text itself is what a person wrote to post under their own
-                 name — the same reason a pull request body reads in --font-prose
-                 rather than the app's mono stack. */
-              sub: <span style={{ fontFamily: "var(--font-prose)" }}>{r.text.split("\n")[0]}</span>,
-            })),
-          }]} />}
-        editor={editing === null ? <NothingSelected noun="reply" label="Saved reply" onNew={newOne} /> : (
-          <EditorPanel label="Saved reply" title={title.trim() || "New reply"}
-            chips={[editing ? { tone: "ok", text: "Saved" } : { tone: "info", text: "Draft" }]}
-            actions={editing ? <Button tone="danger" onClick={() => void remove(editing)} disabled={busy} title="Delete this saved reply">Delete this saved reply</Button> : undefined}>
-            <SettingsForm label={editing ? "Edit this reply" : "New reply"} onSubmit={() => void save()}>
-              <div className="agx-le-body">
-                <Field label="Title" htmlFor="saved-reply-title" help="What the menu shows. Left empty, the first line is used.">
-                  <input id="saved-reply-title" value={title} onChange={(e) => setTitle(e.target.value)}
-                    aria-describedby={helpIdFor("saved-reply-title")} className={`w-full ${INPUT}`} style={INPUT_STYLE} />
-                </Field>
-                <Field label="Reply" htmlFor="saved-reply-text" help="Markdown works. Used in every comment box of the pull request panel, under the quote button.">
-                  <textarea id="saved-reply-text" value={text} onChange={(e) => setText(e.target.value)} rows={8}
-                    aria-describedby={helpIdFor("saved-reply-text")}
-                    className="w-full px-2.5 py-2 rounded-lg text-[12px] outline-none resize-y bg-[var(--surface-inset)] text-[var(--text)]"
-                    style={{ ...INPUT_STYLE, fontFamily: "var(--font-prose)", lineHeight: 1.5 }} />
-                </Field>
-                {err && <div role="alert" className="agx-field-e">{err}</div>}
-              </div>
-              <EditorFoot dirty={dirty} canSave={!!text.trim()} noun="reply" busy={busy}
-                onCancel={() => { const r = saved; if (r) editRow(r); else clear(); }} />
-            </SettingsForm>
-          </EditorPanel>
-        )} />
+      <Section id="replies" title="Saved replies" intro="Sentences you type often, one click away in every comment box. Every one is yours.">
+        {replies === null && <SettingRow kind="fact" label="Reading your replies" value="…" />}
+        {replies?.length === 0 && (
+          <SettingRow kind="control" label="No saved replies yet" help="Nothing ships in this list: these go out under your name."
+            control={<Button onClick={newOne} disabled={busy}>New reply</Button>} />
+        )}
+        {(replies?.length ?? 0) > 6 && (
+          <SettingRow kind="control" label="Filter replies" help={`Search ${replies!.length} replies by title or text.`}
+            control={<FormInput aria-label="Filter saved replies" value={q} onChange={(e) => setQ(e.target.value)} className={INPUT} style={INPUT_STYLE} />} />
+        )}
+        {replies && replies.length > 0 && shown.length === 0 && <SettingRow kind="fact" label="Nothing matches" value="" />}
+        {shown.map((r) => (
+          /* The text itself is what a person wrote, so its preview reads in the prose face, not the mono default. */
+          <div key={r.id} data-reply-id={r.id} style={{ fontFamily: "var(--font-prose)" }}>
+            <SettingRow kind="control" label={r.title || r.text.split("\n")[0]!.slice(0, 60) || "Untitled"} help={r.text.split("\n")[0]!.slice(0, 90)}
+              control={<>
+                <Button onClick={() => editRow(r)}>Edit</Button>
+                <DangerAction label="Delete" onConfirm={() => remove(r.id)} />
+              </>} />
+          </div>
+        ))}
+        {replies && replies.length > 0 && editing === null && (
+          <SettingRow kind="control" label="Write a new reply" help="It joins the list and the comment box menu." control={<Button onClick={newOne} disabled={busy}>New reply</Button>} />
+        )}
+      </Section>
+      {editing !== null && (
+        <Section id="replies-edit" title={editing ? "Edit this reply" : "New reply"}>
+          <SettingRow kind="control" label="Title" help="Left empty, the first line is used."
+            control={<FormInput id="saved-reply-title" aria-label="Title" value={title} onChange={(e) => setTitle(e.target.value)} className={`w-full ${INPUT}`} style={INPUT_STYLE} />} />
+          <SettingRow kind="control" label="Reply" help="Markdown works."
+            control={
+              <textarea id="saved-reply-text" aria-label="Reply" value={text} onChange={(e) => setText(e.target.value)} rows={8}
+                className="w-full px-2.5 py-2 rounded-lg text-[12px] outline-none resize-y bg-[var(--surface-inset)] text-[var(--text)]"
+                style={{ ...INPUT_STYLE, fontFamily: "var(--font-prose)", lineHeight: 1.5, minWidth: 260 }} />} />
+          {err && <div role="alert" className="px-3 py-2 text-[12px]" style={{ color: "var(--error-ink)" }}>{err}</div>}
+          <div className="px-3 py-2.5">
+            <GroupActions primary="Save reply" dirty={dirty && !!text.trim()} busy={busy} onPrimary={() => void save()}
+              onCancel={() => { if (saved) editRow(saved); else clear(); }} />
+          </div>
+        </Section>
+      )}
     </>
   );
 }

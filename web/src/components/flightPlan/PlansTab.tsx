@@ -50,11 +50,11 @@ function Main({ d, it, snap, preflightOn, cap, now, pilot, onChanged, onSettings
         <StateTile state={n.state} detail />
         <div className="body">
           <div className="since">since {hhmm(since)} · {lasted(since, now)}</div>
-          <p className="say" title={stateSentence(n)}>{stateSentence(n)}</p>
+          <p className="say" data-tip={stateSentence(n)}>{stateSentence(n)}</p>
           <div className="facts">
-            <div><em>Happening</em><span title={n.bold}>{n.bold}</span></div>
-            <div><em>Next</em><span title={n.next}><i data-tone={n.state.tone} />{n.next}</span></div>
-            <div className={n.report ? undefined : "gap"}><em>Last report</em><span title={n.report ?? undefined}>{n.report ?? "none yet"}</span></div>
+            <div><em>Happening</em><span data-tip={n.bold}>{n.bold}</span></div>
+            <div><em>Next</em><span data-tip={n.next}><i data-tone={n.state.tone} />{n.next}</span></div>
+            <div className={n.report ? undefined : "gap"}><em>Last report</em><span data-tip={n.report ?? undefined}>{n.report ?? "none yet"}</span></div>
           </div>
         </div>
       </div>
@@ -127,7 +127,7 @@ export function PlansTab({ items, details, loading, snap, selected, open, now, p
         {builderFacts(sel.plan).length > 0 && (
           <section className="pv-facts" aria-label="Builder">
             <h5>Builder</h5>
-            <dl>{builderFacts(sel.plan).map((f) => <div key={f.k}><dt>{f.k}</dt><dd data-bad={f.bad ? "" : undefined} title={f.v}>{f.v}</dd></div>)}</dl>
+            <dl>{builderFacts(sel.plan).map((f) => <div key={f.k}><dt>{f.k}</dt><dd data-bad={f.bad ? "" : undefined} data-tip={f.v}>{f.v}</dd></div>)}</dl>
           </section>
         )}
         {sel.run?.certificate && <Certificate run={sel.run} cap={cap} withPlan />}

@@ -3,9 +3,10 @@
  *
  * Nothing resumes by itself. The banner says how many windows were rebuilt with
  * their scrollback and how many of them were running an agent, and offers the
- * one action for all of them. "Not now" only puts the pill away (remembered
- * against that restore, so a reload does not bring it back and the next
- * restore does); each window keeps its own card until it is answered.
+ * one action for all of them. "Not now" puts the pill away for good: the answer
+ * is kept with the restore itself, so a reload, another window and the phone
+ * stay quiet, while each window keeps its own card until it is answered. The
+ * next restore is announced again.
  */
 import { ClockIcon } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";

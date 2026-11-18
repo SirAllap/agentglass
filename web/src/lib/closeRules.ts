@@ -48,6 +48,10 @@ export interface ReopenStep {
   name: string;
   /** The folder the window was in, when tmux said. */
   cwd?: string;
+  /** The name agentglass gave it, so a card's tab is still the card's after a close. */
+  given?: string;
+  /** The card it belongs to, for the same reason as `given`. */
+  card?: string;
   /** The window left standing next to the slot; absent when nothing is left. */
   anchor?: string;
   /** Land after the anchor (true) or before it (false). */
@@ -72,6 +76,7 @@ export function reopenPlan(all: readonly TmuxWindow[], ids: readonly string[]): 
   const after = row.slice(last + 1).find((w) => !gone.has(w.id));
   const steps = closed.map((w) => ({
     name: nameOf(w), ...(w.cwd ? { cwd: w.cwd } : {}),
+    ...(w.given ? { given: w.given } : {}), ...(w.card ? { card: w.card } : {}),
     ...(before ? { anchor: before.id, after: true } : after ? { anchor: after.id, after: false } : { after: true }),
   }));
   return before ? steps.reverse() : steps;

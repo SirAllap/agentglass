@@ -55,7 +55,7 @@ export function Locks() {
         <div style={{ minWidth: 0 }}>
           <div className="nm">{l.name}</div>
           {/* The command, not just the pid: two gits in one checkout are told apart by what they are doing. */}
-          <div className="sub" title={l.path}>{`held for ${forAge(l.ageSec)}`}{l.heldBy && ` · pid ${l.heldBy.pid} · ${l.heldBy.cmd}`}</div>
+          <div className="sub" data-tip={l.path}>{`held for ${forAge(l.ageSec)}`}{l.heldBy && ` · pid ${l.heldBy.pid} · ${l.heldBy.cmd}`}</div>
         </div>
         <FlagTag tone="muted" title={l.repo}>{l.repo.split("/").filter(Boolean).pop()}</FlagTag>
         <div className="pa" onClick={(e) => e.stopPropagation()}>

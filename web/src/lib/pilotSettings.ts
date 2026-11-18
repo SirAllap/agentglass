@@ -23,6 +23,7 @@ export const PILOT_KEYS: Record<Field, { id: string; scope: "project" | "app" }>
   secondLooks: { id: "flightPlan.preflight.secondLooks", scope: "app" },
   model: { id: "flightPlan.preflight.model", scope: "project" },
   costCapUsd: { id: "flightPlan.preflight.costCapUsd", scope: "project" },
+  fileCapBytes: { id: "flightPlan.preflight.fileCapBytes", scope: "project" },
   dailyUsd: { id: "flightPlan.budget.dailyUsd", scope: "app" },
   weeklyUsd: { id: "flightPlan.budget.weeklyUsd", scope: "app" },
   maxFlying: { id: "flightPlan.maxFlying", scope: "app" },
@@ -44,6 +45,7 @@ export const DEFAULT_PILOT_SETTINGS: PilotSettings = {
   secondLooks: 1,
   model: "sonnet",
   costCapUsd: 0.5,
+  fileCapBytes: 0,
   dailyUsd: 5, weeklyUsd: 20,
   maxFlying: 2,
   askOnLarge: true, askOnSensitive: true,
@@ -53,6 +55,9 @@ export const DEFAULT_PILOT_SETTINGS: PilotSettings = {
 
 const REVIEW_KEYS = ["plan", "taskDone", "pr"] as const;
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+/** The byte caps `fileCapBytes` offers: 0 is no cap (a named file with no cited line always goes in whole). */
+export const FILE_CAP_OPTIONS: readonly [number, string][] = [[0, "No cap"], [102400, "100 KB"], [512000, "500 KB"]];
 
 /** A value off the wire to a typed one, or undefined when it is not one the field takes (the default stays). */
 export function decode<F extends Field>(field: F, raw: unknown): PilotSettings[F] | undefined {
@@ -67,6 +72,7 @@ export function decode<F extends Field>(field: F, raw: unknown): PilotSettings[F
       case "secondLooks": return raw === 0 || raw === 1 || raw === 2 ? raw : undefined;
       case "model": return typeof raw === "string" && raw.length <= 120 && /^[A-Za-z0-9][\w.[\]-]*$/.test(raw) ? raw : undefined;
       case "costCapUsd": case "dailyUsd": case "weeklyUsd": return num(raw) !== null && (raw as number) >= 0 ? raw : undefined;
+      case "fileCapBytes": return FILE_CAP_OPTIONS.some(([v]) => v === raw) ? raw : undefined;
       case "maxFlying": return raw === 1 || raw === 2 || raw === 3 ? raw : undefined;
       case "askOnLarge": case "askOnSensitive": return typeof raw === "boolean" ? raw : undefined;
       case "builderBase": return raw === "local" || raw === "remote" ? raw : undefined;

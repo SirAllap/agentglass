@@ -6,6 +6,7 @@
  * the diff wraps.
  */
 import { describe, expect, test } from "bun:test";
+import { modalSource } from "./settingsSource.ts";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import React from "react";
@@ -20,7 +21,7 @@ import { UnifiedDiff } from "../src/components/diff/DiffLines.tsx";
 import type { Field } from "../src/lib/pluginTypes.ts";
 
 const SRC = join(import.meta.dir, "../src");
-const read = (f: string) => readFileSync(join(SRC, f), "utf8");
+const read = (f: string) => (f === "components/SettingsModal.tsx" ? modalSource() : readFileSync(join(SRC, f), "utf8"));
 const html = (el: React.ReactElement) => renderToStaticMarkup(el);
 const h = React.createElement;
 
@@ -45,9 +46,7 @@ function attrsOf(source: string, tag: string): string[] {
 const required = (id: keyof typeof PREVIEWS) => PREVIEWS[id].props.filter((p) => !p.endsWith("?"));
 
 const MOUNTS: [keyof typeof PREVIEWS, string, string][] = [
-  ["prefs", "components/SettingsModal.tsx", "WindowPreview"],
   ["appearance", "components/ThemePicker.tsx", "AppearancePreview"],
-  ["rail", "components/SettingsModal.tsx", "SidebarPreview"],
   ["diff", "components/SettingsModal.tsx", "DiffPreview"],
   ["lantern", "components/SettingsModal.tsx", "LanternPreview"],
   ["browser", "components/SettingsModal.tsx", "BrowserPreview"],
@@ -65,15 +64,9 @@ describe("every page mounts its preview with the props the preview declares", ()
   }
   test("the page's values are state it already holds, not literals", () => {
     const modal = read("components/SettingsModal.tsx");
-    expect(modal).toContain("<DiffPreview split={dSplit} wrap={dWrap} syntaxTheme={dTheme} />");
+    expect(modal).toContain("<DiffPreview split={c.dSplit} wrap={c.dWrap} syntaxTheme={c.dTheme} />");
     expect(modal).toContain("<LanternPreview watch={watch} everyMin={watchMinutes} wakeMin={cacheTtl} />");
-    expect(modal).toContain("<SidebarPreview items={items} selected={v.id} view={liveView} />");
-    expect(modal).toContain("fullscreen={fullscreen}");
-    expect(modal).toContain("startAtLogin={autostart === true}");
-    expect(modal).toContain("launchAnimation={splash}");
-    expect(modal).toContain("codexQuota={usageRefresh}");
-    expect(modal).toContain("zoomPct={Math.round(scale * 100)}");
-    expect(modal).toContain("<BrowserPreview home={savedHome} searchEngine={SEARCH_ENGINE_LABELS[engine]} />");
+    expect(modal).toContain("<BrowserPreview compact home={home} searchEngine={SEARCH_ENGINE_LABELS[engine]} />");
     // The same pair the controls write through.
     for (const pair of ["[dSplit, setDSplitState]", "[dWrap, setDWrapState]", "[dTheme, setDThemeState]", "[splash, setSplash]", "[usageRefresh, setUsageRefreshState]"]) {
       expect(modal.split(`const ${pair}`).length - 1).toBe(1);

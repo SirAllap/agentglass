@@ -16,11 +16,11 @@
 // whether auto-merge is on, whether the token can write, or how much a merged
 // branch left on disk, so the card draws none of those states and the callers
 // pass `readOnly` / `leftovers` only when they know them.
-import { leftoverLine, offerFor, type LeftoverLine, type LeftoverState } from "./leftovers.ts";
+import { cleanOffered, leftoverLine, type AutoRun, type LeftoverLine, type LeftoverState } from "./leftovers.ts";
 import type { PrCheckRollup, PrSummary } from "../../../shared/types.ts";
 import { finishedKind } from "../../../shared/prClosed.ts";
 import { staleApproval } from "../../../shared/mergeBlockers.ts";
-import { suggestedAction, type Filed } from "./prLanes.ts";
+import { suggestedAction, type Filed } from "../../../shared/prLanes.ts";
 import { unreadTitle, type Unread } from "../../../shared/prUnread.ts";
 import type { TrackerBlock } from "./prCardBlock.ts";
 import type { CardFace, CardReviewers } from "./cardReviewers.ts";
@@ -57,8 +57,10 @@ export interface Primary {
   /** Busy turns the label into "Working…" and the button off. */
   disabled: boolean;
   tone: "prime" | "ok" | "warn" | "plain";
-  /** Merge without write access: the button carries a lock and says why. */
+  /** Merge without write access, or under the person's merge lock: the button carries a lock and says why. */
   lock: boolean;
+  /** The lock is the person's merge lock (shared/mergeLock.ts), not the token's. */
+  held?: boolean;
 }
 
 export interface Secondary {
@@ -68,6 +70,8 @@ export interface Secondary {
   title: string;
   /** "Up to date" is drawn as text (not for a draft, a conflict or a finished one). */
   upToDate: boolean;
+  /** Commits behind the base, for Update only: the card draws it beside the sync glyph, capped. */
+  behind?: number;
 }
 
 /** The ticket slot's shape, on top of the repository rule in prCardBlock. */
@@ -91,6 +95,8 @@ export interface Cell {
   tone: Tone;
   word: string;
   title: string;
+  /** The approval came from a bot alone: the cell draws a bot mark beside the word. */
+  bot?: boolean;
 }
 
 export interface CardView {
@@ -129,6 +135,8 @@ export interface CardView {
   };
   /** Why an action the menu offers is off; null means it is on. */
   reasons: { merge: string | null; update: string | null; resolve: string | null; rerun: string | null };
+  /** The person's merge lock, while it holds: the sentence every refused merge says. */
+  mergeLock: string | null;
 }
 
 /** `4210` -> `4.2k`: three digits are the most a cell holds. */
@@ -161,7 +169,7 @@ export function mergeReason(p: Pick<Facts, "state" | "isDraft" | "mergeable" | "
 }
 
 /** The checks as the ring and its caption say them. */
-function ringFor(c: Pick<PrCheckRollup, "total" | "success" | "failure" | "pending" | "skipped">, kind: CardKind, reading: boolean): Ring {
+export function ringFor(c: Pick<PrCheckRollup, "total" | "success" | "failure" | "pending" | "skipped">, kind: CardKind, reading: boolean): Ring {
   if (reading) return { green: 0, red: 0, running: 0, caption: "", sub: null, kind: "reading", aria: "Reading the checks" };
   /* A skipped check is neither a pass nor a failure to act on: it fills its segment green. */
   const green = c.success + (c.skipped ?? 0), red = c.failure, running = c.pending;
@@ -184,7 +192,7 @@ interface Verdict { text: string; tone: Tone; icon: StripIcon; reviewWord?: [str
  * the people a review is still asked of; `mineAgain` is a review of yours that
  * a push has sent back.
  */
-function verdictFor(p: Facts, filed: Filed, waiting: string[], o: { stale: boolean; approved: boolean; staleCounts: boolean; again: boolean; askedAgain: boolean; changes: string[]; quiet: number | null }): Verdict {
+function verdictFor(p: Facts, filed: Filed, waiting: string[], o: { stale: boolean; approved: boolean; staleCounts: boolean; again: boolean; askedAgain: boolean; againWho: string[]; changes: string[]; quiet: number | null }): Verdict {
   if (p.state === "MERGED") return { text: "Merged", tone: "merged", icon: "merge" };
   if (p.state === "CLOSED") return { text: "Closed · not merged", tone: "mute", icon: "x" };
   if (p.isDraft) return { text: "Draft · not asked yet", tone: "mute", icon: "edit" };
@@ -202,7 +210,10 @@ function verdictFor(p: Facts, filed: Filed, waiting: string[], o: { stale: boole
   if (o.stale) {
     return o.staleCounts && !o.askedAgain
       ? { text: "Approved · new commits since", tone: "ok", icon: "ok", reviewWord: ["approved", "ok"] }
-      : { text: "Approved · new commits since", tone: "run", icon: "alert", reviewWord: ["stale", "run"] };
+      : o.askedAgain
+        /* Re-requested: the ball is with the reviewer, and the card says so in the words the tooltip already uses, not "stale". */
+        ? { text: o.againWho.length === 1 ? `Re-review asked of ${o.againWho[0]}` : "Re-review asked", tone: "run", icon: "clock", reviewWord: ["asked again", "run"] }
+        : { text: "Approved · new commits since", tone: "run", icon: "alert", reviewWord: ["stale", "run"] };
   }
   if (filed.lane === "land") return { text: "Approved · ready to land", tone: "ok", icon: "ok" };
   if (filed.lane === "review") {
@@ -242,12 +253,19 @@ function eventText(p: Facts, filed: Filed, strip: string, quiet: number | null):
 
 function reviewCell(p: Facts, r: CardReviewers, kind: CardKind, v: Verdict): Cell & { faces: CardFace[]; more: number } {
   const people = [...r.faces, ...r.more];
-  const [word, tone] = v.reviewWord ?? reviewWord(people);
+  /* Approved with nobody human on the review: the only approval is a bot's. Ceiling: it reads the merge state, so a repo that needs no review at all
+     (no reviewDecision) shows "nobody asked" as before, and a bot approving beside a human never reaches here. */
+  const botVerdict = !people.length && !v.reviewWord ? p.reviewDecision : undefined;
+  const botOnly = botVerdict === "APPROVED" || botVerdict === "CHANGES_REQUESTED";
+  const [word, tone] = botOnly
+    ? (botVerdict === "APPROVED" ? ["bot approved", "run" as Tone] : ["bot: changes", "bad" as Tone])
+    : (v.reviewWord ?? reviewWord(people));
   /* Two faces fit beside the word; a third turns the row into one face and "+N". */
   const fit = people.length > 2 ? 1 : 2;
   return {
     label: "Review", tone, word,
-    title: people.length ? people.map((f) => f.title).join("\n") : "Nobody has been asked to review",
+    bot: botOnly || undefined,
+    title: people.length ? people.map((f) => f.title).join("\n") : botOnly ? (botVerdict === "APPROVED" ? "Approved by a bot only: no person has reviewed it yet" : "A bot asked for changes: no person has reviewed it yet") : "Nobody has been asked to review",
     faces: people.slice(0, fit), more: Math.max(0, people.length - fit),
   };
 }
@@ -274,7 +292,7 @@ const PRIMARY: Record<PrimaryId, Omit<Primary, "disabled" | "lock">> = {
  * Merge when `suggestedAction` knows the only step left is the button). Ready:
  * Merge. A conflict: Resolve. Red and not a draft: Rerun. Everything else: Open.
  */
-function primaryFor(p: Facts, filed: Filed, kind: CardKind, busy: boolean, readOnly: boolean, clean: boolean): Primary {
+function primaryFor(p: Facts, filed: Filed, kind: CardKind, busy: boolean, readOnly: boolean, clean: boolean, held: string | null = null): Primary {
   let id: PrimaryId;
   if (kind === "finished" && clean) id = "clean";
   else if (kind === "finished") id = "open";
@@ -284,7 +302,9 @@ function primaryFor(p: Facts, filed: Filed, kind: CardKind, busy: boolean, readO
   else if (p.checks.failure > 0 && !p.isDraft) id = "rerun";
   else id = "open";
   const lock = id === "merge" && readOnly;
-  return { ...PRIMARY[id], title: lock ? "Read-only: the token has no write access" : PRIMARY[id].title, disabled: busy || lock, lock };
+  const isHeld = id === "merge" && !lock && !!held;
+  const title = lock ? "Read-only: the token has no write access" : isHeld ? held! : PRIMARY[id].title;
+  return { ...PRIMARY[id], title, disabled: busy || lock || isHeld, lock: lock || isHeld, held: isHeld || undefined };
 }
 
 /** The facts the Update slot is decided from: the card's own, and a lane sync's row. */
@@ -314,10 +334,12 @@ export function updateGate(p: Pick<UpdateFacts, "isDraft" | "mergeable">, behind
 }
 
 /** The slot beside it: Mark ready on a draft, Open where nothing else moves, Update when behind, else the quiet "Up to date". */
-export function secondaryFor(p: UpdateFacts, kind: CardKind, behind: number | null, readOnly: boolean, primary: PrimaryId): Secondary {
+export function secondaryFor(p: UpdateFacts, kind: CardKind, behind: number | null, readOnly: boolean, primary: PrimaryId, unknown = false): Secondary {
   if (kind === "finished") return { id: null, label: "", title: "", upToDate: false };
   const gate = updateGate(p, behind, readOnly);
-  if (gate.offered) return { id: "update", label: `Update · ${behind}`, title: `Merge ${p.baseRefName} into ${p.headRefName}`, upToDate: false };
+  /* The Branch cell says "checking" while the count is out; the footer must not say "Up to date" over the same unknown. */
+  if (unknown && !gate.offered && gate.reason === "up-to-date") return { id: null, label: "", title: "", upToDate: false };
+  if (gate.offered) return { id: "update", label: `Update · ${behind}`, title: `Merge ${p.baseRefName} into ${p.headRefName}`, upToDate: false, behind: behind ?? undefined };
   if (gate.reason === "draft") return { id: "draft", label: "Mark ready", title: "Mark this draft ready for review", upToDate: false };
   if (gate.reason === "read-only" || gate.reason === "conflict") {
     return primary === "open" ? { id: null, label: "", title: "", upToDate: false }
@@ -363,6 +385,8 @@ export function cardView(o: {
   labels?: readonly string[];
   /** The token cannot write here; the list does not carry it, so a caller that does not know leaves it out. */
   readOnly?: boolean;
+  /** The person's merge lock reason while it holds (lib/mergeLocks.ts); absent or null is no lock. */
+  mergeLock?: string | null;
   /** What a merged pull request left on this computer, when somebody measured it. */
   leftovers?: string;
   /** The local inventory's answer for a merged one; absent (not asked) offers no cleanup. */
@@ -371,6 +395,8 @@ export function cardView(o: {
   unread?: Unread | null;
   /** A Clean up of it is running now. */
   cleaning?: boolean;
+  /** The automatic cleanup's own run of this pull request: its progress speaks instead of the manual offer. */
+  autoRun?: AutoRun | null;
   /** The update just finished and GitHub is being read for its new state: the event line says so instead of the old one. `expired` is past the ceiling. */
   refreshing?: "reading" | "expired" | null;
   now?: number;
@@ -394,14 +420,16 @@ export function cardView(o: {
       staleCounts: !!staleApproval(p.reviewDecision).counts,
       again: !!hr?.mine && people.some((f) => f.state === "again"),
       askedAgain: people.some((f) => f.state === "again"),
+      againWho: people.filter((f) => f.state === "again").map((f) => (hr?.mine ? "you" : f.login)),
       changes: people.filter((f) => f.state === "changes").map((f) => (hr?.mine ? "You" : f.login)),
       quiet,
     });
-  /* Clean up is offered only once the local inventory found something (lib/leftovers.ts): not while it is read, not when it failed, not when there is nothing. */
-  const offer = offerFor(o.leftoverState, "card");
-  const clean = o.leftovers !== undefined || offer.button;
+  /* Clean up is offered only once the local inventory found something (lib/leftovers.ts): not while it is read, not when it failed, not when there is nothing, and not while the automatic cleanup is running this one. */
+  const running = !!o.cleaning || o.autoRun?.state === "cleaning";
+  const clean = !running && (o.leftovers !== undefined || cleanOffered(o.leftoverState, o.autoRun));
   // While the new checks are being read the card still holds the old green; Merge waits for the real state.
-  const primary = primaryFor(p, filed, kind, !!o.busy || !!o.cleaning || o.refreshing === "reading", readOnly, clean);
+  const held = kind !== "finished" ? o.mergeLock ?? null : null;
+  const primary = primaryFor(p, filed, kind, !!o.busy || running || o.refreshing === "reading", readOnly, clean, held);
   const add = p.additions ?? 0, del = p.deletions ?? 0;
   const merged = p.state === "MERGED";
   const review = reviewCell(p, o.reviewers, kind, v);
@@ -426,7 +454,7 @@ export function cardView(o: {
     review,
     branch: merged ? { label: "Merged", tone: "merged", word: `into ${p.baseRefName}`, title: `Merged into ${p.baseRefName}` } : b,
     third: changes,
-    leftover: kind === "finished" ? leftoverLine(o.leftoverState, !!o.cleaning) : null,
+    leftover: kind === "finished" ? leftoverLine(o.leftoverState, !!o.cleaning, o.autoRun ?? null) : null,
     unread: o.unread ? { text: `${cap99(o.unread.count)} new remark${o.unread.count === 1 ? "" : "s"}`, title: unreadTitle(o.unread) } : null,
     mergedInto: null,
     event: o.refreshing === "expired"
@@ -436,7 +464,7 @@ export function cardView(o: {
         : { text: eventText(p, filed, v.text, quiet), empty: false },
     tracker: trackerSlot(o.tracker, o.hasTaskProvider),
     primary,
-    secondary: secondaryFor(p, kind, behind, readOnly, primary.id),
+    secondary: secondaryFor(p, kind, behind, readOnly, primary.id, behind === null && (checking || !!o.asking)),
     checking,
     behind,
     conflict,
@@ -445,8 +473,9 @@ export function cardView(o: {
       readOnly,
       labels: o.labels?.length ? { first: o.labels[0]!, more: o.labels.length - 1, all: [...o.labels] } : null,
     },
+    mergeLock: held,
     reasons: {
-      merge: readOnly && !merged && kind !== "finished" ? "Read-only: no write access" : mergeReason(p),
+      merge: readOnly && !merged && kind !== "finished" ? "Read-only: no write access" : held ?? mergeReason(p),
       update: !live ? "This pull request is finished" : conflict ? "Resolve the conflict first"
         : behind && behind > 0 ? null : `Already up to date with ${p.baseRefName}`,
       resolve: conflict ? null : `No conflict with ${p.baseRefName}`,

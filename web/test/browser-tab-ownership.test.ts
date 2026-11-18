@@ -18,7 +18,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
-  crossContainerRefusal, mintTakesThePane, runBrowserAsk, stampWhere,
+  crossContainerRefusal, mintContainer, mintTakesThePane, runBrowserAsk, stampWhere,
   type AskOwnership, type DrivableWebview,
 } from "../src/lib/browserDrive.ts";
 import { containerOwner } from "../../shared/workerContainer.ts";
@@ -103,6 +103,30 @@ describe("a tab an agent mints does not take the visible pane", () => {
 
   test("`--show` still buys the old behaviour, per call", () => {
     expect(mintTakesThePane({ existing: 3, show: true })).toBe(true);
+  });
+});
+
+describe("an agent's tab never becomes the person's view", () => {
+  test("`--show` from a worker does not put the pane in its container", () => {
+    expect(mintTakesThePane({ existing: 3, show: true, agent: true })).toBe(false);
+  });
+
+  test("nor does a worker's mint into a window with none of the person's tabs", () => {
+    expect(mintTakesThePane({ existing: 0, show: false, agent: true })).toBe(false);
+  });
+});
+
+describe("`--shared` is the person's own container, whatever is in front", () => {
+  test("the empty profile mints in Default even with an agent's container in front", () => {
+    expect(mintContainer("", undefined, "agentorbitbot")).toBe("");
+  });
+
+  test("a named container goes where its name resolved", () => {
+    expect(mintContainer("orbit-ops", "orbit-ops", "agentorbitbot")).toBe("orbit-ops");
+  });
+
+  test("an ask that named nothing still opens where the person is", () => {
+    expect(mintContainer(undefined, undefined, "orbit-ops")).toBe("orbit-ops");
   });
 });
 

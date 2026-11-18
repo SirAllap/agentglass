@@ -2,8 +2,8 @@
 // The server stores and acts (server/src/polaris.ts); this turns its answers into rows and its
 // rows back into the one PUT that changes a layer.
 import {
-  DOOR_IDS, DOOR_MODES, DOOR_SINCE, POLARIS_VERSION, PRESETS, isLive, raisesToLive, resolvePolaris,
-  type BaseRed, type DoorId, type DoorValue, type Layer, type PolarisItem, type PolarisClass, type PresetId, type SettingsAnswer, type SettingsChange, type StoredPolaris,
+  DOOR_IDS, DOOR_MODES, DOOR_SINCE, POLARIS_VERSION, PRESETS, doorOn, enabledInvalid, isLive, isUnwired, polarisEnabled, raisesToLive, resolvePolaris,
+  type BaseRed, type DoorId, type DoorValue, type Layer, type PolarisItem, type PolarisClass, type PolarisPresetName, type PolarisSignal, type PresetId, type SettingsAnswer, type SettingsChange, type StoredPolaris,
 } from "../../../shared/polaris.ts";
 import { DOOR_COPY, GROUPS, HOURS, PARAM_COPY, type GroupId } from "./polarisCopy.ts";
 
@@ -38,9 +38,19 @@ export const presetChoices = (): { id: PresetId | "custom"; label: string }[] =>
 /** The preset shown as chosen: the stored label, or none when nothing was ever chosen on this page. */
 export const presetShown = (a: SettingsAnswer): PresetId | "custom" | null => (a.preset === "none" ? null : a.preset);
 
+/** The master switch as the window reads it: through the shared resolver over the layers as stored, and the server's answer when it carries none. */
+export const enabledOf = (a: SettingsAnswer | null): boolean => {
+  if (!a) return false;
+  const layers = a.root ? { project: a.stored, global: a.below } : { global: a.stored };
+  const carried = a.root ? a.stored !== undefined || a.below !== undefined : a.stored !== undefined;
+  return carried ? polarisEnabled(layers) : a.enabled;
+};
+/** The layer whose stored switch is not a boolean, so the window can say "invalid value in config". */
+export const enabledProblemOf = (a: SettingsAnswer | null): Layer | null => (a ? a.enabledInvalid ?? enabledInvalid(a.root ? { project: a.stored, global: a.below } : { global: a.stored }) : null);
+
 /** The chip on the Coordinator card: Polaris and the preset it runs, or nothing while it is off. */
 export const chipLabel = (a: SettingsAnswer | null): string | null =>
-  !a?.enabled ? null : a.preset === "none" ? "Polaris" : `Polaris, ${a.preset === "custom" ? "Custom" : PRESETS[a.preset].label}`;
+  !enabledOf(a) ? null : a!.preset === "none" ? "Polaris" : `Polaris, ${a!.preset === "custom" ? "Custom" : PRESETS[a!.preset as PresetId].label}`;
 
 // ── changes ──
 
@@ -188,8 +198,8 @@ export function limitStep(param: LimitSpec["param"], value: number, dir: -1 | 1)
 /** The rail's words for one limit: the number and what it counts. */
 export const railWords = (l: LimitSpec, value: number): string => `${l.param === "hours" ? `${value} h` : value} ${l.rail}`;
 
-/** The dot is on while the door does its thing. A door that starts anywhere but "off" is always doing it: people-only approvals are a protection, not an off switch. */
-export const doorActive = (door: DoorId, value: DoorValue): boolean => (DOOR_MODES[door][0] === "off" ? value.mode !== "off" : true);
+/** The dot is on while the door does its thing. The one rule lives in shared/polaris.ts so the counter and the dot cannot disagree. */
+export const doorActive = (door: DoorId, value: DoorValue): boolean => doorOn(door, value);
 
 export type ParamEditor = "text" | "list" | "rules" | "count" | "minutes";
 /** Which control edits one key of a door. Null means no inline editor: the view has none for it, which a test refuses unless the Limits stepper carries it. */
@@ -222,6 +232,8 @@ export interface DoorView {
   layer: Layer;
   options: { id: string; label: string }[];
   mark: Mark;
+  /** The door's promise has no code behind it in this position: badged "Not wired yet" and never counted as on. */
+  unwired: boolean;
   /** In a project: whether the value comes from the global layer or the safe default, not from the project. */
   inherits: boolean;
   /** The words next to a door that is not set by this layer. */
@@ -254,6 +266,7 @@ export function doorView(a: SettingsAnswer, scope: Scope, door: DoorId): DoorVie
     door, name: c.name, what: c.what, example: c.example, keep: c.keep, value, layer,
     options: DOOR_MODES[door].map((m) => ({ id: m, label: c.modes[m] ?? m })),
     mark: markOf(door, value),
+    unwired: isUnwired(door, value.mode),
     inherits: scope === "project" && layer !== "project",
     source: sourceWords(scope, layer),
     isNew: newDoors(a).includes(door),
@@ -338,6 +351,8 @@ export interface ItemView {
   more: ItemButton[];
   /** A line under the sentence: a draft waits, or a pass found nothing new. */
   note: string | null;
+  /** Quiet facts from the Signals door, in the order the server sent them. Never part of the class or the reason. */
+  signals: PolarisSignal[];
 }
 
 const excludedOf = (d: DoorValue): number[] => (Array.isArray(d.excluded) ? (d.excluded as number[]) : []);
@@ -367,7 +382,7 @@ function moreOf(item: PolarisItem, doors: SettingsAnswer["doors"], v: ItemView):
 }
 
 function itemCourse(item: PolarisItem, doors: SettingsAnswer["doors"]): ItemView {
-  const base = { number: item.number, title: item.title, cls: item.cls, tone: CLASS_TONE[item.cls], sentence: item.sentence, waitsOn: WAITS_ON[item.cls], note: null as string | null, more: [] as ItemButton[], inherited: item.reason === "inherited" };
+  const base = { number: item.number, title: item.title, cls: item.cls, tone: CLASS_TONE[item.cls], sentence: item.sentence, waitsOn: WAITS_ON[item.cls], note: null as string | null, more: [] as ItemButton[], inherited: item.reason === "inherited", signals: item.signals ?? [] };
   const open = { label: "Open PR", what: { kind: "open", url: item.url } as ItemAct };
   switch (item.cls) {
     case "Cleared to land":
@@ -525,10 +540,18 @@ export function assistPrompt(root: string): string {
   const scope = root ? ` --root ${root}` : "";
   return [
     "Help me set up Polaris, the pull request abilities of the orchestrator in agentglass.",
+    `First check GitHub: run agentglass-ui polaris github${scope} (read only). If github.ok is false, tell me in one sentence what to fix (the problem field), then stop. Do not ask the other questions until it is fixed.`,
     `Read the current doors with: agentglass-ui settings get polaris.enabled${scope}, then agentglass-ui settings get polaris.door.<door>${scope} for each of ${ids}.`,
     `Change one with: agentglass-ui settings set polaris.door.<door> '<json>'${scope}. A door value is {"mode": "...", ...settings}.`,
     "Narrowing a door applies at once. Opening one wider is filed as a request I approve with one click in the app, on the desktop or on my paired phone. A live position (a door that acts by itself, such as startSession click or relaunch live) is filed the same way, with agentglass-ui settings set: it is never applied without my click, so ask for it like any other wider door and never tell me to change it in Settings.",
-    "Ask me about my team and repository in ONE message, all questions together (who reviews, which checks gate a merge, whether CI drops jobs, whether the orchestrator owns starting sessions). Then do the whole setup in one pass over every group (Watching, Landing, Signals, Automatic, Limits): set each door your answers imply, file every wider one as a request (a live position too), read all of them back, and end with one short summary of what is set and how many requests wait for my click. Never stop to ask me to say next, never show a table per group, and never tell me to change a setting by hand, in Settings or anywhere: file the request instead.",
+    `Ask me about my team and repository in ONE message, all questions together (who reviews, which checks gate a merge, whether CI drops jobs, whether the orchestrator owns starting sessions, which base branch pull requests target). Then do the whole setup in one pass over every group (Watching, Landing, Signals, Automatic, Limits): set each door your answers imply, file every wider one as a request (a live position too), read all of them back, run agentglass-ui polaris github${scope} again, run agentglass-ui polaris items${scope} and report how many items it lists, and end with one short summary of what is set, how many requests wait for my click, and what one action would do in dry run. Never stop to ask me to say next, never show a table per group, and never tell me to change a setting by hand, in Settings or anywhere: file the request instead.`,
     "Never merge, comment, label or post anything. Polaris itself never does.",
   ].join("\n");
+}
+
+/** The card's one line about GitHub: who is signed in, or the one thing to fix. Nothing yet means no line. */
+export function githubLine(a: { ok: boolean; login?: string; repo?: string; problem?: string } | null): string {
+  if (!a) return "";
+  if (a.ok) return `GitHub: connected${a.login ? ` as ${a.login}` : ""}${a.repo ? ` to ${a.repo}` : ""}.`;
+  return `GitHub: ${a.problem ?? "not connected"}.`;
 }

@@ -9,16 +9,17 @@
 // suite — see budgets-pane.test.ts.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { detailRows } from "../src/lib/prOverviewBody.ts";
 
 const read = (p: string) => readFileSync(new URL("../" + p, import.meta.url), "utf8");
 const panel = read("src/components/PrPanel.tsx");
 
 describe("a team is not drawn as a face", () => {
   test("the reviewer surfaces go through the one component", () => {
-    expect(panel).toContain("<ReviewerFace r={p} size={16} />"); // assignees, in the sidebar
+    // Assignees are plain logins in the rail's Details row, so only the reviewer roster draws faces.
     // The sidebar's reviewer list, which carries a verdict per person and
     // therefore builds its own row — see lib/prReviewers.
-    expect(panel).toContain("<ReviewerFace r={{ login: r.login, isTeam: r.isTeam }} size={16} />");
+    expect(panel).toContain("<ReviewerFace r={{ login: r.login, isTeam: r.isTeam }} size={ICON.md} />");
   });
 
   /*
@@ -37,8 +38,8 @@ describe("a team is not drawn as a face", () => {
   test("the masthead cell is gone, and its verdict lives in the sidebar instead", () => {
     expect(panel).not.toContain('<Field label="Reviewers"');
     expect(panel).not.toContain("<ReviewerFace r={{ login: r.login, isTeam: r.isTeam }} size={14} />");
-    const sidebar = panel.slice(panel.indexOf('<SidebarSection title="Reviewers"'));
-    const section = sidebar.slice(0, sidebar.indexOf("</SidebarSection>"));
+    const sidebar = panel.slice(panel.indexOf('<PrRailSection title="Reviewers"'));
+    const section = sidebar.slice(0, sidebar.indexOf("</PrRailSection>"));
     expect(section, "the same verdict the masthead used to draw, now above the roster it came from")
       .toContain("verdictLine(v)");
     expect(section).toContain("<ReviewerList rows={rows} ");
@@ -60,8 +61,8 @@ describe("a team is not drawn as a face", () => {
        this panel goes through `ReviewerFace`, because that is the one place
        that knows a team is initials rather than a photograph. */
     const faces = (panel.match(/<ReviewerFace /g) ?? []).length;
-    expect(faces, "the two pinned above, and any new one must be one of these")
-      .toBeGreaterThanOrEqual(2);
+    expect(faces, "the one pinned above (the reviewer roster); any new one must go through ReviewerFace and be added here")
+      .toBe(1);
   });
 
   test("the sidebar no longer hands a bare login to the avatar", () => {
@@ -75,8 +76,12 @@ describe("a team is not drawn as a face", () => {
   });
 
   test("an assignee is a person with nothing to flag", () => {
-    // The sidebar list is shared, and only a reviewer can be a team.
-    expect(panel).toContain("people={d.assignees.map((login) => ({ login }))}");
+    // Only a reviewer can be a team, so an assignee is a plain login in the rail's Details row, with its own edit button.
+    expect(panel).not.toContain("people={d.assignees");
+    expect(panel).toContain("const rows = detailRows(d,");
+    expect(panel).toContain("editFor(r.editable)");
+    const a = detailRows({ assignees: ["ana", "bo"], milestone: null, linkedIssues: [], state: "OPEN" }, {})[0]!;
+    expect([a.label, a.value, a.editable]).toEqual(["Assignees", "ana, bo", "assignees"]);
   });
 });
 
@@ -96,10 +101,10 @@ describe("a team is not drawn as a face", () => {
  */
 describe("the pull request sidebar", () => {
   test("declares both axes, so the browser cannot pick the second one", () => {
-    /* The class is a ternary since the sidebar can fold (detailBand): the pinned column is the second string. */
-    const aside = panel.slice(panel.indexOf("className={fold ? \"flex"));
-    const cls = /: "([^"]*)"\}/.exec(aside)?.[1] ?? "";
-    expect(cls, "the sidebar's own classes").toContain("overflow-y-auto");
+    /* The rail (.prov-rail) has no scroller of its own: it sits in the tab body, which is inside the one scroller (data-pr-scroller). */
+    const at = panel.indexOf("data-pr-scroller data-band");
+    const cls = /overflow-y-auto[^"`]*/.exec(panel.slice(at, at + 400))?.[0] ?? "";
+    expect(cls, "the tab body's own classes").toContain("overflow-y-auto");
     expect(cls, "without this, `visible` computes to `auto` and scrolls sideways")
       .toContain("overflow-x-hidden");
   });

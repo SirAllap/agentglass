@@ -5,6 +5,9 @@
  * window, and so a control that moves has one place that says where it went.
  */
 
+import { SettingsPage, type PageSection } from "../settings/shell/SettingsPage.tsx";
+import { Section } from "../settings/shell/Section.tsx";
+
 interface Missed {
   /** What the app had no way to do. */
   missing: string;
@@ -71,50 +74,44 @@ export const GAPS_ADDED: readonly Added[] = [
 ];
 
 export function GapsPane() {
-  return (
-    <div className="agx-orch-gaps">
-      <h2 className="agx-orch-gaps-t">Gaps found and what is added</h2>
-      <p className="agx-orch-gaps-sub">{GAPS_SUB}</p>
-
-      <h3 className="agx-orch-gaps-h" id="agx-orch-gaps-a">A · What the first mockup missed, now drawn</h3>
-      <table className="agx-orch-gaps-tb" aria-labelledby="agx-orch-gaps-a">
-        <thead>
-          <tr><th scope="col">Missing</th><th scope="col">In the redesign</th><th scope="col">Where</th></tr>
-        </thead>
-        <tbody>
-          {GAPS_MISSED.map((r) => (
-            <tr key={r.missing}>
-              <td data-label="Missing">{r.missing}</td>
-              <td data-label="In the redesign">{r.redesign}</td>
-              <td data-label="Where"><span className="agx-orch-gaps-chip">{r.where}</span></td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      <h3 className="agx-orch-gaps-h" id="agx-orch-gaps-b">B · Decisions (no function removed)</h3>
-      <table className="agx-orch-gaps-tb" aria-labelledby="agx-orch-gaps-b">
-        <tbody>
-          {GAPS_DECISIONS.map((r) => (
-            <tr key={r.decision}>
-              <td><b>{r.decision}</b></td>
-              <td>{r.detail}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      <h3 className="agx-orch-gaps-h" id="agx-orch-gaps-c">C · Added functionality</h3>
-      <table className="agx-orch-gaps-tb" aria-labelledby="agx-orch-gaps-c">
-        <tbody>
-          {GAPS_ADDED.map((r) => (
-            <tr key={r.added}>
-              <td><b>{r.added}</b></td>
-              <td>{r.what}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+  const missed = (
+    <table className="agx-orch-gaps-tb" aria-label="What the first mockup missed, now drawn">
+      <thead>
+        <tr><th scope="col">Missing</th><th scope="col">In the redesign</th><th scope="col">Where</th></tr>
+      </thead>
+      <tbody>
+        {GAPS_MISSED.map((r) => (
+          <tr key={r.missing}>
+            <td data-label="Missing">{r.missing}</td>
+            <td data-label="In the redesign">{r.redesign}</td>
+            <td data-label="Where"><span className="agx-orch-gaps-chip">{r.where}</span></td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
+  const decisions = (
+    <table className="agx-orch-gaps-tb" aria-label="Decisions, no function removed">
+      <tbody>
+        {GAPS_DECISIONS.map((r) => (
+          <tr key={r.decision}><td><b>{r.decision}</b></td><td>{r.detail}</td></tr>
+        ))}
+      </tbody>
+    </table>
+  );
+  const added = (
+    <table className="agx-orch-gaps-tb" aria-label="Added functionality">
+      <tbody>
+        {GAPS_ADDED.map((r) => (
+          <tr key={r.added}><td><b>{r.added}</b></td><td>{r.what}</td></tr>
+        ))}
+      </tbody>
+    </table>
+  );
+  const sections: PageSection[] = [
+    { id: "missed", title: "What the first mockup missed", kind: "normal", body: <Section id="missed" title="What the first mockup missed" intro={GAPS_SUB}><div className="agx-orch-gaps">{missed}</div></Section> },
+    { id: "decisions", title: "Decisions", kind: "normal", body: <Section id="decisions" title="Decisions" intro="No function removed."><div className="agx-orch-gaps">{decisions}</div></Section> },
+    { id: "added", title: "Added functionality", kind: "normal", body: <Section id="added" title="Added functionality"><div className="agx-orch-gaps">{added}</div></Section> },
+  ];
+  return <SettingsPage title="Gaps and additions" purpose="Gaps found and what is added." sections={sections} />;
 }

@@ -80,6 +80,8 @@ export function useFinderOps(env: OpsEnv) {
     if (!polling) return;
     let off = false;
     const tick = async () => {
+      // A hidden document asks nothing; coming back asks once, at once.
+      if (document.hidden) { document.addEventListener("visibilitychange", resume, { once: true }); return; }
       const r = await api.fsJobs().catch(() => null);
       if (off) return;
       const list = r?.jobs ?? [];
@@ -87,8 +89,9 @@ export function useFinderOps(env: OpsEnv) {
       if (list.some((j) => j.state === "running")) t = setTimeout(tick, 700);
       else t = setTimeout(() => { if (!off) setPolling(false); }, 4200); // the panel keeps a finished job a few seconds, then the asking stops
     };
+    const resume = () => { if (!off) void tick(); };
     let t = setTimeout(tick, 0);
-    return () => { off = true; clearTimeout(t); };
+    return () => { off = true; clearTimeout(t); document.removeEventListener("visibilitychange", resume); };
   }, [polling]);
   // Once on opening, so the footer button can show what ended before (the server keeps the last twenty), and pick up a job still running.
   useEffect(() => {

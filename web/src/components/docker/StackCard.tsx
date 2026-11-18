@@ -22,22 +22,24 @@ export function StackCard({ group, readOnly, busy, folded, menuOpen, confirm, on
   onMenu: (el: HTMLElement) => void;
   onGroupVerb: (verb: "start" | "restart", ids: string[]) => void;
   onConfirm: (yes: boolean) => void;
-  children?: ReactNode;
+  /** Rendered per project, in `group.projects` order, when there is more than
+   *  one; otherwise rendered once for the whole group. */
+  children?: ReactNode | ((project: string | null) => ReactNode);
 }) {
-  const { key, containers, summary, chip } = group;
+  const { key, containers, summary, chip, projects } = group;
   const btn = groupMenu(containers, { readOnly }).button;
   const squares = stackMap(containers);
   return (
     <section className="dk-stack" data-folded={folded || undefined} aria-label={key}>
       <div className="dk-sh">
-        <button type="button" className="dk-tg" onClick={onToggle} aria-expanded={!folded} title={folded ? "Expand" : "Collapse"} aria-label={`${folded ? "Expand" : "Collapse"} ${key}`}>
+        <button type="button" className="dk-tg" onClick={onToggle} aria-expanded={!folded} data-tip={folded ? "Expand" : "Collapse"} aria-label={`${folded ? "Expand" : "Collapse"} ${key}`}>
           <CaretIcon size={ICON.sm} />
         </button>
         <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, overflow: "hidden" }}>
-          <b title={key} style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0, flex: "0 1 auto" }}>{key}</b>
+          <b data-tip={key} style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0, flex: "0 1 auto" }}>{key}</b>
           {chip && (
             <span className="dk-own" data-foreign={chip.foreign || undefined}
-              title={`${chip.foreign ? "Started from another checkout: " : ""}${chip.text}`}>
+              data-tip={`${chip.foreign ? "Started from another checkout: " : ""}${chip.text}`}>
               <BranchIcon size={ICON.xs} />{chip.text}
             </span>
           )}
@@ -55,7 +57,7 @@ export function StackCard({ group, readOnly, busy, folded, menuOpen, confirm, on
           {btn.verb === "start" ? <PlayIcon size={ICON.xs} /> : <RefreshIcon size={ICON.sm} />}{btn.label}
         </Button>
         <button type="button" className="dk-more" data-open={menuOpen || undefined} aria-label={`More for ${key}`} aria-haspopup="menu" aria-expanded={menuOpen}
-          disabled={readOnly} title={readOnly ? "Read-only instance: writes are turned off" : "More: start, restart or stop the whole stack"}
+          disabled={readOnly} data-tip={readOnly ? "Read-only instance: writes are turned off" : "More: start, restart or stop the whole stack"}
           onClick={(e) => onMenu(e.currentTarget)}>
           <MoreIcon size={ICON.sm} />
         </button>
@@ -70,7 +72,14 @@ export function StackCard({ group, readOnly, busy, folded, menuOpen, confirm, on
       {!folded && (
         <>
           <div className="dk-cols dk-ch" aria-hidden><span /><span>Container</span><span>CPU</span><span>Memory</span><span>Port</span><span /><span /></div>
-          {children}
+          {projects && typeof children === "function"
+            ? projects.map((p) => (
+              <div key={p}>
+                <div className="dk-proj">{p}</div>
+                {children(p)}
+              </div>
+            ))
+            : typeof children === "function" ? children(null) : children}
         </>
       )}
     </section>

@@ -32,6 +32,10 @@ export interface OrchestratorCardData {
   pilotWord?: string;
   /** The board's rows by role; absent until D4 answers. */
   counts?: LiveCounts | null;
+  /** What this project has spent today, as the stored events and the rollup
+   *  say; absent or null: not read. Never summed off the board's rows, whose
+   *  cost leaves with the row — see `/spend/today`. */
+  todaySpend?: number | null;
 }
 
 export interface OrchestratorTeamDot {
@@ -93,10 +97,7 @@ function flying(d: OrchestratorCardData): number | null {
 }
 
 function spend(d: OrchestratorCardData): number | null {
-  if (!d.counts) return null;
-  let total = 0;
-  for (const c of Object.values(d.counts)) total += c.cost;
-  return total;
+  return typeof d.todaySpend === "number" ? d.todaySpend : null;
 }
 
 export function orchestratorCardModel(flow: Flow, d: OrchestratorCardData): OrchestratorCardModel {
@@ -115,7 +116,7 @@ export function orchestratorCardModel(flow: Flow, d: OrchestratorCardData): Orch
     plan: used === null ? "—" : `${used}%`,
     planTip: used === null ? "No reading of the plan this cluster runs on" : "What the plan has spent so far, as the page last read it",
     today: cost === null ? "—" : money(cost),
-    todayTip: cost === null ? "No cost has been read" : "What the board's rows for this project have cost",
+    todayTip: cost === null ? "No cost has been read" : "What this project's stored events say it has spent today",
     last: d.last ?? "—",
     lastTip: d.last ? "The most recent thing a worker settled" : "Nothing has settled since the board last read",
     code: codeWord(d.codeWho),

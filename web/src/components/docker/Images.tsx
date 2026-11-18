@@ -5,11 +5,12 @@
  * for the images it can give back, so the two cannot disagree.
  */
 import { useMemo, useState } from "react";
-import type { DockerContainer, DockerDisk, DockerImage } from "../../../../shared/types.ts";
+import type { DockerContainer, DockerDisk, DockerImage, DockerRepoLeftovers } from "../../../../shared/types.ts";
 import { humanSize } from "../../../../shared/dockerSize.ts";
 import { api } from "../../lib/api.ts";
-import { imagesView, type ImageKind } from "../../lib/dockerResources.ts";
-import { imageAnswers, imageHit, imageKey, imageMenu, imageShape, sectionsOf, type ImageItem } from "../../lib/dockerResourceUi.ts";
+import { imagesView, sum, type ImageKind } from "../../lib/dockerResources.ts";
+import { oldCommitSet } from "../../lib/dockerLeftovers.ts";
+import { imageAnswers, imageBuiltLabel, imageHit, imageKey, imageMenu, imageShape, sectionsOf, type ImageItem } from "../../lib/dockerResourceUi.ts";
 import { BranchIcon, DiskIcon } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { PictureIcon } from "./DockerIcons.tsx";
@@ -27,12 +28,13 @@ const SECTIONS = [
 const refOf = (i: DockerImage) => (i.dangling ? i.id : `${i.repository}:${i.tag}`);
 const labelOf = (i: DockerImage) => (i.dangling ? `untagged image ${i.id}` : `${i.repository}:${i.tag}`);
 
-export function Images({ images, containers, orphans, q, readOnly, flash, onClear, onGoContainer, onShowDisk }: {
-  images: DockerImage[]; containers: DockerContainer[]; orphans: DockerDisk["orphans"];
+export function Images({ images, containers, orphans, disk, left = [], q, readOnly, flash, onClear, onGoContainer, onShowDisk }: {
+  images: DockerImage[]; containers: DockerContainer[]; orphans: DockerDisk["orphans"]; disk?: DockerDisk | null; left?: DockerRepoLeftovers[];
   q: string; readOnly: boolean; flash: (ok: boolean, msg: string) => void; onClear: () => void;
   onGoContainer: (id: string) => void; onShowDisk: () => void;
 }) {
-  const view = useMemo(() => imagesView(images, containers, orphans), [images, containers, orphans]);
+  const view = useMemo(() => imagesView(images, containers, orphans, disk), [images, containers, orphans, disk]);
+  const oldCommit = useMemo(() => oldCommitSet(left, images.filter((i) => !i.dangling).map(refOf)), [left, images]);
   const [only, setOnly] = useState<ImageKind | null>(null);
   const [armed, setArmed] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -57,18 +59,18 @@ export function Images({ images, containers, orphans, q, readOnly, flash, onClea
       {view.goneNow.length > 0 && (
         <div className="dk-note" style={{ ["--tint" as string]: "var(--warning)" }}>
           <BranchIcon size={ICON.md} />
-          <span><b>{view.goneNow.length} image{view.goneNow.length === 1 ? "" : "s"}</b> {view.goneNow.length === 1 ? "was" : "were"} built by a checkout that was removed ({humanSize(view.goneNow.reduce((n, i) => n + i.bytes, 0))}). Nothing running uses {view.goneNow.length === 1 ? "it" : "them"}.</span>
+          <span><b>{view.goneNow.length} image{view.goneNow.length === 1 ? "" : "s"}</b> {view.goneNow.length === 1 ? "was" : "were"} built by a checkout that was removed ({humanSize(view.goneBytes)}). Nothing running uses {view.goneNow.length === 1 ? "it" : "them"}.</span>
           <span style={{ marginLeft: "auto" }}><Button size="compact" onClick={onShowDisk}><DiskIcon size={ICON.xs} />Show in Disk</Button></span>
         </div>
       )}
       {sections.length === 0 ? <NoMatch q={q} filtered={only !== null} onClear={() => { setOnly(null); onClear(); }} />
         : sections.map((s) => (
           <div key={s.key}>
-            <GroupHead title={s.title} sub={`${s.items.length} · ${humanSize(s.items.reduce((n, i) => n + i.bytes, 0))}${"sub" in s && s.sub ? ` · ${s.sub}` : ""}`} />
+            <GroupHead title={s.title} sub={`${s.items.length} · ${humanSize(sum(s.items))}${"sub" in s && s.sub ? ` · ${s.sub}` : ""}`} />
             <div className="dk-xgrid">
               {s.items.map((i) => (
                 <ImageCard key={imageKey(i.image)} i={i} max={biggest} readOnly={readOnly} armed={armed === imageKey(i.image)} pending={busy === imageKey(i.image)}
-                  menuOpen={menu.key === imageKey(i.image)} onMenu={menu.open(imageKey(i.image))} onArm={() => setArmed(imageKey(i.image))} onNo={() => setArmed(null)}
+                  oldCommit={oldCommit.has(refOf(i.image))} menuOpen={menu.key === imageKey(i.image)} onMenu={menu.open(imageKey(i.image))} onArm={() => setArmed(imageKey(i.image))} onNo={() => setArmed(null)}
                   onYes={() => void remove(i)} onGoContainer={onGoContainer} />
               ))}
             </div>
@@ -87,8 +89,8 @@ export function Images({ images, containers, orphans, q, readOnly, flash, onClea
   );
 }
 
-function ImageCard({ i, max, readOnly, armed, pending, menuOpen, onMenu, onArm, onNo, onYes, onGoContainer }: {
-  i: ImageItem; max: number; readOnly: boolean; armed: boolean; pending: boolean; menuOpen: boolean;
+function ImageCard({ i, max, readOnly, armed, pending, oldCommit, menuOpen, onMenu, onArm, onNo, onYes, onGoContainer }: {
+  i: ImageItem; max: number; readOnly: boolean; armed: boolean; pending: boolean; oldCommit: boolean; menuOpen: boolean;
   onMenu: (el: HTMLElement) => void; onArm: () => void; onNo: () => void; onYes: () => void; onGoContainer: (id: string) => void;
 }) {
   const { image } = i;
@@ -101,20 +103,29 @@ function ImageCard({ i, max, readOnly, armed, pending, menuOpen, onMenu, onArm, 
         <div className="nm">
           {image.dangling
             ? <><b className="dk-xn" data-none>&lt;none&gt;</b><span className="dk-tag" data-t="none">&lt;none&gt;</span></>
-            : <><b className="dk-xn" title={image.repository}>{image.repository}</b><span className="dk-tag" data-t={image.tag === "latest" ? "latest" : undefined}>{image.tag}</span></>}
+            : <><b className="dk-xn" data-tip={image.repository}>{image.repository}</b><span className="dk-tag" data-t={image.tag === "latest" ? "latest" : undefined}>{image.tag}</span></>}
+          {oldCommit && (<>
+            <Badge tone="var(--warning)" title="Tagged with the sha of a commit no checkout is on any more"><BranchIcon size={ICON.xs} />built at an old commit</Badge>
+            {!readOnly && !pending && <Button size="compact" tint="var(--error)" onClick={onYes} aria-label={`Remove ${label}`}>Remove</Button>}
+          </>)}
           {i.goneNow && <Badge tone="var(--warning)" title="Built by a checkout that was removed"><BranchIcon size={ICON.xs} />worktree gone</Badge>}
         </div>
         <RemoveButton label={`Remove ${label}`} off={!i.removable} reason={i.why} readOnly={readOnly} pending={pending} onClick={onArm} />
         <MoreButton label={label} open={menuOpen} onMenu={onMenu} />
       </div>
-      <div className="dk-xb"><SizeBar bytes={i.bytes} max={max} tone={image.dangling ? "var(--text4)" : "var(--info)"} /><span className="dk-xsz">{humanSize(i.bytes)}</span></div>
+      <div className="dk-xb">
+        <SizeBar bytes={i.bytes} max={max} tone={image.dangling ? "var(--text4)" : "var(--info)"} />
+        <span className="dk-xsz" data-tip={i.shared ? `${humanSize(i.unique ?? i.bytes)} its own, ${humanSize(i.shared)} shared with other images` : undefined}>
+          {i.shared ? <>{humanSize(i.unique ?? i.bytes)} own · {humanSize(i.shared)} shared</> : humanSize(i.bytes)}
+        </span>
+      </div>
       <div className="dk-xf">
         <ContainerChips cs={i.usedBy} none="not used by any container" onGo={onGoContainer} />
-        <span className="dk-xage" title={`sha256:${image.id}`}>{image.dangling ? `${image.id} · ` : ""}built {image.created}</span>
+        <span className="dk-xage" data-tip={`sha256:${image.id}`}>{image.dangling ? `${image.id} · ` : ""}{imageBuiltLabel(i.created ?? image.created)}</span>
       </div>
       {armed && (
         <ConfirmBar yes="remove" onYes={onYes} onNo={onNo}>
-          remove <b>{label}</b>? Frees {humanSize(i.bytes)}. {i.goneNow ? "Its checkout is gone and nothing runs from it." : "It can be pulled or built again."}
+          remove <b>{label}</b>? Frees {humanSize(i.unique ?? i.bytes)}. {i.goneNow ? "Its checkout is gone and nothing runs from it." : "It can be pulled or built again."}
         </ConfirmBar>
       )}
     </div>

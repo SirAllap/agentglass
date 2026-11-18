@@ -34,7 +34,7 @@ const Head = ({ children }: { children: React.ReactNode }) => (
 const Fact = ({ k, v, title }: { k: string; v: React.ReactNode; title?: string }) => (
   <div className="flex items-baseline justify-between gap-3 py-1 text-[11px]">
     <span className="shrink-0" style={{ color: "var(--text3)" }}>{k}</span>
-    <span className="min-w-0 truncate text-right tabular-nums" style={{ color: "var(--text)" }} title={title}>{v}</span>
+    <span className="min-w-0 truncate text-right tabular-nums" style={{ color: "var(--text)" }} data-tip={title}>{v}</span>
   </div>
 );
 
@@ -129,7 +129,7 @@ export function InfoRail({ file, git, outline, current, home, onJump, onBench, o
               const on = i === current;
               return (
                 <li key={i}>
-                  <button onClick={() => onJump(o, nth)} title={`Line ${o.line}`}
+                  <button onClick={() => onJump(o, nth)} data-tip={`Line ${o.line}`}
                     className="agx-btn w-full flex items-baseline justify-between gap-3 rounded-md py-1 pr-2 text-left text-[11px]"
                     style={{ paddingLeft: 8 + (o.level - 1) * 10, color: "var(--info-ink)",
                       background: on ? "color-mix(in srgb, var(--primary) 14%, transparent)" : undefined }}>
@@ -148,7 +148,7 @@ export function InfoRail({ file, git, outline, current, home, onJump, onBench, o
         <div className="flex flex-col gap-2">
           {primary && (
             <button onClick={onBench} className="flex items-center justify-between rounded-md px-3 text-[11.5px]"
-              style={{ minHeight: ACTION_H, background: "var(--text)", color: "var(--bg)", fontWeight: 500 }} title={primary.title}>
+              style={{ minHeight: ACTION_H, background: "var(--text)", color: "var(--bg)", fontWeight: 500 }} data-tip={primary.title}>
               <span className="inline-flex items-center gap-1.5">
                 {primary.id === "edit" ? <EditIcon size={ICON.sm} /> : <TerminalIcon size={ICON.sm} />}{primary.label}
               </span>
@@ -168,7 +168,7 @@ export function InfoRail({ file, git, outline, current, home, onJump, onBench, o
           {abs && <RevealButton path={abs} what="file" label="Show in folder" block />}
           {abs && acts.browser && onOpenBrowser && (
             <button onClick={() => onOpenBrowser(abs)} className="flex items-center gap-1.5 rounded-md px-3 text-[11.5px]"
-              style={{ minHeight: ACTION_H, color: "var(--text2)", border: EDGE }} title="Open it in the app's browser">
+              style={{ minHeight: ACTION_H, color: "var(--text2)", border: EDGE }} data-tip="Open it in the app's browser">
               <LinkIcon size={ICON.sm} />Open in browser
             </button>
           )}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { lastWasKey } from "./inputMode.ts";
-import { flightGroups, flightNow, handledChip, plural, rowAction, rowMeta, stationsOf, stripCounts, type FlightItem, type PilotSnapshot, type RowAction } from "../../lib/flightPilot.ts";
+import { flightGroups, flightNow, flyingTail, handledChip, preflightCount, rowAction, rowMeta, stationsOf, stripCounts, type FlightItem, type PilotSnapshot, type RowAction } from "../../lib/flightPilot.ts";
 import { BranchIcon, DoneIcon, HandIcon } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { PauseIcon, PlaneIcon, PlusIcon } from "./fpIcons.tsx";
@@ -51,21 +51,21 @@ function Row({ it, snap, now, state, onOpen, onCard, onDo }: { it: FlightItem; s
     <li className="pv-row" data-state={state === "in" ? undefined : state} data-wait={a.kind !== "handled" && n.state.group === "waiting" ? "" : undefined} data-ask={asks ? "" : undefined} data-sid={n.state.id}>
       <StateTile state={n.state} />
       <div>
-        <button type="button" className="pv-open" onClick={() => onOpen()} aria-label={`Open ${it.plan.title}`}><div className="t" title={it.plan.title}>{it.plan.title}</div></button>
+        <button type="button" className="pv-open" onClick={() => onOpen()} aria-label={`Open ${it.plan.title}`}><div className="t" data-tip={it.plan.title}>{it.plan.title}</div></button>
         <div className="m">
           {meta.size && <span className="size">{meta.size}</span>}
           {holders.length > 0
-            ? <span className="slots">slots held by{holders.slice(0, SLOT_NAMES).map((h) => <button key={h.id} type="button" className="slot" title={h.title} onClick={() => onOpen(h.id)}>{h.title}</button>)}{holders.length > SLOT_NAMES && <b>+{holders.length - SLOT_NAMES}</b>}</span>
+            ? <span className="slots">slots held by{holders.slice(0, SLOT_NAMES).map((h) => <button key={h.id} type="button" className="slot" data-tip={h.title} onClick={() => onOpen(h.id)}>{h.title}</button>)}{holders.length > SLOT_NAMES && <b>+{holders.length - SLOT_NAMES}</b>}</span>
             : meta.builder
-            ? <span title={meta.builder.branch}>builder <b>{meta.builder.branch}</b>{meta.builder.tab ? ` · tab ${meta.builder.tab}` : ""}</span>
+            ? <span data-tip={meta.builder.branch}>builder <b>{meta.builder.branch}</b>{meta.builder.tab ? ` · tab ${meta.builder.tab}` : ""}</span>
             : <span>{meta.project} · {meta.who}</span>}
         </div>
       </div>
       <Track stations={stationsOf(it, snap, now)} />
       <div className="pv-now">
-        <b aria-live="polite" title={n.bold}>{n.bold}</b>
-        <span className="nx" title={`Next: ${n.next}`}><em>Next</em><i data-tone={n.state.tone} />{n.next}</span>
-        {n.report ? <span className="rp" title={`Last report ${n.report}`}><em>Report</em>{n.report}</span> : <span className="rp gap"><em>Report</em>none yet</span>}
+        <b aria-live="polite" data-tip={n.bold}>{n.bold}</b>
+        <span className="nx" data-tip={`Next: ${n.next}`}><em>Next</em><i data-tone={n.state.tone} />{n.next}</span>
+        {n.report ? <span className="rp" data-tip={`Last report ${n.report}`}><em>Report</em>{n.report}</span> : <span className="rp gap"><em>Report</em>none yet</span>}
       </div>
       {a.kind === "answer" && <button type="button" className="btn answer" onClick={onCard}>{a.label}</button>}
       {a.kind === "go" && <button type="button" className="btn go" onClick={onCard}>{a.label}</button>}
@@ -73,7 +73,7 @@ function Row({ it, snap, now, state, onOpen, onCard, onDo }: { it: FlightItem; s
       {a.kind === "open-tab" && <button type="button" className="btn" onClick={() => onDo("open-tab", it)}>{a.label}</button>}
       {a.kind === "open-branch" && <button type="button" className="btn" onClick={() => onDo("open-branch", it)}><BranchIcon size={ICON.xs} />{a.label}</button>}
       {a.kind === "lift-hold" && <button type="button" className="btn" onClick={() => onDo("lift-hold", it)}><PauseIcon size={ICON.xs} />{a.label}</button>}
-      {a.kind === "handled" && <span className="pv-handled" title={tail ? `${lead} · ${tail}` : lead}>{tail ? <><b>{lead}</b> · {tail}</> : lead}</span>}
+      {a.kind === "handled" && <span className="pv-handled" data-tip={tail ? `${lead} · ${tail}` : lead}>{tail ? <><b>{lead}</b> · {tail}</> : lead}</span>}
     </li>
   );
 }
@@ -116,10 +116,10 @@ export function FlightList({ items, loading, snap, now, scope = "", onOpen, onCa
   }
   /* The strip's own count, so the heading and the strip never disagree about how many builders are live. */
   const live = stripCounts(items, now, snap).live;
-  const more = g.flying.filter((it) => it.plan.builder !== "live").length;
+  const more = preflightCount(items, now, snap);
   const section = (id: string, icon: React.ReactNode, label: React.ReactNode, rows: Entry[], actor?: string) => rows.length > 0 && (
     <section aria-labelledby={`pv-g-${scope}${id}`} style={{ display: "contents" }}>
-      <h3 className="pv-gh" id={`pv-g-${scope}${id}`} data-actor={actor}>{icon}{label} <span className="n">{id === "fly" ? live : rows.filter((r) => r.state !== "out").length}</span>{id === "fly" && <span className="tail">{plural(live, "builder")} live{more ? ` · ${more} more in Preflight and checking` : ""}</span>}{id === "ground" && <span className="tail">costs nothing</span>}</h3>
+      <h3 className="pv-gh" id={`pv-g-${scope}${id}`} data-actor={actor}>{icon}{label} {id !== "fly" && <span className="n">{rows.filter((r) => r.state !== "out").length}</span>}{id === "fly" && <span className="tail">{flyingTail(live, more)}</span>}{id === "ground" && <span className="tail">costs nothing</span>}</h3>
       <ul className="pv-list">{rows.map((r) => <Row key={r.it.plan.id} it={r.it} snap={snap} now={now} state={r.state} onOpen={(id) => onOpen(id ?? r.it.plan.id)} onCard={() => onCard(r.it.plan.id)} onDo={onDo} />)}</ul>
     </section>
   );

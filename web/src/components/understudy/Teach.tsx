@@ -20,19 +20,20 @@
  * The exclusion list comes FIRST, above the sources, because it is the only
  * control here that can prevent something rather than undo it.
  */
-import { useCallback, useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import type { UnderstudyLearned, UnderstudySource } from "../../../../shared/types.ts";
 import { SERVER, authHeaders } from "../../lib/api.ts";
 import { Button } from "../workspace/Chrome.tsx";
 import { Empty } from "../git/ui.tsx";
-import { SettingRow } from "../SettingRow.tsx";
+import { FormInput } from "../settings/shell/FormInput.tsx";
+import { Section } from "../settings/shell/Section.tsx";
+import { SettingRow } from "../settings/shell/SettingRow.tsx";
+import { DangerAction } from "../settings/save/index.ts";
 import { useReportNeeds } from "../SettingsPageState.tsx";
-import { Field, ProblemNote, SettingsCard, SettingsForm, StatusBadge } from "../SettingsKit.tsx";
+import { registerRead, useSettingsData } from "../settings/shell/pageLoad.tsx";
+import { ProblemNote } from "../SettingsKit.tsx";
 import { fmtBytes } from "../../lib/goneCleanup.ts";
 import { HIT, ICON } from "../../lib/iconSize.ts";
-import { ClockIcon, ListIcon, PlayIcon } from "../../lib/glyphIcons.tsx";
-import { ChecklistIcon, FolderIcon, ShieldIcon } from "../settingsNavIcons.tsx";
-import { UnderstudyIcon } from "../workspace/icons.tsx";
 import { INPUT, INPUT_STYLE } from "../workspace/Chrome.tsx";
 import { fileCount } from "../../lib/fileCount.ts";
 
@@ -117,12 +118,23 @@ function TickBox({ on, onClick, disabled, title, plain }: {
 /** Precedents are one row per project and a machine can hold hundreds: the page was 9000px tall at 1440. */
 const PRECEDENT_ROWS = 8;
 
+/* Through the Settings cache, so the page opens with the last read and the nav can warm it on hover.
+   A body that is not a sources list is a failed read, not an empty one. */
+const SOURCES = "understudy/sources";
+registerRead("understudy", SOURCES, async () => {
+  const r = await fetch(SERVER + "/understudy/sources", { headers: authHeaders() });
+  if (!r.ok) throw new Error(String(r.status));
+  const b = (await r.json()) as SourcesBody;
+  if (!b || !Array.isArray(b.sources)) throw new Error("not a sources list");
+  return b;
+});
+
 export function Teach({ active }: { active: boolean }) {
-  const [data, setData] = useState<SourcesBody | null>(null);
+  /* The read of the sources answered nothing (`loadFailed`). It used to leave "Reading what is on this machine…" up for good. */
+  const { data: read0, failed: loadFailed, reload } = useSettingsData<SourcesBody>(SOURCES, active);
+  const data = read0 ?? null;
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-  /* The read of the sources answered nothing. It used to leave "Reading what is on this machine…" up for good. */
-  const [loadFailed, setLoadFailed] = useState(false);
   const [neverText, setNeverText] = useState("");
   const [addPath, setAddPath] = useState("");
   const [allPrecedents, setAllPrecedents] = useState(false);
@@ -133,27 +145,16 @@ export function Teach({ active }: { active: boolean }) {
      document, which looks exactly like a broken build. */
   const receipt = useRef<HTMLDivElement | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const r = await fetch(SERVER + "/understudy/sources", { headers: authHeaders() });
-      if (!r.ok) { setLoadFailed(true); return; }
-      const b = (await r.json()) as SourcesBody;
-      if (b && Array.isArray(b.sources)) {
-        setData(b);
-        setLoadFailed(false);
-        setNeverText(b.never.join("\n"));
-      } else setLoadFailed(true);
-    } catch { setLoadFailed(true); /* nothing is drawn from a read that did not come */ }
-  }, []);
-
-  useEffect(() => { if (active) void load(); }, [active, load]);
+  const load = reload;
+  // Every fresh read puts the saved list back in the box, as the old local read did.
+  useEffect(() => { if (data) setNeverText(data.never.join("\n")); }, [data]);
   /* The one red thing on this page is the nav mark too; a wizard step that is "your turn" is a next step, not a problem. */
   useReportNeeds("understudy", data && !data.terms.ok ? { count: 1, title: "The private-terms list is missing, so nothing is read yet" } : null);
 
   if (!active) return null;
   if (!data) {
     return loadFailed
-      ? <ProblemNote title="Could not read what is on this machine" action={<Button onClick={() => { setLoadFailed(false); void load(); }}>Try again</Button>}>
+      ? <ProblemNote title="Could not read what is on this machine" action={<Button onClick={() => { void load(); }}>Try again</Button>}>
           The local server did not answer, so nothing here is known. Nothing was changed.
         </ProblemNote>
       : <Empty what="what is on this machine" busy />;
@@ -236,60 +237,20 @@ export function Teach({ active }: { active: boolean }) {
    * largest on the list; where it is filed is the badge.
    */
   const Source = ({ s }: { s: UnderstudySource }) => {
-    const badges = (
-      <>
-        {s.found && (s.sensitive
-          /* WHERE IT IS FILED, not whose work it is. The first version of this
-             said "somebody else's work", which told the reader the opposite of
-             the truth — it is all their work. What the flag decides is the
-             partition, and the partition decides where a name may end up,
-             never whether the material may be read. */
-          ? <span title="Filed closed. Read and learned from like everything else — but retrieval can never surface it into anything bound for a public repository."><StatusBadge tone="off">Kept private</StatusBadge></span>
-          : <span title="Your open project. Rows from here may be used for predictions about public work."><StatusBadge tone="off">Open project</StatusBadge></span>)}
-        {s.recommended && <StatusBadge tone="ok">Suggested</StatusBadge>}
-        {!s.found && <StatusBadge tone="off">Not found</StatusBadge>}
-      </>
-    );
-    const hint = s.found ? (
-      <>
-        <span className="block tabular-nums">{fileCount(s.files)} · {fmtBytes(s.bytes)}</span>
-        {s.bytes > 0 && (
-          <span aria-hidden className="block mt-1.5"
-            style={{
-              height: 3, borderRadius: 2,
-              width: `${Math.max(2, Math.round((s.bytes / biggest) * 100))}%`,
-              maxWidth: "18rem",
-              background: s.sensitive ? "var(--phone)" : "var(--primary)",
-              opacity: s.added ? 1 : .35,
-            }} />
-        )}
-      </>
-    ) : undefined;
-    const title = s.found ? `Let it read ${s.label}` : `${s.label} — not on this machine`;
-    /* The sentence and the path are the row's own hover: thirty-six
-       paragraphs were the densest block in the panel, and the name says which
-       row this is. */
-    const label = <span title={`${s.what}\n${s.path}`}>{s.label}</span>;
-    if (s.added) {
-      return (
-        <SettingRow label={label} hint={hint} disabled={!s.found}
-          status={badges}
-          control={<TickBox on={s.allowed} disabled={!s.found} onClick={() => void toggle(s)} title={title} />}
-          actions={
-            <Button tone="danger" label={`Remove ${s.label}`}
-              title="Stop reading this, and forget it is on the list."
-              onClick={() => void post("/understudy/source/remove", { id: s.id }).then(load)}>
-              Remove
-            </Button>
-          } />
-      );
-    }
+    const facts = [
+      s.found ? `${fileCount(s.files)}, ${fmtBytes(s.bytes)}` : "Not found on this machine",
+      s.found ? (s.sensitive ? "Kept private" : "Open project") : "",
+      s.recommended ? "Suggested" : "",
+    ].filter(Boolean).join(". ") + ".";
+    const title = s.found ? `Let it read ${s.label}` : `${s.label} is not on this machine`;
     return (
-      <SettingRow label={label} hint={hint} disabled={!s.found}
-        role="checkbox" ariaChecked={s.allowed}
-        onClick={s.found ? () => void toggle(s) : undefined}
-        status={badges}
-        control={<TickBox plain on={s.allowed} disabled={!s.found} title={title} />} />
+      <SettingRow kind="control" label={s.label} help={facts}
+        control={<>
+          <TickBox on={s.allowed} disabled={!s.found} onClick={() => void toggle(s)} title={title} />
+          {s.added && (
+            <DangerAction label="Remove" onConfirm={() => post("/understudy/source/remove", { id: s.id }).then(load)} />
+          )}
+        </>} />
     );
   };
 
@@ -301,211 +262,121 @@ export function Teach({ active }: { active: boolean }) {
 
   return (
     <>
-      {/* The gate that decides whether reading is safe at all. First, because
-          it is the only thing here that can prevent rather than undo. */}
+      {/* The gate that decides whether reading is safe at all. First, because it is the only thing here that can prevent rather than undo. */}
       {!data.terms.ok && (
-        <SettingsCard title="Private-terms list" status={<StatusBadge tone="err">Missing</StatusBadge>}>
-          <SettingRow label="It will not read anything yet"
-            hint="There is no private-terms list, and without one it refuses rather than guess."
-            detail={{ summary: "Why, and how to fix it", body: <>
-              There is no private-terms list at <span className="t-mono break-all">{data.terms.path}</span>. That list is what stops a private name reaching a
-              file it should not, and without it this cannot tell "checked, clean" from "could not check". Create the file (one name, word or pattern per line; <span className="t-mono">AGENTGLASS_PRIVATE_TERMS</span> points
-              it elsewhere), or say so here if this machine genuinely has nothing to protect.
-            </> }}
-            actions={
-              <Button tone="danger" disabled={busy || allowedCount === 0}
-                onClick={() => void learn(true)}
+        <Section id="learn-terms" title="Private-terms list" intro="Without this list it refuses to read anything.">
+          <SettingRow kind="control" label="It will not read anything yet"
+            help="There is no private-terms list, so it cannot tell clean from unchecked."
+            control={
+              <Button tone="danger" disabled={busy || allowedCount === 0} onClick={() => void learn(true)}
                 title="Reads the ticked sources with no private-terms check at all. Only for a machine with nothing on it that must not leave.">
-                Read anyway — nothing here is private
+                Read anyway
               </Button>
             } />
-        </SettingsCard>
+          <div className="px-3 pb-2.5 text-[12px]" style={{ color: "var(--text2)" }}>
+            Create <span className="t-mono break-all">{data.terms.path}</span> with one name, word or pattern per line, or say so here if this machine has nothing to protect.
+          </div>
+        </Section>
       )}
 
-      {/* The way in, for somebody who has just opened this and has no idea
-          which of twenty rows to tick. One press does the whole of steps one
-          and two with a defensible answer, and every part of it can be undone
-          by hand afterwards. One sentence, and the proof a click away: the
-          reasoning is all correct and all of it answers questions nobody has
-          asked yet. */}
-      <SettingsCard title="What the orchestrator learns from" icon={<UnderstudyIcon size={ICON.sm} />}
-        desc="Three steps: what it must never see, what it may read, and then reading it.">
-        <SettingRow label="Set this up for me"
-          hint="It reads the repositories on this machine and learns how you decide. Nothing leaves it."
-          actions={<>
+      <Section id="learn-setup" title="What the orchestrator learns from" intro="Three steps: what it must never see, what it may read, and then reading it.">
+        <SettingRow kind="control" label="Set this up for me"
+          help="Reads the repositories on this machine. Nothing leaves it."
+          control={<>
             <Button tone="primary" onClick={() => void applyRecommended(false)} disabled={busy}>Set this up for me</Button>
             <Button onClick={() => void applyRecommended(true)} disabled={busy}
-              title="Adds the scratch directories too — the litter of one afternoon rather than a record of how you work.">
+              title="Adds the scratch directories too: the litter of one afternoon rather than a record of how you work.">
               Everything I have
             </Button>
-          </>}
-          detail={{
-            summary: "What exactly it reads",
-            body: <>
-              <b style={{ fontWeight: 400, color: "var(--text)" }}>Set this up for me</b> ticks everything real on this machine — your work
-              included, because that is where most of your decisions are. It skips only scratch directories.{" "}
-              <b style={{ fontWeight: 400, color: "var(--text)" }}>Everything I have</b> adds those too.{" "}
-              <b style={{ fontWeight: 400, color: "var(--text)" }}>Reading is not the risk.</b> Anything outside your open project is filed
-              <em> kept private</em>, and retrieval can never cross that line — a prediction about public work cannot
-              surface a private row. The one thing it cannot do is recognise a name nobody told it about, which is
-              what step 1 is for.
-            </>,
-          }} />
-      </SettingsCard>
+          </>} />
+        <details className="px-3 pb-2.5 text-[12px]" style={{ color: "var(--text2)" }}>
+          <summary className="cursor-pointer">What exactly it reads</summary>
+          <p className="mt-1.5">
+            <b style={{ fontWeight: 600, color: "var(--text)" }}>Set this up for me</b> ticks everything real on this machine, your work included. It skips only scratch directories.{" "}
+            <b style={{ fontWeight: 600, color: "var(--text)" }}>Everything I have</b> adds those too. Anything outside your open project is filed <em>kept private</em>,
+            and retrieval can never cross that line. It cannot recognise a name nobody told it about: that is step 1.
+          </p>
+        </details>
+      </Section>
 
-      <SettingsCard title="What it must never see" icon={<ShieldIcon size={ICON.sm} />}
-        status={<StatusBadge tone={stepTone(!step1Active, step1Active)}>
-          {stepWord(!step1Active, step1Active, `${data.never.length} word${data.never.length === 1 ? "" : "s"}`)}
-        </StatusBadge>}
-        desc="Step 1. The one control here that prevents something rather than undoes it.">
-        <SettingRow label="Words it must never read"
-          hint="One per line. Anything with these words in its path or its text is not read."
-          detail={{ summary: "What not read means", body: <>Not skimmed, not stored, not summarised. Plain words rather than patterns, on purpose: you should be able to predict this exactly.</> }}
-          below={
-            <div className="flex flex-col gap-1.5" style={{ maxWidth: 480 }}>
-              <textarea
-                value={neverText}
-                onChange={(e) => setNeverText(e.target.value)}
-                onBlur={() => void saveNever()}
-                aria-label="Words it must never read"
-                aria-describedby="never-help"
-                spellCheck={false}
-                rows={4}
-                placeholder={"Documents/private\nclient-name\n.ssh"}
+      <Section id="learn-never" title="What it must never see" intro={`Step 1. ${step1Active ? "Your turn." : `${data.never.length} word${data.never.length === 1 ? "" : "s"} listed.`}`}>
+        <SettingRow kind="control" label="Words it must never read"
+          help="One per line. A path or text with one of these is not read."
+          control={
+            <div className="flex flex-col gap-1.5" style={{ width: 300, maxWidth: "100%" }}>
+              <textarea value={neverText} onChange={(e) => setNeverText(e.target.value)} onBlur={() => void saveNever()}
+                aria-label="Words it must never read" spellCheck={false} rows={4} placeholder={"Documents/private\nclient-name\n.ssh"}
                 className="w-full px-2.5 py-2 text-[12px] rounded-lg bg-[var(--surface-inset)] text-[var(--text)] outline-none"
-                style={{ ...INPUT_STYLE, fontFamily: "inherit", resize: "vertical" }}
-              />
-              <div id="never-help" className="agx-field-h">{data.never.length} in the list · saved when you click away</div>
+                style={{ ...INPUT_STYLE, fontFamily: "inherit", resize: "vertical" }} />
+              <div className="text-[11px]" style={{ color: "var(--text2)" }}>{data.never.length} in the list. Saved when you click away.</div>
             </div>
           } />
-      </SettingsCard>
+      </Section>
 
-      <SettingsCard title="Rules you wrote down" icon={<ChecklistIcon size={ICON.sm} />}
-        status={<StatusBadge tone={stepTone(allowedCount > 0, step2Active)}>
-          {stepWord(allowedCount > 0, step2Active, `${allowedCount} ticked`)}
-        </StatusBadge>}
-        desc="Step 2. What you wrote down you do: the policy it reads before every prediction.">
+      <Section id="learn-rules" title="Rules you wrote down" intro={`Step 2. ${allowedCount > 0 ? `${allowedCount} ticked.` : step2Active ? "Your turn." : "Later."} The policy it reads before every prediction.`}>
         {rules.map((s) => <Source key={s.id} s={s} />)}
-      </SettingsCard>
+      </Section>
 
-      <SettingsCard title="What you actually did" icon={<ClockIcon size={ICON.sm} />}
-        desc="Precedents: the record, not the intent. One row per project.">
-        <SettingRow agentExempt label="Why a row per project"
-          hint="A rule says “never main”; a precedent says what you did on a Tuesday when the base had moved."
-          detail={{ summary: "Rules and precedents", body: <>Precedents are messier and far larger, and only they can make a prediction yours rather than merely sensible. Each project is filed separately, and which side of that line a project sits on decides where its rows may ever be used, not whether they may be read.</> }} />
+      <Section id="learn-precedents" title="What you actually did" intro="Precedents are the record, not the intent. One row per project.">
         {shownPrecedents.map((s) => <Source key={s.id} s={s} />)}
         {precedents.length > PRECEDENT_ROWS && (
-          <div className="agx-settings-x py-2">
-            <Button size="compact" onClick={() => setAllPrecedents((v) => !v)}>
-              {allPrecedents ? "Show fewer" : `Show all ${precedents.length}`}
-            </Button>
-          </div>
+          <SettingRow kind="control" label={allPrecedents ? "Showing every project" : `Showing ${PRECEDENT_ROWS} of ${precedents.length} projects`}
+            control={<Button size="compact" onClick={() => setAllPrecedents((v) => !v)}>{allPrecedents ? "Show fewer" : `Show all ${precedents.length}`}</Button>} />
         )}
-      </SettingsCard>
+      </Section>
 
-      <SettingsCard title="Somewhere else" icon={<FolderIcon size={ICON.sm} />}>
-        <SettingRow label="Add a folder"
-          hint="A folder of notes, a journal, anything else you keep. Markdown is read as rules; everything else as record."
-          below={
-            <SettingsForm label="Add a folder" onSubmit={() => void add()}>
-              <Field label="Folder path" htmlFor="understudy-add-path">
-                <input id="understudy-add-path"
-                  value={addPath}
-                  onChange={(e) => setAddPath(e.target.value)}
-                  spellCheck={false}
-                  placeholder="/home/you/notes"
-                  className={`w-full ${INPUT}`}
-                  style={INPUT_STYLE} />
-              </Field>
-              <div className="agx-sform-actions"><Button type="submit">Add</Button></div>
-            </SettingsForm>
-          } />
-        {problem && <div role="alert" className="agx-settings-x pt-2 pb-3 text-[12px]" style={{ color: "var(--error-ink)" }}>{problem}</div>}
-      </SettingsCard>
+      <Section id="learn-folder" title="Somewhere else">
+        <SettingRow kind="control" label="Add a folder" help="Notes, a journal, anything else you keep. Markdown is read as rules."
+          control={<>
+            <FormInput id="understudy-add-path" aria-label="Folder path" value={addPath} onChange={(e) => setAddPath(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void add(); } }}
+              spellCheck={false} placeholder="/home/you/notes" className={INPUT} style={{ ...INPUT_STYLE, minWidth: 220 }} />
+            <Button onClick={() => void add()}>Add</Button>
+          </>} />
+        {problem && <div role="alert" className="px-3 py-2 text-[12px]" style={{ color: "var(--error-ink)" }}>{problem}</div>}
+      </Section>
 
-      <SettingsCard title="Let it read them" icon={<PlayIcon size={ICON.sm} />}
-        status={<StatusBadge tone={stepTone(!!data.learned, step3Active)}>
-          {stepWord(!!data.learned, step3Active, "Done")}
-        </StatusBadge>}
-        desc="Step 3. Local only: no network, no model, no key.">
-        {/* The outcome, next to the thing that caused it. This used to say the
-            same sentence before and after, so a run that read sixteen hundred
-            files looked identical to no run at all. */}
-        <SettingRow label="Read what is ticked"
-          hint={allowedCount === 0
+      <Section id="learn-read" title="Let it read them" intro={`Step 3. ${data.learned ? "Done." : step3Active ? "Your turn." : "Later."} Local only: no network, no model, no key.`}>
+        <SettingRow kind="control" label="Read what is ticked"
+          help={allowedCount === 0
             ? "Nothing is allowed yet, so there is nothing to read."
             : read
-              ? <>{data.learned
-                    ? `Read ${fileCount(data.learned.filesRead)} at ${when(data.learned.at)}`
-                    : `Last read ${when(data.policy!.at)}`} —{" "}
-                  <b style={{ fontWeight: 400, color: "var(--text)" }}>{(data.policy?.rules ?? 0).toLocaleString()} rules</b>,{" "}
-                  <b style={{ fontWeight: 400, color: "var(--text)" }}>{data.banked.toLocaleString()} precedents</b>
-                  {data.learned && data.learned.quarantined > 0 && <>, {data.learned.quarantined} refused</>}. Detail below.</>
+              ? `${data.learned ? `Read ${fileCount(data.learned.filesRead)} at ${when(data.learned.at)}` : `Last read ${when(data.policy!.at)}`}: ${(data.policy?.rules ?? 0).toLocaleString()} rules, ${data.banked.toLocaleString()} precedents${data.learned && data.learned.quarantined > 0 ? `, ${data.learned.quarantined} refused` : ""}.`
               : "Reads only what is ticked."}
-          actions={
+          control={
             <Button tone="primary" onClick={() => void learn()} disabled={busy || allowedCount === 0}>
-              {busy
-                ? "Reading…"
-                : read
-                  ? "Read them again"
-                  : `Learn from ${allowedCount} source${allowedCount === 1 ? "" : "s"}`}
+              {busy ? "Reading…" : read ? "Read them again" : `Learn from ${allowedCount} source${allowedCount === 1 ? "" : "s"}`}
             </Button>
           } />
-      </SettingsCard>
+      </Section>
 
       {(data.learned || data.policy) && (
-        <SettingsCard title="What it knows now" icon={<ListIcon size={ICON.sm} />}
-          desc="The rules are compiled into files you can open and argue with.">
-          <SettingRow rowRef={receipt} label="Rules" control={<span className="tabular-nums text-[15px]">{data.policy?.rules ?? 0}</span>} />
-          <SettingRow label="Precedents" control={<span className="tabular-nums text-[15px]">{data.banked.toLocaleString()}</span>} />
-          {/*
-            * EVER, not "in the last read", and the difference showed a zero
-            * on a machine with eight refusals on record.
-            *
-            * `learned.quarantined` is counted in memory during one pass and
-            * discarded with it, so this read 0 whenever the last read
-            * happened to refuse nothing — while the table that records
-            * them held eight. Wrong in the dangerous direction: a zero
-            * here reads as "the privacy gate has never had to stop
-            * anything", and that is the one thing this figure exists to
-            * report honestly.
-            *
-            * The last read's own number stays in the sentence below, where
-            * it says which pass it is talking about.
-            */}
-          <SettingRow label="Refused"
-            hint={data.refusedEver
-              ? `${data.refusedEver} passages have been refused for holding a private term, across every read. The term itself is never stored — only that one matched.`
-              : "Nothing has ever tripped the private-terms list."}
+        <Section id="learn-knows" title="What it knows now" intro="The rules are compiled into files you can open and argue with.">
+          <div ref={receipt} />
+          <SettingRow kind="control" agentExempt label="Rules" help="Compiled from the sources you ticked." control={<span className="tabular-nums text-[15px]">{data.policy?.rules ?? 0}</span>} />
+          <SettingRow kind="control" agentExempt label="Precedents" help="What you did, banked once." control={<span className="tabular-nums text-[15px]">{data.banked.toLocaleString()}</span>} />
+          {/* EVER, not "in the last read": a zero here would read as "the privacy gate never had to stop anything". */}
+          <SettingRow kind="control" agentExempt label="Refused"
+            help={data.refusedEver ? "Passages refused for a private term, across every read." : "Nothing has ever tripped the private-terms list."}
             control={<span className="tabular-nums text-[15px]" style={{ color: data.refusedEver ? "var(--warning-ink)" : "var(--text3)" }}>{(data.refusedEver ?? 0).toLocaleString()}</span>} />
           {data.learned && (
-            /* "new", not "precedents", and the difference caused a real
-               false alarm: a second run over the same transcripts reports
-               near-zero here while the bank is fully populated, because a
-               precedent already banked is recognised and not duplicated. The
-               column was reading as "this source gave almost nothing". */
-            <SettingRow label="What each source added this time"
-              hint={<>
-                Read {fileCount(data.learned.filesRead)}. Counts are what each source added{" "}
-                <em>this time</em> — a passage already banked is recognised, not stored twice, so a second
-                run over unchanged files reports little and is not doing less.{" "}
-                {data.learned.quarantined > 0
-                  ? `${data.learned.quarantined} passages were refused because a private term was in them — they were dropped, not stored.`
-                  : "Nothing tripped the private-terms list."}
-              </>}
-              below={
-                <div>
-                  {data.learned.bySource.map((b) => (
-                    <div key={b.id} className="flex items-baseline gap-2 text-[12px] py-0.5">
-                      <span className="flex-1 min-w-0 break-words" style={{ color: "var(--text3)" }}>{b.label}</span>
-                      <span className="tabular-nums" style={{ color: "var(--text3)" }}>{b.rules} rules</span>
-                      <span className="tabular-nums" style={{ color: "var(--text3)" }}>{b.precedents} new</span>
-                    </div>
-                  ))}
-                </div>
-              } />
+            <>
+              <div className="px-3 pt-2.5 text-[12px] font-medium" style={{ color: "var(--text)" }}>What each source added this time</div>
+              <div className="px-3 pb-2.5 text-[12px]" style={{ color: "var(--text2)" }}>
+                A passage already banked is recognised, not stored twice, so a second run reports little.
+              </div>
+              <div className="px-3 pb-2.5">
+                {data.learned.bySource.map((b) => (
+                  <div key={b.id} className="flex items-baseline gap-2 text-[12px] py-0.5">
+                    <span className="flex-1 min-w-0 break-words" style={{ color: "var(--text3)" }}>{b.label}</span>
+                    <span className="tabular-nums" style={{ color: "var(--text3)" }}>{b.rules} rules</span>
+                    <span className="tabular-nums" style={{ color: "var(--text3)" }}>{b.precedents} new</span>
+                  </div>
+                ))}
+              </div>
+            </>
           )}
-        </SettingsCard>
+        </Section>
       )}
     </>
   );

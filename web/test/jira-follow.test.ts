@@ -104,7 +104,11 @@ describe("the markup keeps the house rules", () => {
     expect(code(chrome)).toMatch(/\{marks\}\s*\{extra\}\s*<span className="flex-1" \/>/);
     expect(code(facts)).toContain("{follow && <JiraWatch ui={follow}");
     expect(code(facts)).toContain("{follow && <JiraVote ui={follow}");
-    expect(code(card)).toContain("follow, onTask: took })}");
+    // `updatedAt` (for "Updated N min ago") was added as a further field on
+    // this same call, after `onTask: took` — so the literal closing `})` is
+    // gone; the thing this checks (follow and the write-through both reach
+    // the header) still holds.
+    expect(code(card)).toMatch(/follow, onTask: took, updatedAt:/);
   });
 });
 

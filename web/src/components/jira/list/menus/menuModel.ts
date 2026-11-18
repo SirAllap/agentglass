@@ -48,7 +48,7 @@ export interface JiraMenu {
 /** One letter per action, everywhere. A menu that offers an action takes its letter from here. */
 export const LETTER = {
   open: "Enter", openJira: "o", move: "m", assign: "a", comment: "c", copyKey: "k", copyLink: "l", copyBranch: "b",
-  pr: "p", pin: "t", reread: "r", hide: "h", parent: "u", sort: "s", rename: "n", edit: "e",
+  pr: "p", next: "w", pin: "t", reread: "r", hide: "h", parent: "u", sort: "s", rename: "n", edit: "e",
   collapse: "ArrowLeft", collapseAll: "Shift+ArrowLeft",
 } as const;
 
@@ -69,8 +69,9 @@ const keyOf = (t: ProviderTask): string => t.customId ?? t.id;
 const cut = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n)}…` : s);
 const people = (t: ProviderTask): string => (t.assignees.length ? t.assignees.join(" and ") : "nobody yet");
 
-/** What the site says this card can do from where it stands: the steps, still being read, or why not. */
-export type MoveFacts = { to: readonly { status: string; asks: boolean }[] } | "reading" | { error: string };
+/** What the site says this card can do from where it stands: the steps, still being read, or why not.
+ *  `key` is the move's own id (Jira's transition id), carried for the status menu's direct write. */
+export type MoveFacts = { to: readonly { status: string; asks: boolean; key?: string }[] } | "reading" | { error: string };
 
 export interface CardMenuFacts {
   /** The pull request #, when the card has one. */
@@ -80,6 +81,12 @@ export interface CardMenuFacts {
   writable?: boolean;
   /** The steps from here; absent means not read yet. */
   moves?: MoveFacts;
+  /** The board's active sprint (null: it has none). Absent where the view is not a board, and the row is not drawn. */
+  sprint?: { name: string } | null;
+  /** The agent session live on this card, when there is one: the menu offers its tab. */
+  agent?: { title: string; waiting: boolean; stuck?: string } | null;
+  /** An agent is on this card or finished on it lately: the menu offers the Work tab, where what it did is read. */
+  worked?: boolean;
 }
 
 export const WRITES_OFF_WHY = "Changes to Jira are off";
@@ -92,7 +99,7 @@ export function stepsLine(to: readonly { status: string }[]): string {
 }
 
 /** Move / Assign / Comment each open the dock on its control, so each is off with the real reason when the dock could not act. */
-export function changeRows(t: ProviderTask, f: Pick<CardMenuFacts, "writable" | "moves">, comment: string): JiraMenuItem[] {
+export function changeRows(t: ProviderTask, f: Pick<CardMenuFacts, "writable" | "moves" | "sprint">, comment: string): JiraMenuItem[] {
   const off = f.writable === false ? WRITES_OFF_WHY : undefined;
   const m = f.moves;
   const move: Partial<JiraMenuItem> = off ? { why: off }
@@ -101,6 +108,7 @@ export function changeRows(t: ProviderTask, f: Pick<CardMenuFacts, "writable" | 
       : m && m !== "reading" ? { sub: "Could not read the steps" } : { sub: "Reading the steps…" };
   return [
     item("move", "Move to…", "move", { key: LETTER.move, ...move }),
+    ...(f.sprint === undefined ? [] : [item("sprint", "Move to current sprint", "move", off ? { why: off } : f.sprint ? { sub: f.sprint.name } : { why: "No active sprint on this board" })]),
     item("assign", "Assign to…", "user", off ? { why: off, key: LETTER.assign } : { sub: `Now: ${people(t)}`, key: LETTER.assign }),
     item("comment", "Comment", "comment", off ? { why: off, key: LETTER.comment } : { sub: comment, key: LETTER.comment }),
   ];
@@ -126,6 +134,10 @@ export function cardMenu(t: ProviderTask, f: CardMenuFacts): JiraMenu {
         f.pr !== null
           ? item("pr", `Open pull request #${f.pr}`, "pr", { sub: "Opens in agentglass", key: LETTER.pr })
           : item("pr", "Open pull request", "pr", { why: "No pull request linked yet", key: LETTER.pr }),
+        // The card's own main button, from the board: send it to a terminal, bring its worker forward, or open its plan or PR.
+        item("next", "Next step", "list", { sub: "The card's main button: a terminal, its worker or its PR", key: LETTER.next }),
+        ...(f.agent ? [item("agentTab", "Bring its agent's tab forward", "sidebar", { sub: `${cut(f.agent.title, 22)}${f.agent.waiting ? " · needs you" : f.agent.stuck ? ` · ${f.agent.stuck}` : ""}` })] : []),
+        ...(f.worked ? [item("agentWork", "What its agent did", "list", { sub: "The card's Work tab" })] : []),
       ]),
     ],
     more: [
@@ -135,6 +147,22 @@ export function cardMenu(t: ProviderTask, f: CardMenuFacts): JiraMenu {
     ],
     close: null,
   };
+}
+
+/**
+ * The quick Status menu `s` opens on a focused board row: the reachable statuses, numbered 1-8 (the keys that pick
+ * them), built on the same steps the card menu's Move to… reads. A move that asks for fields is listed but off,
+ * pointing at Move to… instead of opening a form here; with changes off, or none read yet, one row says why.
+ */
+export function statusMenu(t: ProviderTask, moves: MoveFacts, writable = true): JiraMenu {
+  const key = keyOf(t);
+  const why = (text: string): JiraMenuItem[] => [item("why", text, "check", { why: text })];
+  const rows: JiraMenuItem[] = writable === false ? why(WRITES_OFF_WHY)
+    : moves === "reading" ? why("Reading the steps…")
+    : "error" in moves ? why(moves.error || "Could not read the steps")
+    : moves.to.length === 0 ? why(`No step from ${t.status}`)
+    : moves.to.slice(0, 8).map((m, i) => item(m.key ?? `status:${i}`, m.status, "check", m.asks ? { why: "Needs details — use Move to…" } : { key: String(i + 1) }));
+  return { head: menuHead(key, t.title), rows: [{ kind: "heading", text: `Move ${key} to` }, ...rows], more: [], close: null };
 }
 
 /** `parent` is the card the sub-task hangs under, when this list can open it. */
@@ -164,7 +192,7 @@ export function subtaskMenu(t: ProviderTask, parent: { key: string; openable: bo
 }
 
 /** The letter that picks each sort in the sort menu. The ids, labels and the sorting itself are the lane model's (laneModel.ts). */
-const SORT_LETTER: Record<LaneSort, string> = { rank: "r", key: "k", priority: "p", due: "d" };
+const SORT_LETTER: Record<LaneSort, string> = { rank: "r", key: "k", priority: "p", due: "d", agent: "a" };
 const sortLabel = (k: LaneSort): string => LANE_SORTS.find((s) => s.id === k)!.label;
 
 export interface LaneMenuFacts { status: string; cards: readonly ProviderTask[]; folded: boolean; sort: LaneSort; hidden: number }

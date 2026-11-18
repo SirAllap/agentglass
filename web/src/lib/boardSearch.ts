@@ -23,6 +23,9 @@ function haystack(t: ProviderTask): string {
     t.sprint,
     t.list,
     ...t.tags,
+    /* The epic, by key and by name: "auth hardening" finds the cards under it. */
+    t.parent?.key,
+    t.parent?.title,
     ...(t.people ?? []).flatMap((p) => [p.name, p.initials]),
     /* `assignees` as well: `people` is the richer shape and may be absent on a
        provider that only reports names. */

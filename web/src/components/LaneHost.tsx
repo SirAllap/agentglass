@@ -72,6 +72,8 @@ export function LaneHost({ id, profile, ephemeral = false }: { id: string; profi
     const me = clientId();
     const beat = () => { void api.browserReady(me, true, [id]).catch(() => {}); };
     beat();
+    // Liveness, not UI refresh: server/src/lanes.ts drops a lane whose host stops beating
+    // after HOST_GONE_MS (60 s), so this must keep running while the window is hidden.
     const timer = setInterval(beat, 30_000);
     return () => {
       clearInterval(timer);

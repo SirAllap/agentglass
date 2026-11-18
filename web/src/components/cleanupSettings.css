@@ -29,7 +29,7 @@
 .agx-cl-days { color: var(--text3); font-size: 12px; }
 .agx-cl-incl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 @media (max-width: 760px) { .agx-cl-incl { grid-template-columns: minmax(0, 1fr); } }
-.agx-cl-irow { display: flex; align-items: center; gap: 10px; padding: 8px 10px; min-height: 48px; border-radius: 10px; background: var(--bg); cursor: pointer; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent); }
+.agx-cl-irow { border: 0; text-align: left; width: 100%; font: inherit; color: inherit; display: flex; align-items: center; gap: 10px; padding: 8px 10px; min-height: 48px; border-radius: 10px; background: var(--bg); cursor: pointer; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 10%, transparent); }
 .agx-cl-irow .agx-cl-tile { width: 26px; height: 26px; border-radius: 8px; }
 .agx-cl-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .agx-cl-tx b { font-weight: 600; font-size: 12.5px; line-height: 1.35; color: var(--text); }

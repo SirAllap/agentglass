@@ -6,6 +6,7 @@
  * account (dimmed, and the tooltip says why), and with writing to Jira off (a count only, nothing to press).
  */
 import { Chip } from "../workspace/Chrome.tsx";
+import { tipAttr } from "../../lib/tip.ts";
 import { EyeIcon, ThumbUpIcon } from "../../lib/glyphIcons.tsx";
 import { ICON } from "../../lib/iconSize.ts";
 import { DockIcon } from "./DockParts.tsx";
@@ -28,7 +29,7 @@ function One({ c, onPress }: { c: FollowControl; onPress: () => void }) {
   );
   if (c.mode === "readonly") {
     return (
-      <span className="agx-chip text-[11px] px-2.5 min-h-[28px] inline-flex items-center gap-1.5 rounded-lg whitespace-nowrap" title={c.title}
+      <span className="agx-chip text-[11px] px-2.5 min-h-[28px] inline-flex items-center gap-1.5 rounded-lg whitespace-nowrap" data-tip={tipAttr({ name: c.label, text: c.title })}
         style={{ color: c.on ? "var(--primary-ink)" : "var(--text3)" }}>{body}</span>
     );
   }

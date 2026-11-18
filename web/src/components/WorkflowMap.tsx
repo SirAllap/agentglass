@@ -7,14 +7,14 @@ import { ArrowIcon, CaretIcon, DoneIcon, EyeIcon, EyeOffIcon, ListIcon, MergeIco
 import { StepBlocks, type MapPerson } from "./StepBlocks.tsx";
 import type { FieldChoice } from "./StepExtraRows.tsx";
 import type { MapBlock as StepBlock } from "../../../shared/providers.ts";
-import { blocksSentence, blockNeedsValue, stepIsEmpty, triggerOf } from "../lib/stepBlocksView.ts";
+import { blocksSentence, blockNeedsValue, stepIsEmpty, suggestedAssign, triggerOf } from "../lib/stepBlocksView.ts";
 import { HIT, ICON } from "../lib/iconSize.ts";
 import {
   STEP_ORDER, allStatuses, isActive, moments, needsStatus, suggestStatus, whereWhen,
   type MapSpace, type Moment, type Nouns, type Step, type StepKind, type TrackerAdapter,
 } from "../lib/workflowMap.ts";
 import {
-  coveragePill, coverageRows, defaultUnit, eyeIds, lineInk, notInUnit, planConnectors, statusHome,
+  coveragePill, coverageRows, defaultUnit, eyeIds, lineInk, mapScale, notInUnit, planConnectors, statusHome, wireEnds,
   type CoveragePill, type Partition, type Wire,
 } from "../lib/workflowLayout.ts";
 
@@ -42,6 +42,8 @@ export interface MapProps {
   frozen?: boolean;
   /** Under the picker's list: where the statuses come from and how old they are. */
   source?: ReactNode;
+  /** The page's own action in the map's header, beside Add a step: Jira's copy from another tracker. */
+  copy?: ReactNode;
   /** The step the person's attention is on, so the page can show which part of a pull request it adds. */
   onHover?: (k: StepKind | null) => void;
   /** Add a step. The ones built from blocks start empty; resolves false when the save failed. */
@@ -103,6 +105,15 @@ function Segs({ on }: { on: boolean[] }) {
 const PRESS_LEAD: Partial<Record<StepKind, string>> = { move: "Press it:", menu: "Pick it:", merge: "Confirm the merge:" };
 const hint = (c: ReactNode, extra?: object) => <span className="text-[11px]" style={{ color: "var(--text3)", ...extra }}>{c}</span>;
 
+/** The box that scrolls the map: the nearest ancestor that scrolls, or the page itself. */
+function scrollParent(el: HTMLElement): HTMLElement | Document {
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    const o = getComputedStyle(p).overflowY;
+    if (o === "auto" || o === "scroll" || o === "overlay") return p;
+  }
+  return document.scrollingElement instanceof HTMLElement ? document.scrollingElement : document;
+}
+
 export function WorkflowMap(p: MapProps) {
   const { adapter, part, panel, changesOn, frozen } = p;
   const n = adapter.nouns;
@@ -126,6 +137,7 @@ export function WorkflowMap(p: MapProps) {
   const grid = useRef<HTMLDivElement>(null);
   const svg = useRef<SVGSVGElement>(null);
   const stepsBox = useRef<HTMLDivElement>(null);
+  const colBox = useRef<HTMLElement>(null);
   const uid = useId();
   const dormant = !changesOn && steps.length > 0;
   const light = (ks: StepKind[], on: boolean) => {
@@ -160,8 +172,9 @@ export function WorkflowMap(p: MapProps) {
     const g = grid.current, s = svg.current, box = stepsBox.current;
     if (!g || !s || !box) return;
     const gr = g.getBoundingClientRect();
-    s.setAttribute("width", String(gr.width));
-    s.setAttribute("height", String(gr.height));
+    const scale = mapScale(gr, g.offsetWidth);
+    s.setAttribute("width", String(gr.width / scale));
+    s.setAttribute("height", String(gr.height / scale));
     const base = getComputedStyle(g.querySelector(".wfm-col") ?? g).backgroundColor;
     const wires: (Wire & { kind: StepKind })[] = [];
     for (const st of steps) {
@@ -171,14 +184,13 @@ export function WorkflowMap(p: MapProps) {
       const row = [...g.querySelectorAll<HTMLElement>("[data-status]")].find((r) => r.dataset.status!.toLowerCase() === st.status!.toLowerCase());
       const dot = row?.querySelector<HTMLElement>("[data-dot]");
       if (!card || !pick || !dot) continue;
-      const c = pick.getBoundingClientRect(), d = dot.getBoundingClientRect(), cr = card.getBoundingClientRect();
       const colour = getComputedStyle(dot.firstElementChild ?? dot).backgroundColor;
       wires.push({
         id: steps.indexOf(st) + 1, kind: st.kind, color: lineInk(colour, base),
-        from: { x: cr.right - gr.left, y: c.top + c.height / 2 - gr.top }, to: { x: d.left + d.width / 2 - gr.left, y: d.top + d.height / 2 - gr.top },
+        ...wireEnds({ grid: gr, card: card.getBoundingClientRect(), pick: pick.getBoundingClientRect(), dot: dot.getBoundingClientRect(), scale }),
       });
     }
-    const cards = box.getBoundingClientRect().right - gr.left;
+    const cards = (box.getBoundingClientRect().right - gr.left) / scale;
     const kindOf = new Map(wires.map((w) => [w.id, w.kind]));
     let out = "";
     for (const c of planConnectors(wires, cards)) {
@@ -194,13 +206,32 @@ export function WorkflowMap(p: MapProps) {
     if (!g) return;
     let raf = 0;
     const again = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(draw); };
+    /* A resize of the map or of the status column moves a row without resizing the grid. */
     const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(again) : null;
     ro?.observe(g);
-    /* The column is sticky: it moves against the cards while the page scrolls, in whichever box scrolls. */
-    document.addEventListener("scroll", again, true);
+    if (colBox.current) ro?.observe(colBox.current);
+    /* The column is sticky: it moves against the cards while the page scrolls, in whichever box
+       scrolls, and it scrolls its own list. Capturing on that box hears both. */
+    const scroller = scrollParent(g);
+    scroller.addEventListener("scroll", again, true);
     window.addEventListener("resize", again);
+    /* The window's zoom changes the device pixel ratio, and the query for the old ratio never
+       fires again: re-arm it for the new one after each change. */
+    let mq: MediaQueryList | null = null;
+    const onRatio = () => { again(); arm(); };
+    const arm = () => {
+      mq?.removeEventListener("change", onRatio);
+      mq = typeof window.matchMedia === "function" ? window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`) : null;
+      mq?.addEventListener("change", onRatio);
+    };
+    arm();
     void document.fonts?.ready.then(again);
-    return () => { cancelAnimationFrame(raf); ro?.disconnect(); document.removeEventListener("scroll", again, true); window.removeEventListener("resize", again); };
+    return () => {
+      cancelAnimationFrame(raf); ro?.disconnect();
+      scroller.removeEventListener("scroll", again, true);
+      window.removeEventListener("resize", again);
+      mq?.removeEventListener("change", onRatio);
+    };
   }, [draw]);
 
   const openPicker = (kind: StepKind) => (anchor: HTMLElement) => setPicker({ kind, anchor });
@@ -243,7 +274,7 @@ export function WorkflowMap(p: MapProps) {
     <ListEye unit={u} nouns={n} onToggle={p.onToggleCounted} blocked={frozen || (u.counted !== false && eyeIds(units, u) === null)} />
   );
   const column = (
-    <aside className="wfm-col" aria-label="Your statuses">
+    <aside ref={colBox} className="wfm-col" aria-label="Your statuses">
       <div className="flex flex-col gap-0.5">
         <h3 className="m-0 text-[13px] font-bold">Your statuses in</h3>
         {hint(`From the ${n.lists} where your tasks live, as ${n.name} orders them.`)}
@@ -335,6 +366,7 @@ export function WorkflowMap(p: MapProps) {
     const empty = !!trig && stepIsEmpty(trig, st.blocks ?? []);
     const moveBlock = st.blocks?.find((x): x is Extract<StepBlock, { type: "move" }> => x.type === "move");
     const awaiting = pend || (!!trig && !!moveBlock && blockNeedsValue(trig, moveBlock) && !st.status);
+    const suggest = st.blocks ? suggestedAssign(st.kind, st.blocks, n) : null;
     const stDot = st.status ? listed.find((x) => x.name.toLowerCase() === st.status!.toLowerCase()) : undefined;
     const count = home && home.counted.length === 0 && home.folded.length > 0 ? part.folded.find((f) => f.unit.statuses.some((x) => x.status.toLowerCase() === st.status!.toLowerCase())) : null;
     return (
@@ -369,6 +401,12 @@ export function WorkflowMap(p: MapProps) {
                 n={n} tracker={p.adapter.tracker} frozen={frozen} people={p.people} {...(p.fields ? { fields: p.fields } : null)} statusOpen={picker?.kind === st.kind}
                 onChange={(next) => p.onBlocks(st.kind, next)}
                 onPickStatus={(anchor) => (picker?.kind === st.kind ? closePicker(false) : openPicker(st.kind)(anchor))} />
+              {suggest && (
+                <button type="button" data-addassign="" className="wfm-ask" disabled={frozen}
+                  onClick={() => p.onBlocks(st.kind, [...(st.blocks ?? []), suggest])}>
+                  Add: Assign the card to — pick in the dialog
+                </button>
+              )}
               <div className="text-[13px]" data-press={st.kind} style={{ color: "var(--text2)", borderLeft: "3px solid var(--text)", padding: "8px 12px", borderRadius: 10, background: "var(--bg)", boxShadow: "inset 0 0 0 1px var(--w-line)" }}>
                 {blocksSentence({ lead: PRESS_LEAD[st.kind] ?? "Press it:", trigger: trig, blocks: st.blocks, item: n.item, status: st.status })}
               </div>
@@ -429,6 +467,7 @@ export function WorkflowMap(p: MapProps) {
           <div className="agx-scard-desc">Each step puts one control into agentglass. You build what it does from blocks.</div>
         </div>
         <div className="agx-slot">
+          {p.copy}
           {frozen
             ? <StatusBadge tone="warn">Paused: token refused</StatusBadge>
             : <StatusBadge tone={changesOn ? "ok" : "off"}>{changesOn ? "Changes on" : "Changes off"}</StatusBadge>}

@@ -33,7 +33,7 @@ import { botOnly, CHIP_FACETS, emptyCopy, FACETS, facetCounts, facetOrder, filte
 import { doneIds, isDone, isSaved, onShelf, savedIds, setDone, setSaved, subscribeMarks, type Shelf } from "../../lib/inboxMarks.ts";
 import { fmtAgo } from "../../lib/format.ts";
 import { inboxCiLine, inboxCiState } from "../../lib/inboxCiText.ts";
-import { jobIdOf } from "../../lib/prFailureHint.ts";
+import { jobIdOf } from "../../../../shared/prFailureHint.ts";
 import { failureKey, loadCached, summaryOf, useFailureStore } from "../../lib/checkFailuresStore.ts";
 import { openPr } from "../../lib/openPrs.ts";
 import { useDialogs } from "../ConfirmDialog.tsx";

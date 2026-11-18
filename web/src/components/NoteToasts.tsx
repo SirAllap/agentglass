@@ -18,15 +18,25 @@
 // banners exactly as before; this is a copy for the case where you cannot see
 // them. And nothing arrives here unless the feature is switched on, because the
 // socket that feeds it is not opened until then (see sysNotify.ts).
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { subscribeSystemNotes, openNote, type SystemNote } from "../lib/sysNotify.ts";
-import { Chevron, useClipped } from "./TopBarNotes.tsx";
+import { Chevron, MuteGlyph, useClipped } from "./TopBarNotes.tsx";
 import { Portal } from "./Portal.tsx";
-import { TOP_BAR_H } from "./TopBar.tsx";
-import { CloseButton } from "./CloseButton.tsx";
+import { CloseIcon } from "./CloseButton.tsx";
 import { Card } from "./workspace/Chrome.tsx";
 import { canMute, mutedSources, setMuted, sourceLabel, sourceOf, subscribeMuted } from "../lib/notePolicy.ts";
+import { Menu, MenuItem } from "./PrPanel.tsx";
+import { noteSurface, noteSurfaceTip } from "../lib/linkRouter.ts";
+import { benchLinks } from "../lib/termPrefs.ts";
+import { appLinkFor } from "../lib/appLink.ts";
+import { answerGate, gateForNote, listGates, subscribeGates } from "../lib/gateStore.ts";
+import { VIEW_OF, cardAction, stackCard, type LiveCard } from "../lib/noteCard.ts";
+import { ICON } from "../lib/iconSize.ts";
+import { LAYER } from "../lib/layers.ts";
+
+type Goto = NonNullable<SystemNote["goto"]>;
+type Where = "bench" | "view";
 
 /** How long an ordinary card holds the corner. Long enough to read two lines of
  *  someone else's message without hurrying, short enough that a busy minute does
@@ -36,10 +46,9 @@ const HOLD_MS = 7000;
 /**
  * How many are on screen at once.
  *
- * Three, and the oldest leaves when a fourth arrives. A stack that grows without
- * limit turns a group chat into a wall over your terminal — and everything that
- * scrolls off is still in the bell, which is the surface built for "what did I
- * miss".
+ * Three, and the oldest leaves when a fourth arrives. Repeats from one app fold
+ * into one card with ×N first (stackCard), so three is three apps, not three
+ * lines of one group chat — and everything that scrolls off is still in the bell.
  */
 const MAX = 3;
 
@@ -48,16 +57,6 @@ const ago = (t: number) => {
   if (s < 45) return "just now";
   const m = Math.round(s / 60);
   return m < 60 ? `${m}m ago` : `${Math.round(m / 60)}h ago`;
-};
-
-const GO_LABEL: Record<NonNullable<SystemNote["goto"]>["kind"], string> = {
-  pr: "Open PR", pane: "Open terminal", card: "Open card", git: "Open Git", settings: "Open Settings", file: "Open file",
-};
-
-/** Just the host, so the button can say where it goes rather than showing a
- *  bare arrow that reads as "open Slack" — the one thing it cannot do. */
-const hostOf = (url: string): string => {
-  try { return new URL(url).host.replace(/^www\./, ""); } catch { return "link"; }
 };
 
 /**
@@ -75,7 +74,7 @@ function AppMark({ app, urgent }: { app: string; urgent: boolean }) {
     <span
       className="grid place-items-center rounded-md shrink-0 text-[10px] font-bold"
       style={{
-        width: 18, height: 18, color: tint,
+        width: 20, height: 20, color: tint,
         background: `color-mix(in srgb, ${tint} 16%, transparent)`,
         border: `1px solid color-mix(in srgb, ${tint} 32%, transparent)`,
       }}
@@ -84,87 +83,124 @@ function AppMark({ app, urgent }: { app: string; urgent: boolean }) {
   );
 }
 
-/** The kit's Card, animated: a toast is a card with its own surface, not a copy of one. */
+/** The kit's Card, faded in: a toast is a card with its own surface, not a copy of one. */
 const MCard = motion.create(Card);
 
-function Toast({ n, onGone, onGoto }: {
+function Toast({ n, count, onGone, onGoto }: {
   n: SystemNote;
+  count: number;
   onGone: () => void;
-  onGoto: (g: NonNullable<SystemNote["goto"]>) => void;
+  onGoto: (g: Goto, where?: Where) => void;
 }) {
   const [held, setHeld] = useState(false);
+  // Keyboard focus inside the card (the caret, its menu) holds it as the mouse does: a menu opened with
+  // Enter must not close under the arrow keys when the timer runs out. The menu is a portal, but React's
+  // focus events bubble through it to the card.
+  const [focused, setFocused] = useState(false);
   const [open, setOpen] = useState(false);
   const bodyEl = useRef<HTMLSpanElement>(null);
+  const gates = useSyncExternalStore(subscribeGates, listGates, listGates);
+  const gate = n.urgency === 2 ? gateForNote(n, gates) : null;
   // Whether three lines is showing everything. Measured rather than guessed
   // from the length, and measured once the card is actually in the document —
   // see useClipped, which exists because a Portal's children have no layout at
   // the moment their own effects run.
   const cut = useClipped([bodyEl], !open, [n.body]);
 
-  // Urgent stays until it is dismissed. A sender marking a notification
-  // critical is rare enough to be meant, and a five-second window is not how
-  // you treat the one message that said it could not wait.
-  //
-  // So does one you have opened: expanding it is you saying you are reading it,
-  // and a card that vanishes mid-sentence because its timer ran out is the
-  // whole complaint about truncation with extra steps.
+  // An agent that waits stays until it is answered ("Stays until you answer"),
+  // and so does one you have opened: expanding it is you saying you are
+  // reading it, and a card that vanishes mid-sentence is no card at all.
   useEffect(() => {
-    if (held || open || n.urgency === 2) return;
+    if (held || focused || open || n.urgency === 2) return;
     const id = setTimeout(onGone, HOLD_MS);
     return () => clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [held, open, n.id]);
+  }, [held, focused, open, n.id]);
+  // A hold answered anywhere (the bell, the strip, another device) takes its card with it.
+  const hadGate = useRef(false);
+  useEffect(() => {
+    if (gate) hadGate.current = true;
+    else if (hadGate.current) onGone();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gate]);
 
-  const go = n.goto ? () => { onGone(); onGoto(n.goto!); } : null;
+  const act = cardAction(n, { bench: benchLinks(), appLink: appLinkFor(n.app), gate: !!gate });
+  // A pull request or a card opens where the terminal's links do ("Open PR
+  // and card links on the bench"); the menu beside the button is the other
+  // place, one click away. Read at the press, so a setting changed while the
+  // card is up is the one that counts.
+  const goTo = (where?: Where) => { onGone(); onGoto(n.goto!, where); };
+  const go = act.kind === "goto" ? () => goTo(VIEW_OF[n.goto!.kind] ? noteSurface(n.goto!.kind, benchLinks()) : undefined)
+    : act.kind === "link" || act.kind === "app" ? () => { onGone(); void openNote(n.id); }
+    : null;
+  const viewName = n.goto ? VIEW_OF[n.goto.kind] : undefined;
+  const label = (act.kind === "goto" || act.kind === "link") && act.target
+    ? <>{act.label} · <span className="font-mono text-[11px]">{act.target}</span></> : act.kind === "gate" ? "" : act.label;
+  const urgent = n.urgency === 2;
+  const src = sourceOf(n);
 
   return (
     <MCard
-      layout
+      layout="position"
       compact
-      initial={{ opacity: 0, x: 24, scale: 0.97 }}
-      animate={{ opacity: 1, x: 0, scale: 1 }}
-      exit={{ opacity: 0, x: 24, scale: 0.97, transition: { duration: 0.16 } }}
-      transition={{ type: "spring", stiffness: 420, damping: 34 }}
+      // A fade, no slide and no spring: a card should not pull the eye off the work behind it.
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0, transition: { duration: 0.12 } }}
+      transition={{ duration: 0.12 }}
       // Hovering holds it open: reaching for the ✕ or the link should not be a
       // race against the timer.
       onMouseEnter={() => setHeld(true)}
       onMouseLeave={() => setHeld(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
       onClick={go ?? undefined}
       role={go ? "button" : undefined}
       className="flex flex-col gap-1.5"
       style={{
         width: 360,
         cursor: go ? "pointer" : "default",
-        background: "color-mix(in srgb, var(--bg2) 96%, transparent)",
-        border: `1px solid ${n.urgency === 2
-          ? "color-mix(in srgb, var(--error) 45%, transparent)"
-          : "var(--border)"}`,
-        boxShadow: "0 22px 48px -20px var(--shadow)",
-        backdropFilter: "blur(10px)",
+        // See-through like the desktop's own popups (Omarchy background-alpha 0.7).
+        background: "color-mix(in srgb, var(--bg2) 70%, transparent)",
+        border: `1px solid ${urgent ? "color-mix(in srgb, var(--error) 70%, transparent)" : "var(--border)"}`,
+        ...(urgent ? { boxShadow: "inset 3px 0 0 var(--error), 0 22px 48px -20px var(--shadow)" } : { boxShadow: "0 22px 48px -20px var(--shadow)" }),
+        backdropFilter: "blur(14px)",
+        WebkitBackdropFilter: "blur(14px)",
       }}
     >
       <div className="flex items-center gap-2">
-        <AppMark app={n.app} urgent={n.urgency === 2} />
-        <span className="text-[10.5px] font-semibold truncate" style={{ color: "var(--text2)", maxWidth: 170 }}>{n.app}</span>
+        <AppMark app={n.app} urgent={urgent} />
+        <span className="text-[10.5px] font-semibold truncate" style={{ color: "var(--text2)", maxWidth: 170 }}>{sourceLabel(src) === src ? n.app : sourceLabel(src)}</span>
+        {count > 1 && (
+          <span className="text-[10px] font-semibold shrink-0 tabular-nums px-1 rounded" style={{ color: "var(--text2)", background: "var(--surface-2)" }}>×{count}</span>
+        )}
+        {n.test && (
+          <span className="text-[10px] font-semibold shrink-0 px-1 rounded" style={{ color: "var(--text2)", background: "var(--surface-2)" }}>Test</span>
+        )}
         <span className="text-[9.5px] shrink-0" style={{ color: "var(--text4)" }}>{ago(n.at)}</span>
-        {n.urgency === 2 && (
-          <span className="text-[10px] uppercase tracking-wider shrink-0" style={{ color: "var(--error-ink)" }}>urgent</span>
-        )}
-        {/* The rest of the message, on the card, without going to the bell for
-            it. Same control the bell's rows carry, so opening a notification is
-            one gesture wherever you meet it. */}
-        {(cut || open) && (
-          <button className="agx-note-btn agx-note-icon ml-auto shrink-0" aria-expanded={open}
-            onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
-            title={open ? "Show less" : "Show the whole message"}>
-            <Chevron up={open} />
+        <span className="ml-auto flex items-center gap-0.5 shrink-0">
+          {/* The rest of the message, on the card, without going to the bell for it. */}
+          {(cut || open) && (
+            <button className="agx-note-btn agx-note-icon" aria-expanded={open}
+              aria-label={open ? "Show less" : "Show the whole message"} data-tip={open ? "Show less" : "Show the whole message"}
+              onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}>
+              <Chevron up={open} />
+            </button>
+          )}
+          {/* "Not this app again", from the card that just interrupted. Undone from Settings ▸ Notifications ▸ Apps. */}
+          {canMute(src) && !urgent && (
+            <button className="agx-note-btn agx-note-icon" aria-label={`Mute ${sourceLabel(src)}`}
+              data-tip={`Mute ${sourceLabel(src)}: its notes are not kept. Undo in Settings ▸ Notifications.`}
+              onClick={(e) => { e.stopPropagation(); setMuted(src, true); }}>
+              <MuteGlyph />
+            </button>
+          )}
+          {/* Dismisses the card, not the record: it is still in the bell afterwards. */}
+          <button type="button" className="agx-note-btn agx-note-icon" aria-label="Dismiss, it stays in the bell"
+            data-tip="Dismiss, it stays in the bell" onClick={(e) => { e.stopPropagation(); onGone(); }}>
+            <CloseIcon size={ICON.xs} />
           </button>
-        )}
-        {/* Dismisses the card, not the record: it is still in the bell
-            afterwards, because closing a banner is "I have seen it", never
-            "delete what happened". */}
-        <CloseButton onClick={(e) => { e.stopPropagation(); onGone(); }} title="Dismiss — it stays in the bell"
-          className={`agx-note-btn agx-note-icon${cut || open ? "" : " ml-auto"}`} />
+        </span>
       </div>
 
       <span className="text-[12px] font-semibold leading-snug" style={{ color: "var(--text)", overflowWrap: "anywhere" }}>
@@ -177,28 +213,54 @@ function Toast({ n, onGone, onGoto }: {
         <span ref={bodyEl}
           className={open ? "agx-note-body agx-note-toast-open" : "agx-note-body agx-note-toast-body"}>{n.body}</span>
       )}
+      {count > 1 && (
+        <span className="text-[11px]" style={{ color: "var(--text3)" }}>+{count - 1} more from {sourceLabel(src) === src ? n.app : sourceLabel(src)} in the bell</span>
+      )}
 
       <span className="flex items-center gap-2 flex-wrap">
-        {/* The press the whole card already takes, said out loud: a card that is
-            a button and does not look like one is a feature nobody finds. Acting
-            takes the card down, so the next one is not left behind it. */}
-        {go && n.goto && (
-          <button className="agx-note-btn" onClick={(e) => { e.stopPropagation(); go(); }}>{GO_LABEL[n.goto.kind]}</button>
+        {/* A test hold holds nothing: Dismiss takes the card and does nothing else. */}
+        {n.test && urgent && (
+          <button className="agx-note-btn" onClick={(e) => { e.stopPropagation(); onGone(); }}>Dismiss</button>
         )}
-        {n.url && (
-          <button className="agx-note-link" title={n.url}
-            onClick={(e) => { e.stopPropagation(); void openNote(n.id); }}>
-            ↗ Open {hostOf(n.url)}
-          </button>
+        {act.kind === "gate" && gate && (
+          <>
+            <button className="agx-note-btn" style={{ background: "var(--primary)", color: "var(--on-primary, var(--bg))", borderColor: "transparent" }}
+              onClick={(e) => { e.stopPropagation(); onGone(); void answerGate(gate, "allow"); }}>Allow</button>
+            <button className="agx-note-btn" onClick={(e) => { e.stopPropagation(); onGone(); void answerGate(gate, "deny"); }}>Deny</button>
+            <span className="text-[11px] ml-auto" style={{ color: "var(--text3)" }}>Stays until you answer</span>
+          </>
         )}
-        {/* "Not this app again", from the card that just interrupted — the
-            moment somebody knows the answer. Undone from the bell's footer. */}
-        {canMute(sourceOf(n)) && n.urgency < 2 && (
-          <button className="agx-note-btn" style={{ marginTop: 6 }}
-            onClick={(e) => { e.stopPropagation(); setMuted(sourceOf(n), true); }}
-            title={`Stop collecting notifications from ${sourceLabel(sourceOf(n))}. Unmute from the bell.`}>
-            Mute {sourceLabel(sourceOf(n))}
-          </button>
+        {/* The press the whole card already takes, said out loud, with where it lands. */}
+        {go && !viewName && (
+          <button className="agx-note-btn" onClick={(e) => { e.stopPropagation(); go(); }}>{label}</button>
+        )}
+        {/* One control, two places: the button goes where the setting says, the
+            caret offers both. The wrapper stops the press here — the menu is a
+            portal, and its clicks would otherwise bubble to the card's own. */}
+        {go && n.goto && viewName && (
+          <span className="agx-note-btn inline-flex items-stretch" style={{ padding: 0 }}
+            onClick={(e) => e.stopPropagation()}>
+            <button type="button" className="px-2 py-1" onClick={go}
+              data-tip={noteSurfaceTip(n.goto.kind, benchLinks(), viewName)}
+              onMouseOver={(e) => { e.currentTarget.dataset.tip = noteSurfaceTip(n.goto!.kind, benchLinks(), viewName); }}
+              onFocus={(e) => { e.currentTarget.dataset.tip = noteSurfaceTip(n.goto!.kind, benchLinks(), viewName); }}>
+              {label}
+            </button>
+            <Menu bare align="right" title="Choose where it opens" label={<Chevron up={false} size={ICON.xs} />}>
+              {(close) => (
+                <>
+                  <MenuItem onClick={() => { close(); goTo("bench"); }}>Open on the bench</MenuItem>
+                  <MenuItem onClick={() => { close(); goTo("view"); }}>Open in {viewName}</MenuItem>
+                </>
+              )}
+            </Menu>
+          </span>
+        )}
+        {act.kind === "app" && (
+          <span className="text-[11px]" style={{ color: "var(--text3)" }}>The app, not the message</span>
+        )}
+        {act.kind === "none" && (
+          <span className="text-[11px]" style={{ color: "var(--text3)" }}>{act.label}</span>
         )}
       </span>
     </MCard>
@@ -206,18 +268,19 @@ function Toast({ n, onGone, onGoto }: {
 }
 
 /**
- * The stack itself: top-right, under the bar, over everything else.
+ * The stack itself: bottom-right of the window, over everything else.
  *
- * Under the bell on purpose — that is where these end up, so that is the
- * direction they should come from. A Portal because the workspace clips its
- * panes and a terminal in fullscreen would otherwise slice the cards off; the
- * z-index sits below the bell's own panel (10050) so opening the list never
- * fights with a banner for the same corner.
+ * Not the top-right any more: the desktop's own popups hang from that corner,
+ * and two decks in one corner is what a double popup looks like. A Portal
+ * because the workspace clips its panes and a terminal in fullscreen would
+ * otherwise slice the cards off. The layer is above the full-window sheets
+ * (Settings, the catalog) and below the bell's own panel — see LAYER.noteToasts.
+ * Newest nearest the corner.
  */
 export function NoteToasts({ onGoto }: {
-  onGoto: (g: NonNullable<SystemNote["goto"]>) => void;
+  onGoto: (g: Goto, where?: Where) => void;
 }) {
-  const [live, setLive] = useState<{ key: string; n: SystemNote }[]>([]);
+  const [live, setLive] = useState<LiveCard[]>([]);
   // A card's React key is not the note's id. Ids are unique per server session,
   // but a reconnect restarts the counter, and two cards sharing a key collapse
   // into one under AnimatePresence. The note keeps its own id untouched, because
@@ -225,7 +288,7 @@ export function NoteToasts({ onGoto }: {
   const seq = useRef(0);
 
   useEffect(() => subscribeSystemNotes((n) => {
-    setLive((prev) => [{ key: `${n.id}#${++seq.current}`, n }, ...prev].slice(0, MAX));
+    setLive((prev) => stackCard(prev, `${n.id}#${++seq.current}`, n, MAX));
   }), []);
 
   const drop = (key: string) => setLive((prev) => prev.filter((x) => x.key !== key));
@@ -237,17 +300,17 @@ export function NoteToasts({ onGoto }: {
 
   if (!live.length) return null;
   return (
-    <Portal z={10040}>
+    <Portal z={LAYER.noteToasts}>
       <div
-        className="fixed flex flex-col items-end gap-2"
-        style={{ top: TOP_BAR_H + 10, right: 12, pointerEvents: "none" }}
+        className="fixed flex flex-col-reverse items-end gap-2"
+        style={{ bottom: 12, right: 12, pointerEvents: "none" }}
       >
         <AnimatePresence initial={false}>
-          {live.map(({ key, n }) => (
+          {live.map(({ key, n, count }) => (
             <div key={key} style={{ pointerEvents: "auto" }}>
               {/* Only the card goes; `dismissNote` (which drops it from the
                   bell's list too) is deliberately never called from here. */}
-              <Toast n={n} onGone={() => drop(key)} onGoto={onGoto} />
+              <Toast n={n} count={count} onGone={() => drop(key)} onGoto={onGoto} />
             </div>
           ))}
         </AnimatePresence>

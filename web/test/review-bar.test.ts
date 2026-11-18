@@ -52,10 +52,9 @@ describe("the merge box draws people as faces", () => {
   const face = read("src/components/ReviewFace.tsx");
   const panel = read("src/components/PrPanel.tsx");
 
-  test("the letter circle is gone; a row and the bar both go through ReviewFace", () => {
+  test("the letter circle is gone; the merge box has no faces of its own now (the stepper stands alone)", () => {
     expect(box).not.toContain("login.charAt(0)");
-    expect(box).toContain("<ReviewFace login={r.person.login} state={r.person.state} badge />");
-    expect(box).toContain("<ReviewBar tally={s.tally} />");
+    expect(box).not.toContain("<ReviewFace");
     expect(face).toContain("<Avatar login={login} size={size} />");
   });
 

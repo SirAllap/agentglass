@@ -12,6 +12,7 @@ import { api } from "./api.ts";
 import type { JiraHandoffRule, JiraStepKey, JiraSteps, JiraStepsRead, ProviderTask } from "../../../shared/providers.ts";
 import { planOf, type StepTrigger } from "../../../shared/stepBlocks.ts";
 import { NO_ASSIGN } from "./stepAssign.ts";
+import { optionalAssign } from "./jiraStepPlan.ts";
 import { JIRA } from "./jiraWorkflow.ts";
 
 /** Said once, where the buttons would be, while the switch is off. */
@@ -57,13 +58,15 @@ export function stepOffers(steps: JiraSteps | null, task: Pick<ProviderTask, "st
     const rule = key === "handoff" && ctx && ctx.overrides.includes(ctx.project) ? ctx.rules[ctx.project] : undefined;
     const asksStatus = rule ? rule.askTo : plan.move?.ask === true;
     const to = !asksStatus ? (rule ? rule.to?.name : plan.move?.names[0]) ?? null : null;
+    // A review step's optional assign is asked too, though no block of the step holds it.
+    const asksAssign = rule ? false : plan.askAssign !== null || optionalAssign(key, s.blocks);
     // Already where a fixed move would take it, and nothing else for the step to do.
     const onlyMove = !plan.comment && !plan.link && (rule ? !rule.clear && !rule.askClear : plan.unassign === "none") && (rule || (plan.assign.who === "none" && !plan.askAssign && !plan.askUnassign && plan.takeOff.length === 0));
     if (to && onlyMove && task.status && same(task.status, to)) continue;
     out.push({
       key, to, byRule: !!rule,
-      label: to ? `${JIRA.nouns.move} ${to}` : `${NAME[key]}${asksStatus || (!rule && (plan.askAssign || plan.askUnassign)) || (rule && rule.askClear) || plan.comment?.ask ? "…" : ""}`,
-      asksStatus, asksClear: rule ? rule.askClear : plan.askUnassign !== null, asksAssign: rule ? false : plan.askAssign !== null, asksComment: plan.comment?.ask === true,
+      label: to ? `${JIRA.nouns.move} ${to}` : `${NAME[key]}${asksStatus || asksAssign || (!rule && plan.askUnassign) || (rule && rule.askClear) || plan.comment?.ask ? "…" : ""}`,
+      asksStatus, asksClear: rule ? rule.askClear : plan.askUnassign !== null, asksAssign, asksComment: plan.comment?.ask === true,
       comment: plan.comment?.ask ? plan.comment.text : null,
     });
   }

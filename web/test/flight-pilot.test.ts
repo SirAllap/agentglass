@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
-  effectivePilot, flightGroups, handledChip, needsYou, stationsFor, stopCopy, stripFor,
+  effectivePilot, flightGroups, handledChip, needsYou, stateOf, stationsFor, stationsOf, stopCopy, stripFor,
   type FlightItem, type PilotQuestion, type PilotSnapshot, type StripCounts,
 } from "../src/lib/flightPilot.ts";
 import type { Plan, Run } from "../src/lib/flightPlan.ts";
@@ -171,6 +171,13 @@ describe("stationsFor", () => {
     const landed = stationsFor(plan({ state: "launched" }), run(), { pilot: "autopilot", phase: "landed" });
     expect(landed.every((x) => x.state === "done")).toBe(true);
   });
+  test("a ready plan linked to a running worker is at Build; with no worker it is still at Go", () => {
+    const linked = stationsFor(plan(), run(), { pilot: "copilot", worker: "working" });
+    expect(linked.map((x) => x.state)).toEqual(["done", "done", "done", "current", "todo", "todo"]);
+    const alone = stationsFor(plan(), run(), { pilot: "copilot" });
+    expect(alone.map((x) => x.state)).toEqual(["done", "done", "waiting", "todo", "todo", "todo"]);
+    expect(stationsFor(plan(), run(), { pilot: "autopilot" })[2]).toMatchObject({ id: "go", state: "current" });
+  });
 });
 
 describe("handledChip", () => {
@@ -227,5 +234,20 @@ describe("no polling: the chip asks on an event", () => {
   test("the live socket carries the flight-plan frame into it", () => {
     const live = code(read("src/lib/useLive.ts"));
     expect(live).toContain('"flight-plan") { notifyFlightPlanChanged(); return; }');
+  });
+});
+
+describe("a plan linked to a worker", () => {
+  const s = { pilot: "copilot" as const, seat: null };
+  test("a ready plan its worker builds is not your Go: stateOf and stationsOf agree it is at Build", () => {
+    const it = item({ plan: plan({ workerState: "working", worker: "fp-orbit-search" }), facts: { worker: "working" } as FlightItem["facts"] });
+    expect(stateOf(it, { held: false, budgetReached: null, ...s }, NOW).id).toBe("building");
+    expect(stationsOf(it, s, NOW).find((x) => x.id === "go")?.state).toBe("done");
+    expect(needsYou([it], s as never).go).toBe(0);
+  });
+  test("a draft with a worker is still writing, and Go is not done", () => {
+    const it = item({ plan: plan({ state: "draft", workerState: "working" }), facts: { worker: "working" } as FlightItem["facts"] });
+    expect(stateOf(it, { held: false, budgetReached: null, ...s }, NOW).id).toBe("writing");
+    expect(stationsFor(it.plan, it.run, { pilot: "copilot", worker: "working" }).find((x) => x.id === "go")?.state).not.toBe("done");
   });
 });

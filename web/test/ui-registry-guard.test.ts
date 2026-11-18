@@ -54,14 +54,24 @@ const NOT_AGENT_DOOR: {
     "terminal.newshell": "the owner's keyboard shortcut for a new tmux window; an agent opens one through the terminal door (`tmux new`), the same command the strip's + sends",
   },
   dialogs: {
+    "settings/pages/BrowserPage.tsx": "the site picker inside Settings > Browser, opened when the person chooses to import sign-ins from their own browser: which sites' sign-ins to copy is the person's own pick of their own accounts, so no door stages it; the page's settings stay readable through the settings door",
+    "PrBulkAsk.tsx": "the per-PR results of the PR board's bulk Request review, drawn only after the person pressed Apply on their own selection: it reports writes the person made (GitHub, then the linked tasks) and offers Retry failed; an agent requests reviewers on a pull request through the PR doors, never through this popover",
+    "settings/save/SaveToastHost.tsx": "the \"Saved · Undo\" toast of a Settings save: a status pill, not a dialog; an agent sets a value through the settings door and undoes it by setting the old one back",
     "CleanupDialog.tsx": "the dry run of one merged PR's local leftovers, opened from the PR view or the merge dialog's tick. An agent reads the same plan with `agentglass-cleanup <pr>` and its run raises the approval card (cleanup.run) that only the person answers, so no door stages this dialog",
     "flightPlan/CardPopover.tsx": "The one card that asks the person over the Flying view (a question from the orchestrator, or Go): answering and Go are the person's alone; an agent reads what waits with `agentglass-ui flight-plan`, and the orchestrator's question reaches it through the engine, not through a window",
     "flightPlan/Composer.tsx": "New flight plan: a form over the Flight plan view (an agent opens the view with view.open and starts a plan with `agentglass-ui flight-plan plan new`; Go, No-go and Launch are the person's alone)",
     "plugins/PublishReview.tsx": "Publish review posts one comment on GitHub as the person; it is their own click and is refused for agents (UI_REFUSED_FOR_AGENTS), so no door stages it",
     "PromptOptions.tsx": "the ⋯ on a prompt row: engine, permission mode and prompt text for ONE send; an agent sends a prompt through the terminal door with those same arguments, so no row of it is a verb of its own",
     "tasks/TaskDialog.tsx": "the shell the Local and GitHub sources draw their short forms in (New task, Local keys, Finish issue); the work a form does is reachable through the tasks and issues verbs, so no door stages it",
+    "jira/list/MoveConfirmDialog.tsx": "the board's \"move these cards?\" confirmation, run progress and Undo, opened by a drag or the card menu: the agent's door is `agentglass-ui jira move` (POST /jira/transition, same route and same write gate as the press), and opening the dialog alone would only show a plan the agent already reads from `agentglass-ui jira moves`",
     "jira/list/JiraDock.tsx": "the card pane beside the Jira list: it shows one card the Jira door already reads and moves (agentglass-ui jira card, moves, run a step), and every control in it is the card's own existing write, so no verb stands behind it",
     "jira/list/SearchSheet.tsx": "the results sheet under the Jira list's search box: it lists what the site search returns and opens a card in the pane; an agent reads a card through agentglass-ui jira, so nothing in it is a verb",
+    "jira/JiraJump.tsx": "the Ctrl+K jump palette over the Jira view: it opens a card the Jira door already reads, or runs a JQL line the board's filter already takes, so nothing it does is a verb of its own",
+    "jira/list/JiraTile.tsx": "the +N list on a Jira tile: a transient popover of the card's other pull requests, each a link that opens the PR board; nothing in it writes or stages state, and an agent reads a card's pull requests through agentglass-ui jira, so no verb stands behind it",
+    "jira/list/JiraKeyBar.tsx": "the board's own key hints and the `?` legend over them: a read-out of keys already handled elsewhere in this view, with no state or write of its own",
+    "jira/list/JqlHelpPopover.tsx": POPOVER,
+    "jira/list/menus/JiraCardMenu.tsx": "the board card's action menu: a transient popover that lists the card's own existing moves and steps, each the same write the Jira door already runs (agentglass-ui jira card, moves, run a step), so no verb stands behind it",
+    "jira/list/JqlBuilder.tsx": "the sheet that writes a Jira search and keeps it as a view tab: a person's own saved view in the Jira list, composed from the site's fields; an agent reads and runs a search through agentglass-ui jira, so nothing in it is a verb",
     "terminal/GoList.tsx": "the Go list under the Terminal strip's project chip: a picker over windows the strip already shows. An agent reads the same windows (agent panes) and moves focus with the focus-pane door, so no row of it is a verb of its own",
     "terminal/CloseLayer.tsx": "the question a person answers before an agent window is stopped by a tab close, and the Reopen toast that follows: a person's own click on their own strip; an agent has no tab to close here",
     "terminal/PeekCard.tsx": "the card over a hovered strip tab: a tooltip with no pointer events that hides on any input; an agent reads the same facts (agent panes), so nothing in it is a verb",
@@ -95,6 +105,7 @@ const NOT_AGENT_DOOR: {
     "TasksPanel.tsx": POPOVER,
     "workspace/Workspace.tsx": POPOVER,
     "PeoplePick.tsx": "choosing a person writes an assignment or a reviewer request, and it opens only from a card or a pull request it is about: there is no state of its own to show",
+    "jira/JiraPeoplePick.tsx": "the people list under a Jira step's Give it to row: a choice inside that dialog and nothing on its own, and the press that writes is the dialog's own confirm (`agentglass-ui jira step`)",
     "RescueModal.tsx": "the end of the worktree-removal flow, a promise that flow settles: opened alone it has nothing to settle, and opening it means starting the removal",
     "jira/JiraMoveForm.tsx": "the form a Jira move opens when its screen asks for fields, opened by picking that move in the status list: the agent's door is `agentglass-ui jira move --fields` (POST /jira/door/move, the same check, route and write gate as the form), and `jira moves` lists each screen",
     "jira/JiraStepDialog.tsx": "the confirmation a Jira step asks before it writes, opened from the step button on one card: the agent's door is `agentglass-ui jira step` (POST /jira/step, same route and same write gate as the press), and opening the dialog alone would only show a plan the agent already reads from GET /jira/steps",
@@ -120,12 +131,12 @@ const railIds = (() => {
 
 const settingsSrc = read("web/src/components/SettingsModal.tsx");
 const settingsPageIds = (() => {
-  const from = settingsSrc.indexOf("const TABS: {");
+  const from = settingsSrc.indexOf("const TAB_DEFS: {");
   expect(from, "SettingsModal no longer has a TABS list; this guard is reading the wrong code").toBeGreaterThan(-1);
   // The list ends at the first line that is only `];`, which no row of it is.
   const to = settingsSrc.indexOf("\n];", from);
   expect(to).toBeGreaterThan(from);
-  return [...settingsSrc.slice(from, to).matchAll(/\{ id: "([a-z-]+)"/g)].map((x) => x[1]!);
+  return [...settingsSrc.slice(from, to).matchAll(/\{ id: "([A-Za-z-]+)"/g)].map((x) => x[1]!);
 })();
 
 const keysSrc = read("web/src/lib/keybindings.ts");

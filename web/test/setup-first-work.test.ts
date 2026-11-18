@@ -52,8 +52,8 @@ describe("the project tiles", () => {
     expect(projectLabel(long)).toContain("…");
     expect(projectTileLines({ ...project, name: long }).name).toBe(projectLabel(long));
     const src = readFileSync(new URL("../src/components/setup/FirstWorkStep.tsx", import.meta.url), "utf8");
-    expect(src).toContain("title={p.name}");
-    expect(src).toContain("title={selected.name}");
+    expect(src).toContain("data-tip={p.name}");
+    expect(src).toContain("data-tip={selected.name}");
   });
 
   test("last worked in is one short line, never a date", () => {

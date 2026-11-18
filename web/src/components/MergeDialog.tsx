@@ -17,11 +17,13 @@ import { resolveEnsure, stepChanges, type CardWrite, type Ensure, type PrAuthor 
 import { api } from "../lib/api.ts";
 import { __forgetClickupSetup } from "../lib/clickupSetup.ts";
 import { CardFrame, MergeJiraCard, MovePills } from "./MergeJiraCard.tsx";
+import { mergeTracker } from "../lib/trackerBadge.ts";
 import { jiraMergeMove, type JiraMergeCard } from "../lib/mergeJira.ts";
 import { MOD_KEY } from "../lib/format.ts";
-import { ArrowRightIcon, BranchIcon, CommitIcon, DoneIcon, InfoIcon, MergeIcon, SparkleIcon, UserIcon, WarningIcon } from "../lib/glyphIcons.tsx";
+import { BranchIcon, CommitIcon, CopyIcon, DoneIcon, InfoIcon, MergeIcon, SparkleIcon, UserIcon, WarningIcon } from "../lib/glyphIcons.tsx";
 import { CLEANUP_KIND_ROWS, type CleanupKind } from "../lib/cleanupSettings.ts";
-import { splitTail } from "../lib/cleanupPr.ts";
+import { branchSegments } from "../lib/branchBreaks.ts";
+import { BranchStrip } from "./git/BranchStrip.tsx";
 import { KIND_ICON } from "./CleanupSettings.tsx";
 import "./mergeDialog.css";
 import { ICON } from "../lib/iconSize.ts";
@@ -63,12 +65,14 @@ export type MergeSpec = {
   headRefName: string;
   headRepoOwner?: string;
   commits: MergeCommit[];
+  /** What the pull request changes, from the PR query the panel already holds: drawn under the strip. */
+  stats?: { files: number; additions: number; deletions: number };
   /** The repository deletes the head branch itself, so we must not offer to. */
   repoDeletesBranch: boolean;
   /** The card this pull request came from, when it has one — see cardRef. The
    *  dialog resolves it against ClickUp itself, because the panel should not
    *  pay a round trip before it can open. */
-  card?: { label: string; query: string; tracker?: "clickup" | "jira" } | null;
+  card?: { label: string; query: string; tracker?: "clickup" | "jira"; repo?: string } | null;
   /** Who opened the pull request, for the merge option's "Also assign: the pull request's author". */
   author?: PrAuthor | null;
   /**
@@ -174,12 +178,16 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [deleteBranch, setDeleteBranch] = useState(false);
+  /* The message is the one thing usually edited, so its fold opens with the dialog; the header still says its answer when shut. */
+  const [msgOpen, setMsgOpen] = useState(true);
   const [cleanup, setCleanup] = useState(false);
   const [card, setCard] = useState<CardState>({ kind: "none" });
   const [status, setStatus] = useState("");
   /* A Jira card: the row reads the card itself and reports what it found and what was picked. */
   const [jira, setJira] = useState<{ card: JiraMergeCard | null; pick: string }>({ card: null, pick: LEAVE_ALONE });
   const jiraCard = pending?.card?.tracker === "jira" ? pending.card : null;
+  /* What the block below writes to, from the two halves it draws. */
+  const tracker = mergeTracker(!!jiraCard, card.kind !== "none");
   useEffect(() => { setJira({ card: null, pick: LEAVE_ALONE }); }, [pending]);
   /* The card choice is a step the workspace adds: absent until it is, and
      unknown prefs read as absent so the row never flashes in and out. */
@@ -211,6 +219,7 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
 
   // The commits are what a squash quotes, and the count is what the header
   // states. Computed once per question rather than per keystroke.
+  const [listOpen, setListOpen] = useState(false);
   const real = useMemo(() => (pending?.commits ?? []).filter((c) => !c.isMerge), [pending]);
 
   useEffect(() => {
@@ -381,7 +390,6 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
 
   const subjectLen = subject.length;
   const subjectLong = subjectLen > SUBJECT_SOFT;
-  const [headStart, headEnd] = pending ? splitTail(pending.headRefName) : ["", ""];
   /* Why the confirm button is dead, said next to it: a greyed button with no sentence is a guess. */
   const blockedWhy = !pending ? "" : held ? "Read the prepared message first" : !rebase && !subject.trim() ? "Write a subject to continue" : "";
   const assignText = (e: Ensure, people: { id?: number | null; me?: boolean }[] | undefined) => assignLine(e, people).replace(/^and /, "Also ");
@@ -403,12 +411,13 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
               role="dialog" aria-modal="true" aria-label={`${how.label} #${pending.number}`}
             >
               {/* What is landing, and where: the PR's title, its number, how many
-                  commits, and head into base. The head branch gives up its middle
-                  (the full name is in the tooltip); the base is always whole. */}
+                  commits, and head into base. The branches sit under the chips, one
+                  row each at the dialog's full width, and wrap at their separators:
+                  no length of name is clipped. */}
               <div className="agx-mg-head">
                 <span className="agx-mg-tile" aria-hidden><MergeIcon size={ICON.lg} /></span>
                 <div className="agx-mg-ttl">
-                  <b>{how.label}</b>
+                  <b>{how.label} #{pending.number}?</b>
                   <p className="agx-mg-pr" data-tip={pending.title}>{pending.title}</p>
                   <div className="agx-mg-chips">
                     <span className="agx-mg-chip">#{pending.number}</span>
@@ -416,13 +425,18 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                         the Commits tab shows and the number that is landing. The
                         filtered list is only about what a squash quotes. */}
                     <span className="agx-mg-chip tabular-nums"><CommitIcon size={ICON.xs} />&nbsp;{pending.commits.length} commit{pending.commits.length === 1 ? "" : "s"}</span>
-                    <span className="agx-mg-chip" data-ref="" data-head="" data-tip={pending.headRefName} tabIndex={0} aria-label={`from ${pending.headRefName}`}>
-                      <span>{headStart}</span>{headEnd && <span>{headEnd}</span>}
-                    </span>
-                    <ArrowRightIcon size={ICON.sm} />
-                    <span className="agx-mg-chip" data-ref="" data-base="" aria-label={`into ${pending.baseRefName}`}>{pending.baseRefName}</span>
+                  </div>
+                  <div className="agx-mg-refs">
+                    <BranchRow label="From" name={pending.headRefName} />
+                    <BranchRow label="Into" name={pending.baseRefName} />
                   </div>
                 </div>
+              </div>
+
+              <div className="mx-5 mt-3" data-merge-strip="">
+                <BranchStrip tone="merge" base={3} become={method === "squash" ? Math.max(1, real.length) : undefined}
+                  landing={method === "squash" ? undefined : `${pending.commits.length} land`} branch={pending.headRefName} into={pending.baseRefName}
+                  files={pending.stats?.files} additions={pending.stats?.additions} deletions={pending.stats?.deletions} />
               </div>
 
               {pending.prefill && (
@@ -480,7 +494,13 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                     </span>
                   </div>
                 ) : (
-                  <>
+                  <div className="agx-mg-fold" data-open={msgOpen ? "" : undefined}>
+                    <button type="button" className="agx-mg-foldhd" aria-expanded={msgOpen} aria-controls={`${fid}-msg`} onClick={() => setMsgOpen((o) => !o)}>
+                      <span className="agx-mg-chev" aria-hidden>›</span>
+                      <b>Commit message</b>
+                      <span className="agx-mg-count" data-warn={subjectLong ? "" : undefined}>{msgOpen ? `lands on ${pending.baseRefName} for ever` : `${subjectLen}/${SUBJECT_SOFT}`}</span>
+                    </button>
+                    <div id={`${fid}-msg`} className="agx-mg-foldbd" hidden={!msgOpen}>
                     <div className="agx-mg-sec">
                       <label className="agx-mg-cap" htmlFor={`${fid}-subject`}>
                         <span>Commit subject</span>
@@ -524,7 +544,23 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                         <button type="button" className="agx-mg-add" onClick={() => setDescOpen(true)}>+ Add an extended description</button>
                       )}
                     </div>
-                  </>
+                    </div>
+                  </div>
+                )}
+
+                {!rebase && real.length > 1 && (
+                  <div className="agx-mg-fold" data-open={listOpen ? "" : undefined} data-commits-fold="">
+                    <button type="button" className="agx-mg-foldhd" aria-expanded={listOpen} onClick={() => setListOpen((o) => !o)}>
+                      <span className="agx-mg-chev" aria-hidden>›</span>
+                      <b>{real.length} commits</b>
+                      <span className="agx-mg-count">{method === "squash" ? "become 1" : "land as they are"}</span>
+                    </button>
+                    {listOpen && (
+                      <ul className="m-0 px-3.5 pb-2.5 list-none flex flex-col gap-0.5 text-[11.5px]" style={{ color: "var(--text2)" }}>
+                        {real.map((c, i) => <li key={i} className="truncate" style={{ fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>{(c.message ?? "").split("\n")[0]}</li>)}
+                      </ul>
+                    )}
+                  </div>
                 )}
 
                 {/* After it lands: the branch, which has been deleted silently on
@@ -540,11 +576,11 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                       <div className="agx-mg-rt">
                         {pending.repoDeletesBranch ? (
                           <span className="text-[11px]">
-                            <Ref>{pending.headRefName}</Ref> is deleted by the repository itself once this merges.
+                            <Ref><Wrapped name={pending.headRefName} /></Ref> is deleted by the repository itself once this merges.
                           </span>
                         ) : (
                           <Checkbox checked={deleteBranch} onChange={setDeleteBranch}>
-                            <span>Delete <Ref>{pending.headRefName}</Ref> after merging</span>
+                            <span>Delete <Ref><Wrapped name={pending.headRefName} /></Ref> after merging</span>
                           </Checkbox>
                         )}
                       </div>
@@ -593,17 +629,17 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                     <div className="agx-mg-cap">Tracker card</div>
                     {jiraCard && <MergeJiraCard card={jiraCard} pick={jira.pick} onPick={(c, pick) => setJira({ card: c, pick })} />}
                     {card.kind === "loading" && (
-                      <CardFrame label={pending.card?.label ?? ""}>
+                      <CardFrame label={pending.card?.label ?? ""} tracker={tracker}>
                         <Spinner label={`Looking up ${pending.card?.label} on ClickUp…`} className="" />
                       </CardFrame>
                     )}
                     {card.kind === "failed" && (
-                      <CardFrame label={pending.card?.label ?? ""}>
+                      <CardFrame label={pending.card?.label ?? ""} tracker={tracker}>
                         <div className="agx-mg-quiet">{card.why}. The merge is unaffected.</div>
                       </CardFrame>
                     )}
                     {(card.kind === "ready" || card.kind === "readonly") && (
-                      <CardFrame label={card.card.label} title={card.card.title}>
+                      <CardFrame label={card.card.label} title={card.card.title} tracker={tracker}>
                         <div className="agx-mg-trk-move">
                           <MovePills from={card.card.status} fromColor={statusColor(card.card.statuses, card.card.status) ?? card.card.statusColor}
                             to={movesCard(card.card.status, status) ? status : undefined} toColor={statusColor(card.card.statuses, status)} />
@@ -628,15 +664,9 @@ export function MergeDialog({ pending }: { pending: Pending | null }) {
                                 onChange={setStatus}
                                 align="left"
                                 title="Where this card goes when the merge lands"
-                                className="text-[11px]"
-                                style={{
-                                  // The board's own colour for wherever this is
-                                  // about to go: the thing that makes a status
-                                  // recognisable before it is read.
-                                  borderColor: movesCard(card.card.status, status)
-                                    ? (statusColor(card.card.statuses, status) ?? "var(--border)")
-                                    : "var(--border)",
-                                }}
+                                /* Select's own trigger, as on the PR panel's Status: the pill in its board colour and the caret
+                                   beside it, nothing round them. A size class here replaced Select's classes and left a naked
+                                   button, and a border tinted with the target status drew a second box round the pill. */
                                 options={[
                                   { value: LEAVE_ALONE, label: "Leave it there" },
                                   ...statusOptions(card.card.statuses, card.card.status).map((s) => ({
@@ -709,6 +739,31 @@ function Ref({ children }: { children: React.ReactNode }) {
   return (
     <code className="px-1 py-px rounded text-[10.5px]"
       style={{ overflowWrap: "anywhere", background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text2)" }}>{children}</code>
+  );
+}
+
+/** A branch name broken only after its separators (see branchSegments). */
+function Wrapped({ name }: { name: string }) {
+  return <>{branchSegments(name).map((seg, i) => <span key={i}>{i > 0 && <wbr />}{seg}</span>)}</>;
+}
+
+/** "From" / "Into" and the whole branch name, with a copy button. */
+function BranchRow({ label, name }: { label: string; name: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const t = window.setTimeout(() => setCopied(false), 1500);
+    return () => window.clearTimeout(t);
+  }, [copied]);
+  return (
+    <div className="agx-mg-ref">
+      <span className="agx-mg-reflbl">{label}</span>
+      <code className="agx-mg-refname" data-branch="" aria-label={`${label.toLowerCase()} ${name}`}><Wrapped name={name} /></code>
+      <button type="button" className="agx-mg-refcopy" data-tip={copied ? "Copied" : "Copy branch name"} aria-label={`Copy ${name}`}
+        onClick={() => { void navigator.clipboard?.writeText(name).catch(() => {}); setCopied(true); }}>
+        {copied ? <DoneIcon size={ICON.xs} /> : <CopyIcon size={ICON.xs} />}
+      </button>
+    </div>
   );
 }
 

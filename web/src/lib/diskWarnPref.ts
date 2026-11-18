@@ -8,7 +8,7 @@
 //
 // In localStorage like the window's other preferences: it decides what this
 // window draws, and a round trip would put a fetch in front of a badge.
-import type { DiskCleanMount } from "../../../shared/types.ts";
+import type { DiskCleanMount, DiskSpace } from "../../../shared/types.ts";
 
 const KEY = "agentglass.disk.warnPct";
 
@@ -36,4 +36,10 @@ export const freePct = (m: Pick<DiskCleanMount, "size" | "free">): number | null
 /** The mounts with less than `pct` percent free, the ones the badge names. Off is 0, and nothing is under 0 %. */
 export function lowDiskMounts<M extends Pick<DiskCleanMount, "size" | "free">>(mounts: readonly M[], pct: number): M[] {
   return mounts.filter((m) => { const f = freePct(m); return f !== null && f < pct; });
+}
+
+/** The space the "N GB free" badge shows: the peek's own reading (fresh, no scan needed), else the one a scan carried. Null when ok or unknown. */
+export function badgeSpace(peek: DiskSpace | null | undefined, scanned: DiskSpace | null | undefined): DiskSpace | null {
+  const s = peek ?? scanned ?? null;
+  return s && s.state !== "ok" ? s : null;
 }

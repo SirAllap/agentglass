@@ -19,7 +19,7 @@ export interface JevInboxPreviewProps {
 export function JevInboxPreview(p: JevInboxPreviewProps) {
   if (!jevReady(p.hasKey, p.consent)) {
     return (
-      <PreviewBox label="Jev Inbox">
+      <PreviewBox label="Jev inbox">
         <div data-preview="jev-inbox" data-state="not-ready" className="rounded-lg p-4 text-[12px]" style={{ background: "var(--bg)", color: "var(--text3)" }}>
           <b style={{ color: "var(--text)" }}>Nothing is scored yet</b>
           <p className="m-0 mt-1">{p.hasKey ? "Tick that the notification title leaves this machine." : "Add your own key, then tick that the notification title leaves this machine."} Until both are done, Jev sees nothing and sends nothing.</p>
@@ -34,7 +34,7 @@ export function JevInboxPreview(p: JevInboxPreviewProps) {
   const gone = removedCounts(second.title);
   const repo = second.repo.split("/")[1];
   return (
-    <PreviewBox label="Jev Inbox">
+    <PreviewBox label="Jev inbox">
       <div data-preview="jev-inbox" data-mode={p.mode} className="rounded-lg overflow-hidden min-w-0" style={{ background: "var(--bg)" }}>
         {p.mode === "off" && <div className="px-3 py-2 text-[11px]" style={{ color: "var(--text3)" }}>Jev is off: the Inbox is exactly as GitHub sent it.</div>}
         {live && <div className="px-3 py-1.5 text-[11px]" style={{ color: "var(--text3)" }}>Sort <b style={{ color: "var(--text)" }}>Needs you first</b></div>}

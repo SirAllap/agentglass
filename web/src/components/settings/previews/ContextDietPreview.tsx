@@ -26,7 +26,7 @@ export function ContextDietPreview({ cap, countSubagents, windowDays }: ContextD
           {stat(`${CAP_SAVES[cap]}%`, "--info-ink", `is what a ${cap} cap saves`)}
         </div>
         <div className="flex items-end gap-1" style={{ height: 72 }}>
-          {bars.map((b, i) => <i key={i} data-bar={b.over ? "over" : ""} title={`turn ${i + 1}`} className="flex-1 rounded-sm" style={{ height: `${b.h}%`, background: b.over ? "var(--primary)" : "var(--surface-inset)" }} />)}
+          {bars.map((b, i) => <i key={i} data-bar={b.over ? "over" : ""} data-tip={`turn ${i + 1}`} className="flex-1 rounded-sm" style={{ height: `${b.h}%`, background: b.over ? "var(--primary)" : "var(--surface-inset)" }} />)}
         </div>
         <div className="text-[11px]" style={{ color: "var(--text3)" }}>{countSubagents ? "Subagent turns are counted" : "Subagent turns are left out"} · window {windowDays} days · cap {cap} per turn</div>
       </div>

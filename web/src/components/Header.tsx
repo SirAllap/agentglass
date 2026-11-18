@@ -5,14 +5,14 @@ import { GearIcon } from "./workspace/icons.tsx";
 import { IS_DEMO, reauthPrompt } from "../lib/api.ts";
 import { subscribeUpdate, updateState, updateAvailable } from "../lib/updateStore.ts";
 import { MOD_KEY } from "../lib/format.ts";
-import { IS_MAC_DESKTOP, powerReadout, powerStatus, setPowerMode, type PowerMode, type PowerStatus } from "../lib/desktop.ts";
-import { usePoll } from "../lib/usePoll.ts";
+import { IS_MAC_DESKTOP, onPowerChanged, powerKeepAwakeLine, powerReadout, powerStatus, releasePower, setPowerMode, type PowerMode, type PowerStatus } from "../lib/desktop.ts";
 import { Logo } from "./Logo.tsx";
 import { Select } from "./Select.tsx";
 import { WorkspaceIcon } from "./workspace/icons.tsx";
 import { ICON } from "../lib/iconSize.ts";
 import { CrossIcon, HomeIcon, SparkleIcon } from "../lib/glyphIcons.tsx";
 import { Button, EDGE, LINE } from "./workspace/Chrome.tsx";
+import { windowBeyondHint } from "../lib/windowHint";
 
 // Sessions whose model never resolved carry the "unknown" provider value; it
 // stays lowercase everywhere it is compared (server sentinel, providerOf), but
@@ -64,13 +64,17 @@ function PowerModeButton() {
   useEffect(() => {
     let alive = true;
     void powerStatus().then((s) => { if (alive) setStatus(s); });
-    return () => { alive = false; };
+    // Pushed by electron/power.js on every change; it used to be asked every
+    // 5s for the life of the app (timers audit 2026-11-13).
+    const off = onPowerChanged((s) => { if (alive) setStatus(s); });
+    return () => { alive = false; off(); };
   }, []);
-  usePoll(true, () => { void powerStatus().then(setStatus); }, 5000);
   if (!status) return null;
   const { tone, title } = powerReadout(status);
   const color = tone === "warn" ? "var(--warning)" : tone === "held" ? "var(--success)" : "var(--text3)";
+  const line = powerKeepAwakeLine(status);
   return (
+    <>
     <button
       onClick={() => { void setPowerMode(POWER_NEXT[status.mode]).then((s) => s && setStatus(s)); }}
       title={title}
@@ -84,6 +88,19 @@ function PowerModeButton() {
       <PowerIcon />
       <span className="hidden sm:inline">{POWER_LABEL[status.mode]}</span>
     </button>
+    {line && (
+      <span className="hidden lg:flex items-center gap-2 text-[11px]" style={{ color: "var(--text3)" }}>
+        {line}
+        <button
+          onClick={() => { void releasePower().then((s) => s && setStatus(s)); }}
+          className="h-6 px-2 rounded-md font-semibold"
+          style={{ color: "var(--text2)", border: EDGE }}
+        >
+          Let it sleep
+        </button>
+      </span>
+    )}
+    </>
   );
 }
 
@@ -266,7 +283,7 @@ export function Header({
           const beyond = !!retentionDays && w.ms > retentionDays * 86_400_000;
           return (
             <button key={w.label} onClick={() => onWindow(w.ms)} className="px-2 py-1 rounded-md text-[11px] transition-all"
-              title={beyond ? `Events are kept for ${retentionDays} days, so this window is answered from the last ${retentionDays}d. Statistics (s) → “spend per day” goes further back.` : undefined}
+              title={windowBeyondHint(w, retentionDays)}
               style={windowMs === w.ms ? { background: "color-mix(in srgb, var(--primary) 22%, transparent)", color: "var(--primary-hover)" } : { color: "var(--text4)" }}>
               {w.label}
               {beyond && <sup className="ml-px text-[8px] opacity-70" aria-hidden>*</sup>}

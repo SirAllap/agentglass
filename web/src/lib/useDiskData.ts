@@ -11,11 +11,13 @@
  * on every event would flicker through a whole prune.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { DockerDisk } from "../../../shared/types.ts";
+import type { DockerDisk, DockerRepoLeftovers } from "../../../shared/types.ts";
 import { api } from "./api.ts";
 
 export interface DiskState {
   d: DockerDisk | null;
+  /** Per repository: the orphan sweep and the live HEADs, read right after each measure (never on a timer). */
+  left?: DockerRepoLeftovers[];
   /** Why the last measure failed. Cleared by the next one that works. */
   error: string | null;
   measuring: boolean;
@@ -26,6 +28,7 @@ export interface DiskState {
 /** `enabled`: a view that needs the figures is open. `tick`: the count of image and volume changes. */
 export function useDiskData(enabled: boolean, tick: number): DiskState {
   const [d, setD] = useState<DockerDisk | null>(null);
+  const [left, setLeft] = useState<DockerRepoLeftovers[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [measuring, setMeasuring] = useState(false);
   const inflight = useRef<Promise<void> | null>(null);
@@ -34,7 +37,20 @@ export function useDiskData(enabled: boolean, tick: number): DiskState {
   const once = useCallback(async (force: boolean) => {
     try {
       const r = await api.dockerDisk(force);
-      if (r.error) setError(r.error); else { setD(r); setError(null); }
+      if (r.error) setError(r.error);
+      else {
+        setD(r); setError(null);
+        // after the walk: the server answers the sweep from that same cached walk
+        try {
+          const repos = (await api.dockerLeftovers(force)).repos;
+          setLeft(repos);
+          // the repository's own switch (off by default; turning it on waited for the person): the sweep runs when the view loads
+          for (const r of repos) {
+            const imgs = r.orphans.filter((o) => o.kind === "image").map((o) => o.target), vols = r.orphans.filter((o) => o.kind === "volume").map((o) => o.target);
+            if (r.autoRemove && (imgs.length || vols.length)) await api.dockerRemoveOrphans(r.repo, imgs, vols);
+          }
+        } catch { setLeft([]); }
+      }
     } catch (e) { setError(String(e)); }
   }, []);
 
@@ -62,5 +78,5 @@ export function useDiskData(enabled: boolean, tick: number): DiskState {
     measuredAt.current = tick;
   }, [enabled, tick, measure]);
 
-  return { d, error, measuring, measure };
+  return { d, left, error, measuring, measure };
 }

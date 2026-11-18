@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { previewSrc } from "../../../../shared/pluginSafe.ts";
 import { LINE } from "../workspace/Chrome.tsx";
 
 /**
@@ -12,7 +13,8 @@ import { LINE } from "../workspace/Chrome.tsx";
  */
 export function PluginPreview({ src, name, tint, children }: { src: string | undefined; name: string; tint: string; children: ReactNode }) {
   const [broken, setBroken] = useState<string | null>(null);
-  const shown = src && broken !== src;
+  const safe = previewSrc(src);
+  const shown = safe && broken !== safe;
   return (
     <div className="shrink-0 overflow-hidden grid place-items-center" data-preview={shown ? "image" : "tile"}
       style={{
@@ -21,8 +23,8 @@ export function PluginPreview({ src, name, tint, children }: { src: string | und
       }}>
       {shown
         // no-referrer: the listing's host learns a picture was read, not from which app.
-        ? <img src={src} alt={`${name} preview`} loading="lazy" referrerPolicy="no-referrer" draggable={false}
-            onError={() => setBroken(src)} className="block w-full h-full" style={{ objectFit: "cover", objectPosition: "top" }} />
+        ? <img src={safe} alt={`${name} preview`} loading="lazy" referrerPolicy="no-referrer" draggable={false}
+            onError={() => setBroken(safe)} className="block w-full h-full" style={{ objectFit: "cover", objectPosition: "top" }} />
         : children}
     </div>
   );
