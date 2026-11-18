@@ -36,8 +36,19 @@ DESKTOP="$HOME/.local/share/applications"
 # this script must not mean packaging on top of somebody else's half-written
 # package — or worse, reading a stamp out of it.
 DIST="${AGENTGLASS_DIST_DIR:-$HERE/dist-app}"
+
+# A rebuild must not starve the window it is about to replace: a running app
+# froze while RAM was at 91% and swap at 9.4G, as an install build started.
+# Children inherit both settings, so each heavy command is wrapped once at the
+# top. Only where the tools exist, and never around the restart at the end.
+low_priority() {
+  if command -v nice >/dev/null 2>&1; then set -- nice -n 10 "$@"; fi
+  if command -v ionice >/dev/null 2>&1; then set -- ionice -c3 "$@"; fi
+  "$@"
+}
+
 echo "==> packaging (fresh web build + sidecar, unpacked) into $DIST"
-( cd "$HERE" && node build.mjs && bunx electron-builder --dir -c.directories.output="$DIST" )
+( cd "$HERE" && low_priority node build.mjs && low_priority bunx electron-builder --dir -c.directories.output="$DIST" )
 
 SRC="$DIST/linux-unpacked"
 [ -x "$SRC/agentglass" ] || { echo "electron-builder did not produce $SRC/agentglass" >&2; exit 1; }
@@ -246,6 +257,20 @@ if [ -f "$APP/resources/bin/agentglass-ui" ]; then
     ln -sf "$APP/resources/bin/agentglass-flightplan-mcp" "$BIN/agentglass-flightplan-mcp"
   fi
 fi
+# The read-only GitHub door for walled workers: the CLI loads agentglass-agent, the MCP form loads the CLI.
+if [ -f "$APP/resources/bin/agentglass-gh" ] && [ -f "$APP/resources/bin/agentglass-agent" ]; then
+  chmod +x "$APP/resources/bin/agentglass-gh" 2>/dev/null || true
+  ln -sf "$APP/resources/bin/agentglass-gh" "$BIN/agentglass-gh"
+  if [ -f "$APP/resources/bin/agentglass-gh-mcp" ]; then
+    chmod +x "$APP/resources/bin/agentglass-gh-mcp" 2>/dev/null || true
+    ln -sf "$APP/resources/bin/agentglass-gh-mcp" "$BIN/agentglass-gh-mcp"
+  fi
+  # The commit door for builder workers: the MCP form loads agentglass-agent too.
+  if [ -f "$APP/resources/bin/agentglass-commit-mcp" ]; then
+    chmod +x "$APP/resources/bin/agentglass-commit-mcp" 2>/dev/null || true
+    ln -sf "$APP/resources/bin/agentglass-commit-mcp" "$BIN/agentglass-commit-mcp"
+  fi
+fi
 # The named-agent CLI: a script's launcher and liveness for unattended agents
 # on the engine. Same home as the browser CLI, for the same reason.
 if [ -f "$APP/resources/bin/agentglass-agent" ]; then
@@ -350,6 +375,12 @@ command -v update-desktop-database >/dev/null && update-desktop-database "$DESKT
 # desktop that already had a default for the scheme pointing wherever it
 # pointed before.
 command -v xdg-mime >/dev/null && xdg-mime default agentglass.desktop x-scheme-handler/agentglass 2>/dev/null || true
+
+# The memory reserve for the app's own scope, as a user drop-in so it holds
+# from the scope's first moment and after a reboot (see electron/memlow.js).
+# The reload is what makes systemd see a new drop-in; best effort, no root.
+node "$HERE/memlow.js" --install-dropin || true
+command -v systemctl >/dev/null && systemctl --user daemon-reload 2>/dev/null || true
 
 echo "installed:"
 echo "  app      $APP/agentglass"
