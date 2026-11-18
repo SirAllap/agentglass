@@ -304,6 +304,14 @@ function makeInteractBurst(S: string, family: string[], bigSession: string, idx:
   };
 }
 
+// Agents mode (AGX_LOAD_AGENTS=N) is its own flow with its own fixtures: see
+// loadagents.ts. It lives beside this file so the knobs, the isolation helpers
+// and `make loadtest` stay one tool, and it never returns.
+// `--compare a.json b.json` reads two result files and starts nothing, so it comes first.
+const compareAt = process.argv.indexOf("--compare");
+if (compareAt >= 0) (await import("./loadagents.ts")).compareRuns(process.argv[compareAt + 1], process.argv[compareAt + 2]);
+if (process.env.AGX_LOAD_AGENTS) await (await import("./loadagents.ts")).runAgents();
+
 // ============================================================================
 // LOAD CHILD. Re-invoked as `AGX_LOAD_WORKER=<serverUrl> bun loadtest.ts`, it is
 // nothing but the fan-out: CLIENTS clients bursting until its deadline, so the

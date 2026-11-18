@@ -89,6 +89,10 @@ And it mirrors **your machine's own notifications**: agentglass runs fullscreen,
 
 Two switches in **Settings ▸ Notifications**, because there are two sources. **From your desktop** is off by default (it reads every notification you receive) with a second choice of how much to show — who it was from, or the whole message — and a *quiet* mode that keeps collecting without interrupting. **From agentglass** is on, and turning it off silences branches falling behind while still letting anything *held waiting on you* speak. Neither switch stops the bell collecting: silence is about interruption, never about the record.
 
+**Crew** on Starboard: click a card to see what the board knows about that session (state, what it is doing, project, branch, model, tools, errors and cost). Right-click the card and the same view adds **Remind me to check**, which writes one task to Taskwarrior. It does not touch the session, and it says so if Taskwarrior is not there.
+
+**Phone alerts for what you watch.** A pull request or a card you watch can buzz the paired phone. A card alert fires for a comment, a mention, or a move made by someone else; a move you made yourself never buzzes. It stays quiet while the app is open on the phone, and while the computer is on Do Not Disturb. If the computer cannot say whether it is on, the phone alerts as usual.
+
 On macOS the desktop app raises an alert that leads somewhere from its main process, so it can carry action buttons (the same in-app destinations a click goes to, never a deed like re-running a check); Linux and Windows keep the plain click. The macOS buttons are **not yet verified on a real Mac**.
 
 ### 🔬 File changes — a syntax-highlighted diff & review workspace &nbsp;`d`
@@ -499,7 +503,7 @@ Most agent dashboards show a live event feed and forget everything on refresh. a
 | 🧵 **Session lifecycle** | Timeline of every session: start→end, duration, tokens, cost. |
 | 📈 **Plan usage, more than one plan** | One chip per provider in the title bar — Claude, Codex and **OpenCode Go** — each showing the window closest to its limit with the window named (`5h`, `wk`, `mo`), and a dash rather than a number when a provider cannot report. |
 | 🔌 **OpenCode Go's console** | OpenCode publishes no usage endpoint, so its 5-hour, weekly and monthly numbers are read from the signed-in console page through the app's own browser profile (ten-minute cache, refresh on demand). Signed out or a changed page says so instead of drawing 0%. |
-| ⌨ **Command palette + shortcuts** | `Ctrl-K` to filter, switch theme, change window, export; `d` diffs · `g` git · `p` pull requests · `i` tasks · `o` Docker · `t` terminal · `e` files · `l` Lantern · `k` skills · `s` stats · `/` search; click any event for full details; click an agent to filter to it. |
+| ⌨ **Command palette + shortcuts** | `Ctrl-K` to filter, switch theme, change window, export; `d` diffs · `g` git · `p` pull requests · `i` tasks · `o` Docker · `t` terminal · `e` files · `l` Lantern · `k` skills; click any event for full details; click an agent to filter to it. |
 | 🎨 **22 themes** | 11 dark palettes (Midnight Purple, Forest, Ember, Nord, …), each with a light twin — instant switch, remembered. |
 | 🔔 **Alerts** | A gate waiting on you reaches whatever is attached: the notch in the cockpit, a **native OS notification** on the desktop, and a paired phone over its own live socket — plus webhook (Slack/Discord), `notify-send` on a headless box and an optional in-app chime. |
 | 💰 **Budgets** | *"No more than $40 a month on this repository."* Per-project and per-model, warned at 80% rather than only when you cross it, counted from the daily rollup as well as live events so a monthly budget really means a month. Settings ▸ Preferences. |
