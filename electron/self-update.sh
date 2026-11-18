@@ -30,6 +30,15 @@ exec >>"$LOG" 2>&1
 
 say() { printf '\n==> %s\n' "$*"; }
 
+# install-local.sh's low_priority, duplicated here: the same 5 lines, meant to
+# stay identical. The web and electron installs below are minutes of CPU and
+# disk on a machine whose agents are still running.
+low_priority() {
+  if command -v nice >/dev/null 2>&1; then set -- nice -n 10 "$@"; fi
+  if command -v ionice >/dev/null 2>&1; then set -- ionice -c3 "$@"; fi
+  "$@"
+}
+
 # Written on every exit path, including the ones nobody planned for: an update
 # that vanishes without a word is worse than one that reports failure.
 finish() {
@@ -127,10 +136,12 @@ git -C "$SRC" checkout --quiet --detach "refs/tags/$TAG" || fail "no such tag: $
 say "now at $(git -C "$SRC" rev-parse --short HEAD) ($TAG)"
 
 say "installing dependencies"
-( cd "$SRC/web" && bun install --frozen-lockfile --silent ) || fail "web dependencies failed"
-( cd "$SRC/electron" && bun install --frozen-lockfile --silent ) || fail "electron dependencies failed"
+( cd "$SRC/web" && low_priority bun install --frozen-lockfile --silent ) || fail "web dependencies failed"
+( cd "$SRC/electron" && low_priority bun install --frozen-lockfile --silent ) || fail "electron dependencies failed"
 
 say "building and installing (this stops the running app)"
+# The build itself is install-local.sh, which wraps its own heavy children; this
+# call carries the restart at the end, which must stay at normal priority.
 # The old wording here promised "the installed app is untouched", which was only
 # true for a failure before the copy — install-local.sh replaces the files
 # halfway through. It now reports which side of that line it stopped on, and

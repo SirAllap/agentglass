@@ -26,10 +26,24 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const stallProbe = require("./stallProbe.js");
+const { protectMemory } = require("./memlow.js");
+const { decideRespawn } = require("./respawn.js");
+
+/** Which IPC channel was last handled — the main-process stall line says what
+ *  the thread was doing when it fell behind. Wrapped here, once, before any
+ *  `ipcMain.on`/`handle` below registers a channel, so every one of them is
+ *  covered without a name list to keep in sync. */
+let lastIpcChannel = "-";
+const _ipcOn = ipcMain.on.bind(ipcMain);
+ipcMain.on = (channel, listener) => _ipcOn(channel, (...args) => { lastIpcChannel = channel; return listener(...args); });
+const _ipcHandle = ipcMain.handle.bind(ipcMain);
+ipcMain.handle = (channel, listener) => _ipcHandle(channel, (...args) => { lastIpcChannel = channel; return listener(...args); });
 // The `<webview>` boundary, in its own file so it can be read and tested on its
 // own. Shipped inside the asar with this one — see build.files in package.json.
 const {
-  BROWSER_PARTITION, isBrowserPartition, ephemeralPartition, safeGuestUrl, applyGuestGuard, mayAttachOnMainWindow, permissionVerdict, holderAfter, createPermissionDesk, pendingPermissionNote, permissionPrompt, uniqueSavePath,
+  BROWSER_PARTITION, isBrowserPartition, ephemeralPartition, safeGuestUrl, applyGuestGuard, mayAttachOnMainWindow, permissionVerdict, holderAfter, createPermissionDesk, pendingPermissionNote, permissionPrompt, uniqueSavePath, downloadTarget,
+  armingFresh,
 } = require("./guest-guard.js");
 const { startEgressProxy, literalRefusal, EGRESS_ENV } = require("./egress-guard.js");
 const { sendInput, isAgentInput } = require("./trusted-input.js");
@@ -37,7 +51,13 @@ const { sendInput, isAgentInput } = require("./trusted-input.js");
    for the decision and which origins count. */
 const { IDENTIFY_HEADER, shouldIdentify, createOwnerBook } = require("./identify-header.js");
 const { createScrollbarBook } = require("./guest-scrollbar.js");
+const { createGuideObserver } = require("./guide-observer.js");
 const showLog = require("./show-log.js");
+const { createLanePaint, watchLaneGuest } = require("./lane-paint.js");
+const { createLaneWatch } = require("./lane-watch.js");
+const { vaultDirFor, createVaultLanes, pullRefusal, toLaneCookie, toLaneStorage, storageScript, appendPullLog, settingsConfirmDialogs, useInBrowserDialog, putLaneCookies, visitIndexFrom, visitSiteCount, visitGate, visitDeadline, containerPartition, cookieKeyOf, wipeContainerCookies, sweepSiteCookies, cookieHash, vaultLeftCount } = require("./vault-pull.js");
+/* Main's own book of lanes it signed in from the vault (decision F2). */
+const vaultLanes = createVaultLanes();
 
 /**
  * The browser's egress guard, once it is listening — see egress-guard.js for
@@ -68,11 +88,114 @@ const identifyHeaderArmed = new WeakSet();
 
 /** Where each tab's armed download is meant to land, set by the `download`
  *  verb and consumed by the first download that tab starts. Module scope
- *  because the window-open handler reads it too. @type {Map<Electron.WebContents, string>} */
+ *  because the window-open handler reads it too. @type {Map<Electron.WebContents, { dir: string, at: number }>} */
 const guestDownloadDir = new Map();
 
 /** Guests that belong to a lane, an agent's own tab. @type {WeakSet<Electron.WebContents>} */
 const laneGuests = new WeakSet();
+
+/** @type {Map<Electron.WebContents, Array<{at: number, method: string, params: unknown}>>} */
+const guestCdpEvents = new Map();
+const CDP_EVENT_CAP = 500;
+
+/*
+ * WHERE A DOWNLOAD IS MEANT TO LAND, per guest.
+ *
+ * `download` arms `Browser.setDownloadBehavior` with a directory, clicks, and
+ * then waits for `Page.downloadWillBegin` and `Page.downloadProgress` to come
+ * back through the event buffer. Measured through the CLI: the click happens
+ * — the test server logged three requests for the file — and neither event
+ * ever arrives, so the verb waits out its whole timeout and nothing lands.
+ *
+ * The reason is that Electron takes a guest's download itself, on the
+ * session's `will-download`, before the protocol is involved at all. Nothing
+ * in this app listened for it (grep: zero handlers), so the item was left to
+ * the default behaviour and CDP had nothing to report.
+ *
+ * So the path is remembered here when the verb asks for it, the session
+ * handler below saves the file where it was asked to go, and it pushes the
+ * two events the waiting loop is already listening for. Same shape as the
+ * printToPDF branch further down and for the same reason: the answer stops
+ * coming from the protocol without anything downstream needing to learn that.
+ */
+/** Save paths chosen for downloads still in flight. @type {Set<string>} */
+const reservedSavePaths = new Set();
+/** lstat, not exists: a dangling symlink is a name that is taken. @param {string} p */
+const pathTaken = (p) => { try { fs.lstatSync(p); return true; } catch { return false; } };
+/** Sessions already wired, so a second download does not stack handlers. */
+const downloadWired = new WeakSet();
+
+/** The arming for a tab, or undefined. A stale one is deleted here, so it cannot
+ *  keep turning every later `target=_blank` popup into a denied download.
+ * @param {Electron.WebContents} wc */
+const armedEntry = (wc) => {
+  const e = guestDownloadDir.get(wc);
+  if (e && !armingFresh(e)) { guestDownloadDir.delete(wc); return undefined; }
+  return e;
+};
+
+/** @param {Electron.WebContents} guest */
+const wireDownloads = (guest) => {
+  const ses = guest.session;
+  if (downloadWired.has(ses)) return;
+  downloadWired.add(ses);
+  ses.on("will-download", (_ev, item, wc) => {
+    // Keyed by the tab the download came from and by nothing else: a fallback
+    // to the tab that wired the session let a download from ANY other tab of
+    // the profile land in an agent's directory.
+    // An agent's tab never falls to Electron's default: that default is a
+    // native Save dialog, which opened on the person's screen over their
+    // terminal when an agent clicked a blob: export without the `download`
+    // verb (measured 2026-11-12). Unarmed, it saves into the agent's own
+    // folder instead. The person's own tab keeps the default.
+    const target = downloadTarget({
+      armedDir: armedEntry(wc)?.dir,
+      armedAt: armedEntry(wc)?.at,
+      // Lane only: an agent name on the person's own tab must not take
+      // away their Save dialog.
+      agent: laneGuests.has(wc),
+      agentName: guestOwner.get(wc.id),
+      baseDir: path.join(app.getPath("userData"), "agent-downloads"),
+    });
+    if (!target) return; // the person's own tab, nobody asked: Electron's default
+    const dir = target.dir;
+    // One download per arming. The verb arms a directory for the click it is
+    // about to make; left armed, the next download of the profile took it.
+    if (target.armed) guestDownloadDir.delete(wc);
+    else { try { fs.mkdirSync(dir, { recursive: true }); } catch { /* setSavePath reports it */ } }
+    // Chromium renames onto the path only when the download finishes, so a
+    // name is held from here to `done`: two downloads into one directory
+    // must not both find it free.
+    const savePath = uniqueSavePath(dir, item.getFilename(), (p) => reservedSavePaths.has(p) || pathTaken(p));
+    reservedSavePaths.add(savePath);
+    const name = path.basename(savePath);
+    item.setSavePath(savePath);
+    // Spelled out because this file is typechecked and an untyped parameter
+    // here is two more tsc errors on a list that has to stay readable.
+    /** @param {string} method @param {Record<string, unknown>} params */
+    const push = (method, params) => {
+      const buf = guestCdpEvents.get(wc);
+      if (!buf) return;
+      buf.push({ at: Date.now(), method, params });
+      if (buf.length > CDP_EVENT_CAP) buf.splice(0, buf.length - CDP_EVENT_CAP);
+    };
+    // The guid is the protocol's way of pairing the two events. Electron has
+    // no equivalent, so one is minted and used for both — the waiting loop
+    // only ever compares it with itself.
+    const guid = `agx-dl-${Date.now()}-${Math.round(Math.random() * 1e6)}`;
+    push("Page.downloadWillBegin", { guid, suggestedFilename: name, url: item.getURL(), savePath, note: `downloaded ${name} to ${savePath}` });
+    item.once("done", (_e2, state) => {
+      reservedSavePaths.delete(savePath);
+      push("Page.downloadProgress", {
+        guid,
+        // `completed` and `canceled` are the two the loop acts on; anything
+        // else it keeps waiting through, which is right — an interrupted
+        // download that resumes still finishes.
+        state: state === "completed" ? "completed" : state === "cancelled" ? "canceled" : String(state),
+      });
+    });
+  });
+};
 /** What the person answered this session, by origin and thing: true = allowed.
  *  Denials are kept too, so a page cannot ask again until he says yes.
  *  @type {Map<string, boolean>} */
@@ -215,7 +338,7 @@ const { probe: probeServer, holdDesk } = require("./server-probe.js");
 /** Why there is no server, in a shape the renderer can draw. Four reasons and
  *  four different fixes — see describeSidecarFailure, which is the only thing
  *  that builds one.
- * @typedef {{ reason: string, what: string, where: string, fix: string, detail: string, port: number }} SidecarFailure */
+ * @typedef {{ reason: string, what: string, where: string, fix: string, detail: string, port: number, exitInfo?: string }} SidecarFailure */
 
 /*
  * Which windowing backend this app is, on Linux. Pinned, on purpose.
@@ -376,6 +499,19 @@ const DEBUG_PORT = Number(process.env.AGENTGLASS_DEBUG_PORT || 0);
 if (DEBUG_PORT > 0) {
   app.commandLine.appendSwitch("remote-debugging-port", String(DEBUG_PORT));
 }
+
+/*
+ * The heap the hang watchdog writes down has to mean something.
+ *
+ * Chromium quantises `performance.memory` and updates it on a slow timer unless
+ * this switch is on, so a renderer holding gigabytes of xterm buffer reported
+ * the same number it had minutes earlier. Measured on an isolated run: four
+ * shells opened and V8's own heap went 14 → 36 MB while the page-facing
+ * `performance.memory` stayed at 20. The value is only ever read to write a
+ * diagnostic line in this app's own window log, so the fingerprinting trade the
+ * switch exists for does not apply here.
+ */
+app.commandLine.appendSwitch("enable-precise-memory-info");
 
 // One instance, one window.
 //
@@ -679,7 +815,7 @@ let windowBgSystem = null;
  * diagnostic's name on it — and the chord is stored as its modifiers plus one
  * key name, never as text that reached a field.
  */
-const WINDOW_LOG_MAX = 60_000;
+const WINDOW_LOG_MAX = stallProbe.ROTATE_BYTES;
 /** Bigger than the window log's, because one entry here is a stack trace and
  *  one there is a line of numbers — see `writeSidecarLog`. */
 const SERVER_LOG_MAX = 200_000;
@@ -689,7 +825,83 @@ let askedAt = 0;            // when THIS process last asked for a window change
 let lastAsk = "";           // and how that ask was made — see winToggleMaximize
 
 /**
- * @param {string} what — the transition being recorded
+ * One line in `window.log`: the window's own events and the renderer's hang
+ * watchdog write to the same file, so one read answers "what was the window
+ * doing then". Capped like everything else here; never throws.
+ * @param {string} line
+ */
+function appendWindowLog(line) {
+  try {
+    const file = path.join(app.getPath("userData"), "window.log");
+    rotatingAppend(file, line, WINDOW_LOG_MAX);
+  } catch { /* a log nobody can write is not worth an exception */ }
+}
+
+/** Append one line, rotating the file first if it has grown past `maxBytes`.
+ *  Never truncates: the old content moves to `file.1`/`file.2` instead of
+ *  being thrown away, so a freeze near the boundary still has its history. */
+/** @param {string} file @param {string} line @param {number} maxBytes */
+function rotatingAppend(file, line, maxBytes) {
+  // Buffered, flushed every 250 ms. It used to do existsSync + statSync +
+  // appendFileSync per line on the main thread, and ag:windowLog calls it for
+  // every renderer line: ~3 syscalls per line (audit estimate, not measured),
+  // so a looping renderer starved the thread. Now one stat per file, a size
+  // counter in memory, and one append per flush however many lines queued.
+  let q = logQueues.get(file);
+  if (!q) { q = { lines: [], max: maxBytes, timer: null, busy: false, size: undefined }; logQueues.set(file, q); }
+  q.lines.push(line);
+  q.max = maxBytes;
+  if (!q.timer && !q.busy) q.timer = setTimeout(() => { void flushLog(file); }, LOG_FLUSH_MS);
+}
+
+const LOG_FLUSH_MS = 250;
+/** @type {Map<string, { lines: string[], max: number, timer: ReturnType<typeof setTimeout> | null, busy: boolean, size: number | undefined }>} */
+const logQueues = new Map();
+
+/** @param {string} file */
+async function flushLog(file) {
+  const q = logQueues.get(file);
+  if (!q) return;
+  q.timer = null;
+  if (q.busy || !q.lines.length) return;
+  q.busy = true;
+  const text = q.lines.join("");
+  q.lines = [];
+  try {
+    if (q.size === undefined) q.size = await fs.promises.stat(file).then((st) => st.size, () => 0);
+    if (stallProbe.shouldRotate(q.size, q.max)) {
+      for (const [from, to] of stallProbe.rotationPaths(file)) {
+        try { await fs.promises.rename(from, to); } catch { /* best effort, or no such file */ }
+      }
+      q.size = 0;
+    }
+    await fs.promises.appendFile(file, text);
+    q.size += Buffer.byteLength(text);
+  } catch { /* a log nobody can write is not worth an exception */ }
+  q.busy = false;
+  if (q.lines.length) q.timer = setTimeout(() => { void flushLog(file); }, LOG_FLUSH_MS);
+}
+
+/** Quit path only: the last 250 ms of lines are the ones a freeze report needs. */
+function flushLogsSync() {
+  for (const [file, q] of logQueues) {
+    if (!q.lines.length) continue;
+    try { fs.appendFileSync(file, q.lines.join("")); } catch { /* nobody can write it */ }
+    q.lines = [];
+  }
+}
+
+/** Combined working set of every process this app owns, in MB. Cheap enough
+ *  for a log line, and it is the number the freeze reports were about. */
+function appMemoryMb() {
+  try {
+    let kb = 0;
+    for (const m of app.getAppMetrics()) kb += m.memory?.workingSetSize ?? 0;
+    return Math.round(kb / 1024);
+  } catch { return 0; }
+}
+
+/** @param {string} what — the transition being recorded
  * @param {AppWindow} win
  */
 function noteWindow(what, win) {
@@ -701,14 +913,66 @@ function noteWindow(what, win) {
     const line = `${new Date().toISOString()} ${what} max=${win.isMaximized()} full=${win.isFullScreen()} `
       + `bounds=${b.width}x${b.height}+${b.x}+${b.y} focused=${win.isFocused()} `
       + `asked=${askedAt && Date.now() - askedAt < 3000 ? "yes" : "no"} why=${askedAt && Date.now() - askedAt < 3000 ? (lastAsk || "unsaid") : "-"} chord=${chord}\n`;
-    const file = path.join(app.getPath("userData"), "window.log");
-    if (fs.existsSync(file) && fs.statSync(file).size > WINDOW_LOG_MAX) fs.writeFileSync(file, "");
-    fs.appendFileSync(file, line);
+    appendWindowLog(line);
   } catch { /* a log nobody can write is not worth an exception */ }
 }
 
-/** @param {AppWindow} win */
-function saveWindowState(win) {
+/**
+ * THE WINDOW ITSELF STOPPING, which only this process can write down.
+ *
+ * A frozen window cannot report its own freeze: the renderer is the thing that
+ * stopped. Chromium notices from the outside and fires `unresponsive` when the
+ * renderer has not answered for a few seconds, then `responsive` when it does,
+ * so the pair is the duration — the number nobody had when a window sat still
+ * for over a minute and the only file written that evening was empty.
+ *
+ * Logged even though the person is looking at nothing: it costs two lines per
+ * hang, it fires at most once per hang, and it is the beginning of the range
+ * everything else in the log can then be read against.
+ *
+ * @type {Map<number, number>}
+ */
+const hangSince = new Map();
+
+/** The one fact `unresponsive` alone does not have: which function the
+ *  renderer is stuck in. `collectJavaScriptCallStack` is built for exactly
+ *  this — it answers through DevTools' own channel even while the renderer's
+ *  own event loop cannot — but it is still Electron 43+ only and can come
+ *  back empty, so a missing stack just means one less field, never a thrown
+ *  await. @param {AppWindow} win @returns {Promise<string|null>} */
+async function hangStack(win) {
+  try {
+    if (win.isDestroyed()) return null;
+    const frame = win.webContents?.mainFrame;
+    if (!frame || typeof frame.collectJavaScriptCallStack !== "function") return null;
+    const stack = await frame.collectJavaScriptCallStack();
+    if (!stack) return null;
+    // One log line: newlines and runs of space collapsed, and capped so one
+    // bad stack cannot dominate the file.
+    return stack.replace(/\s+/g, " ").trim().slice(0, 500);
+  } catch { return null; }
+}
+
+/** @param {AppWindow} win @param {boolean} unresponsive */
+async function noteHang(win, unresponsive) {
+  const at = Date.now();
+  const key = win.id;
+  if (unresponsive) {
+    if (!hangSince.has(key)) hangSince.set(key, at);
+    const stack = await hangStack(win);
+    appendWindowLog(`${new Date(at).toISOString()} unresponsive since=${new Date(hangSince.get(key) ?? at).toISOString()} mem=${appMemoryMb()}mb${stack ? ` stack=${stack}` : ""}\n`);
+    flushLogsSync(); // a hang can end in SIGKILL inside the 250 ms buffer; this line is the freeze report
+    return;
+  }
+  const began = hangSince.get(key);
+  hangSince.delete(key);
+  if (began !== undefined) appendWindowLog(`${new Date(at).toISOString()} responsive after=${at - began}ms mem=${appMemoryMb()}mb\n`);
+}
+
+let windowDirMade = false;
+
+/** @param {AppWindow} win @param {boolean} [sync] */
+function saveWindowState(win, sync = false) {
   try {
     if (win.isDestroyed()) return;
     const full = win.isFullScreen();
@@ -722,8 +986,19 @@ function saveWindowState(win) {
     const state = APP_PLACES_ITS_WINDOW
       ? { ...b, max, full, ...ground }
       : { width: b.width, height: b.height, max, full, ...ground };
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
-    fs.writeFileSync(WINDOW_CFG, JSON.stringify(state, null, 2) + "\n");
+    const text = JSON.stringify(state, null, 2) + "\n";
+    // A drag fires this ~2.5x/s on the main thread, so the write is async and
+    // the mkdir runs once. Close paths pass sync=true: the process may exit
+    // before a promise lands. Cost is an audit estimate (1 ms SSD, 50-200 ms
+    // slow disk), not measured.
+    if (sync) {
+      fs.mkdirSync(CONFIG_DIR, { recursive: true });
+      fs.writeFileSync(WINDOW_CFG, text);
+    } else {
+      void (windowDirMade ? Promise.resolve() : fs.promises.mkdir(CONFIG_DIR, { recursive: true }).then(() => { windowDirMade = true; }))
+        .then(() => fs.promises.writeFile(WINDOW_CFG, text))
+        .catch(() => { /* not worth failing a drag over */ });
+    }
   } catch { /* a window state is not worth failing a close over */ }
 }
 
@@ -816,6 +1091,14 @@ function currentToken() {
  * @type {string | null}
  */
 let deskKey = null;
+/**
+ * Electron main's own key for the sidecar it spawned (login vault): the
+ * second line on the desk pipe. Unlike deskKey it is NEVER sent to a window,
+ * so only main can report the person's OK for a sensitive pull
+ * (server/src/vaultAsk.ts). Null for an adopted server.
+ * @type {string | null}
+ */
+let mainKey = null;
 /** Lets the claim on an adopted server's desk go; null when there is none. */
 let letDeskGo = /** @type {(() => void) | null} */ (null);
 
@@ -838,6 +1121,7 @@ let letDeskGo = /** @type {(() => void) | null} */ (null);
 function holdAdoptedDesk(port, settleMs = 0) {
   letDeskGo?.();
   deskKey = null;
+  mainKey = null;
   letDeskGo = holdDesk(port, {
     token: currentToken,
     key: require("crypto").randomBytes(32).toString("base64url"),
@@ -1191,6 +1475,9 @@ async function resolvePort() {
   return adopt;
 }
 
+/** How long the shell goes on asking a server that missed the twelve seconds but is still running: one try a second. */
+const LATE_START_TRIES = 15 * 60;
+
 /**
  * The last reason the sidecar is not there, or null while it is.
  *
@@ -1232,7 +1519,7 @@ function writeSidecarLog(failure) {
     const file = path.join(app.getPath("userData"), "server.log");
     if (fs.existsSync(file) && fs.statSync(file).size > SERVER_LOG_MAX) fs.writeFileSync(file, "");
     fs.appendFileSync(file,
-      `${new Date().toISOString()} ${failure.reason}\n${failure.detail || "(no detail)"}\n\n`);
+      `${new Date().toISOString()} ${failure.reason}${failure.exitInfo ? ` ${failure.exitInfo}` : ""}\n${failure.detail || "(no detail)"}\n\n`);
   } catch { /* the disk is full or read-only; the banner still says it */ }
 }
 
@@ -1342,7 +1629,8 @@ async function ensureServer(adopt) {
   deskKey = DESK_PIPE ? require("crypto").randomBytes(32).toString("base64url") : null;
   const desk = /** @type {import("stream").Writable | null} */ (child.stdio[3]);
   desk?.on("error", () => { /* it went away before reading; `exit` below says why */ });
-  if (deskKey) desk?.end(deskKey + "\n");
+  mainKey = deskKey ? require("crypto").randomBytes(32).toString("base64url") : null;
+  if (deskKey) desk?.end(deskKey + "\n" + mainKey + "\n");
 
   /*
    * The `error` event, which is what a missing binary actually is.
@@ -1376,6 +1664,7 @@ async function ensureServer(adopt) {
   /** @type {{ code: number | null, signal: NodeJS.Signals | null } | null} */
   let exit = null;
   let started = false;
+  const spawnedAt = Date.now();
   child.on("exit", (code, signal) => {
     exit = { code, signal };
     /* Its lane table died with it, so the windows hosting those lanes are
@@ -1386,7 +1675,25 @@ async function ensureServer(adopt) {
     // identity check is what tells "it died" from "we ended it".
     if (sidecar !== child || stopped) return;
     sidecar = null;
-    if (started) reportSidecar(describeSidecarFailure(port, { code, signal }, spawnError, err.text, true));
+    if (!started) return;
+    const verdict = decideRespawn({ started, quitting: stopped, now: Date.now(), failures: respawnFailures });
+    respawnFailures = verdict.failures;
+    const base = describeSidecarFailure(port, { code, signal }, spawnError, err.text, true);
+    // reportSidecar writes the one dated log line per unexpected exit, so the next kill can be matched to a
+    // clock. The pid, signal and uptime ride in `exitInfo`, never in `reason`: that one is a fixed word the
+    // banner and the tests compare.
+    const failure = {
+      ...base,
+      exitInfo: `pid=${child.pid} code=${code} signal=${signal} uptime=${Math.round((Date.now() - spawnedAt) / 1000)}s ${verdict.respawn ? `respawn in ${verdict.delayMs}ms` : "not respawning"}`,
+      ...(verdict.respawn ? { what: `${base.what} Restarting it.`, fix: "The app is starting a new server by itself." } : {}),
+    };
+    reportSidecar(failure);
+    if (!verdict.respawn) return;
+    setTimeout(() => {
+      // Something else (a deliberate restart, a new server) took over meanwhile.
+      if (sidecar || stopped) return;
+      void restartSidecar().catch((e) => console.error("[agentglass] sidecar respawn failed:", e));
+    }, verdict.delayMs);
   });
 
   /*
@@ -1414,6 +1721,33 @@ async function ensureServer(adopt) {
     await new Promise((r) => setTimeout(r, i < 16 ? 60 : 300));
   }
   reportSidecar(describeSidecarFailure(port, exit, spawnError, err.text, false));
+  /*
+   * A server that is slow is not a server that is gone.
+   *
+   * Twelve seconds was the end of the story: the window was told "no server"
+   * and nothing looked again. Measured on a real install: the first start
+   * after an update rewrote a 1.08 GB database before listening and answered
+   * /health 20 s after launch; the window stayed on "No server · reconnecting"
+   * for as long as it was left open, with a healthy server behind it.
+   *
+   * So while the process is still alive the shell keeps asking, once a second,
+   * and when the server proves it is ours the windows are told and reloaded. A
+   * reload costs nothing here: a window that never had a server holds no
+   * terminal and no request that worked. It stops the moment the process
+   * exits (the `exit` listener above owns that message) or another server
+   * was started in its place.
+   */
+  if (!spawnError && !exit) void (async () => {
+    for (let i = 0; i < LATE_START_TRIES; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      if (spawnError || exit || sidecar !== child) return;
+      if ((await probe(port)) !== "ours") continue;
+      started = true;
+      reportSidecar(null);
+      for (const w of BrowserWindow.getAllWindows()) { try { w.webContents.reload(); } catch { /* window went away */ } }
+      return;
+    }
+  })();
   return false;
 }
 
@@ -1568,6 +1902,18 @@ function registerIpc(win) {
   ipcMain.handle("ag:winIsMaximized", () => win.isMaximized());
 
   /*
+   * A line from the renderer for `window.log`: today the long tasks the hang
+   * watchdog sees (web/src/lib/hangWatch.ts). Separate from noteWindow's lines
+   * because they answer different questions — where the window was, and how
+   * long a task held it. Bounded here as well as there: a renderer stuck in a
+   * loop is exactly the case a log has to survive.
+   */
+  ipcMain.on("ag:windowLog", (_e, line) => {
+    if (typeof line !== "string") return;
+    appendWindowLog(`${new Date().toISOString()} renderer ${line.replace(/\s+/g, " ").slice(0, 400)}\n`);
+  });
+
+  /*
    * The system's own folder chooser, for picking a project.
    *
    * The web side can only offer a path box: a browser cannot open a file
@@ -1705,6 +2051,501 @@ function registerIpc(win) {
     return { ok: true, set, failed, skipped: read.skipped };
   });
 
+  /*
+   * The login vault (plan parts C and D). Every value passes through here
+   * and nowhere else: the helper prints one site's cookies on its pipe, this
+   * sets them into ONE ephemeral lane, and the answer that goes back to the
+   * renderer (and so to the server and the agent) is a count.
+   */
+  const vaultAnswer = (/** @type {any} */ a) => a && typeof a === "object" ? a : { ok: false, error: "the vault helper did not answer" };
+  const fromWindow = (/** @type {Electron.IpcMainInvokeEvent} */ e) => !!mainWindow && e.sender === mainWindow.webContents;
+
+  /** The person's OK for one sensitive pull, asked by main itself: a native
+   *  dialog on the main window, Deny by default, five minutes then Deny. The
+   *  yes is reported to the server on main's own key, which no window holds,
+   *  and only the server's grant lets the values in. */
+  const VAULT_ASK_MS = 5 * 60_000;
+  const askSensitive = async (/** @type {string} */ site, /** @type {string} */ agent, /** @type {string} */ lane) => {
+    if (!mainKey || !mainWindow) return false;
+    const stop = new AbortController();
+    const timer = setTimeout(() => stop.abort(), VAULT_ASK_MS);
+    try {
+      const a = await dialog.showMessageBox(mainWindow, {
+        type: "warning",
+        buttons: ["Deny", "Allow"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+        signal: stop.signal,
+        title: "Login vault",
+        message: `Sign ${agent || "an agent"} in to ${site}?`,
+        detail: `${site} is marked sensitive.\n\nAgent: ${agent || "unknown"}\nContainer: ${ephemeralPartition(lane)} (in memory only)\n\nNo answer in 5 minutes is Deny.`,
+      });
+      if (stop.signal.aborted || a.response !== 1) return false;
+    } catch { return false; } finally { clearTimeout(timer); }
+    try {
+      const res = await fetch(`${apiOrigin}/vault/ok`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${currentToken()}`, "x-agentglass-main": mainKey },
+        body: JSON.stringify({ lane, site, agent }),
+        signal: AbortSignal.timeout(5000),
+      });
+      const r = /** @type {any} */ (await res.json());
+      return res.ok && r && r.ok === true;
+    } catch { return false; }
+  };
+
+  /** Tell the server, on main's own key, that this lane is about to hold a
+   *  vault login (finding 3): every pull comes through here, the window's own
+   *  ones too, and the server guards the lane before the first cookie. */
+  const reportVaultLane = async (/** @type {string} */ lane, /** @type {unknown} */ signOutAtEnd) => {
+    if (!mainKey) return false;
+    try {
+      const res = await fetch(`${apiOrigin}/vault/lane`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${currentToken()}`, "x-agentglass-main": mainKey },
+        body: JSON.stringify({ lane, ...(typeof signOutAtEnd === "boolean" ? { signOutAtEnd } : {}) }),
+        signal: AbortSignal.timeout(5000),
+      });
+      const r = /** @type {any} */ (await res.json());
+      return res.ok && r && r.ok === true;
+    } catch { return false; }
+  };
+
+  /*
+   * "Sign agents in on first visit" (ON by default). The sealed setting in the
+   * vault is the truth. A plain marker in main's own userData says "off": with
+   * it there, an on-visit ask is answered before anything is read or spawned.
+   * Main writes it when the person turns the setting off (or finds the sealed
+   * value off), and removes it only after the person's confirm and the
+   * helper's ok. A marker can only make main try LESS: removing it by hand
+   * still meets the sealed value.
+   */
+  const visitOffMarker = path.join(app.getPath("userData"), "sign-in-on-visit-off");
+  let signInOnVisit = !pathTaken(visitOffMarker);
+  const markVisitOff = () => { signInOnVisit = false; try { fs.writeFileSync(visitOffMarker, "off\n", { mode: 0o600 }); } catch { /* the sealed value still says off */ } };
+  /* Names and flags of every vault site, from ONE `vault-list`; null = not
+     built yet, "failed" = could not be read (one warning, no retry per visit). */
+  /** @type {ReturnType<typeof visitIndexFrom> | null} */
+  let vaultIndex = null;
+  /** @type {Promise<ReturnType<typeof visitIndexFrom>> | null} */
+  let vaultIndexBuild = null;
+  const buildVaultIndex = () => {
+    if (vaultIndex) return Promise.resolve(vaultIndex);
+    if (vaultIndexBuild) return vaultIndexBuild;
+    vaultIndexBuild = (async () => {
+      /** @type {any} */
+      let got;
+      try { got = await runCookieReader(["vault-list"]); } catch (err) { got = { ok: false, code: String(err instanceof Error ? err.message : err) }; }
+      const idx = visitIndexFrom(got);
+      if (idx === "failed") console.warn(`vault: sign-in on visit is off until the vault can be read: ${(got && got.code) || "error"}`);
+      vaultIndex = idx;
+      vaultIndexBuild = null;
+      return idx;
+    })();
+    return vaultIndexBuild;
+  };
+  /* After every change to the vault or its settings: built again on the next
+     visit, and only when the marker is there. */
+  const staleVaultIndex = () => { vaultIndex = null; };
+
+  /* Decision B: an agent's own `--as` container is signed in on its first
+     visit too. The server decided the agent made it; main checks the rest:
+     on visit only, the setting, read-only, sensitive, its own deadline. Only
+     plain cookies go in (no page storage, no partitioned ones: neither could
+     be removed exactly), and the answer names each one set (name, domain,
+     path; never a value) so the server can remove exactly those at task end. */
+  const pullIntoContainer = async (/** @type {any} */ req) => {
+    const id = typeof req?.container === "string" ? req.container : "";
+    const site = typeof req?.site === "string" ? req.site.trim().toLowerCase() : "";
+    const agent = typeof req?.agent === "string" ? req.agent.slice(0, 64) : "";
+    const vault = typeof req?.vault === "string" && req.vault ? req.vault : undefined;
+    const partition = containerPartition(id);
+    const dir = vaultDirFor();
+    const log = (/** @type {any} */ x) => { try { appendPullLog(dir, { site, agent, lane: `container:${id}`.slice(0, 64), cause: "visit", ...x }); } catch { /* best effort */ } };
+    if (!partition || partition === BROWSER_PARTITION) return { ok: false, code: "refused", error: "that is not an agent's container" };
+    if (req?.onVisit !== true) return { ok: false, code: "refused", error: "a container is signed in only on a first visit; for an explicit pull use an ephemeral lane" };
+    if (!/^[a-z0-9.-]{1,253}$/.test(site)) return { ok: false, code: "refused", error: "name one site, like acme.test" };
+    const deadline = visitDeadline(req?.budgetMs, Date.now(), req?.deadlineAt);
+    const late = () => Date.now() > deadline;
+    const tooLate = { ok: false, code: "late", error: "the sign-in did not finish in time; the page is signed out; ask with browser_vault" };
+    if (late()) { log({ event: "aborted", count: 0, why: "too late" }); return tooLate; }
+    const ses = session.fromPartition(partition);
+    const no = await visitGate({
+      readonly: process.env.AGENTGLASS_BROWSER_READONLY === "1",
+      marker: () => signInOnVisit,
+      index: buildVaultIndex,
+      /* An agent's container is signed in when the server still holds the vault's
+         sign-in for it: any cookie would do otherwise, and a signed-out page sets
+         anonymous ones at once. */
+      hasLogin: async () => req?.held === true,
+      markOff: markVisitOff,
+    }, site);
+    if (no) {
+      if (no.code === "sensitive" || no.code === "refused") log({ event: "refused", count: 0, why: no.code });
+      return no;
+    }
+    let got;
+    try { got = vaultAnswer(await runCookieReader(["vault-pull", "--site", site, ...(vault ? ["--vault", vault] : [])])); }
+    catch (err) { return { ok: false, error: String(err instanceof Error ? err.message : err) }; }
+    if (!got.ok) {
+      log({ event: "refused", count: 0, why: got.code || "error" });
+      return got.code === "ambiguous"
+        ? { ok: false, code: "ambiguous", error: got.error, vaults: got.vaults }
+        : { ok: false, code: got.code, error: got.error };
+    }
+    /* A stale index: the helper says sensitive. Never on visit, never a dialog. */
+    if (got.sensitive) {
+      log({ event: "refused", vault: got.vault, count: 0, why: "sensitive" });
+      return { ok: false, code: "sensitive", error: `${site} is marked sensitive: ask for it with browser_vault; the person is asked` };
+    }
+    if (late()) { log({ event: "aborted", vault: got.vault, count: 0, why: "too late" }); return tooLate; }
+    /** @type {any[]} */
+    const keys = [];
+    /** @type {string[]} */
+    const hashes = [];
+    const plain = (got.cookies || []).filter((/** @type {any} */ c) => c && !c.partitionKey);
+    const put = await putLaneCookies(plain, {
+      set: async (c) => { await ses.cookies.set(/** @type {any} */ (c)); const k = cookieKeyOf(c); if (k) keys.push(k); const h = cookieHash(c); if (h) hashes.push(h); },
+      gone: () => false,
+      late,
+    });
+    if (put.stop === "late") {
+      /* What went in comes out again: the page is as signed out as the reply says. */
+      await wipeContainerCookies(keys, { set: (/** @type {any} */ c) => ses.cookies.set(/** @type {any} */ (c)) });
+      log({ event: "aborted", vault: got.vault, count: put.set, why: "too late" });
+      return tooLate;
+    }
+    /* In memory only: what the vault put in, to tell it from what the page sets later. */
+    /* A pull replaces the book: the cookies it just put in overwrote the old ones; the cap applies to this one pull. */
+    const book = new Set(hashes.slice(0, 2000));
+    vaultPutHashes.delete(`${id}|${site}`);
+    vaultPutHashes.set(`${id}|${site}`, book);
+    /* Cap the whole book: the oldest container|site goes first. */
+    while (vaultPutHashes.size > 200) vaultPutHashes.delete(vaultPutHashes.keys().next().value);
+    log({ event: "pull", vault: got.vault, count: put.set });
+    return { ok: true, site, vault: got.vault, label: got.label, set: put.set, failed: put.failed, cookies: keys };
+  };
+
+  /** container|site -> hashes of the cookies the vault put in. Memory only. */
+  const vaultPutHashes = new Map();
+
+  /* Task end for a container: remove exactly the cookies the vault put in. */
+  ipcMain.handle("ag:vaultWipe", async (e, req) => {
+    if (!fromWindow(e)) return { ok: false, error: "only the app window" };
+    const id = typeof req?.container === "string" ? req.container : "";
+    const partition = containerPartition(id);
+    if (!partition || partition === BROWSER_PARTITION) return { ok: false, error: "that is not an agent's container" };
+    const keys = Array.isArray(req?.cookies) ? req.cookies.slice(0, 2000) : [];
+    const ses = session.fromPartition(partition);
+    let removed = await wipeContainerCookies(keys, { set: (/** @type {any} */ c) => ses.cookies.set(/** @type {any} */ (c)) });
+    if (req?.sweep === true && typeof req?.site === "string") {
+      removed += await sweepSiteCookies(req.site.trim().toLowerCase(), {
+        get: (/** @type {any} */ f) => ses.cookies.get(f),
+        remove: (/** @type {string} */ url, /** @type {string} */ name) => ses.cookies.remove(url, name),
+      });
+    }
+    /* The wipe proves itself: read the site's jar again and count the vault's own cookies still in (a page's same-name cookie has another value); counts only. */
+    const siteKey = typeof req?.site === "string" ? req.site.trim().toLowerCase() : "";
+    const { vaultLeft, left } = await vaultLeftCount(siteKey, vaultPutHashes.get(`${id}|${siteKey}`), { get: (/** @type {any} */ f) => ses.cookies.get(f) });
+    /* vaultLeftCount already pruned the book to what is still in; an empty one goes. */
+    if (vaultLeft === 0) vaultPutHashes.delete(`${id}|${siteKey}`);
+    try {
+      appendPullLog(vaultDirFor(), {
+        event: "signout", site: typeof req?.site === "string" ? req.site : "", agent: typeof req?.agent === "string" ? req.agent : "",
+        lane: `container:${id}`.slice(0, 64), count: removed, why: typeof req?.why === "string" ? req.why : "task ended",
+        left, vaultLeft,
+      });
+    } catch { /* best effort */ }
+    return { ok: true, removed, left, vaultLeft };
+  });
+
+  ipcMain.handle("ag:vaultPull", async (e, req) => {
+    if (!fromWindow(e)) return { ok: false, error: "only the app window asks for a pull" };
+    if (typeof req?.container === "string") return pullIntoContainer(req);
+    const lane = typeof req?.lane === "string" ? req.lane : "";
+    const site = typeof req?.site === "string" ? req.site.trim().toLowerCase() : "";
+    const agent = typeof req?.agent === "string" ? req.agent.slice(0, 64) : "";
+    const vault = typeof req?.vault === "string" && req.vault ? req.vault : undefined;
+    const onVisit = req?.onVisit === true;
+    /* On visit main stops itself: no cookie lands after the server stopped waiting. */
+    const deadline = onVisit ? visitDeadline(req?.budgetMs, Date.now(), req?.deadlineAt) : Infinity;
+    const late = () => Date.now() > deadline;
+    const dir = vaultDirFor();
+    const log = (/** @type {any} */ x) => { try { appendPullLog(dir, { site, agent, lane, cause: onVisit ? "visit" : "verb", ...x }); } catch { /* best effort */ } };
+    /* Read past the server's deadline: nothing is read, spawned or set. */
+    if (onVisit && late()) {
+      log({ event: "aborted", count: 0, why: "too late" });
+      return { ok: false, code: "late", error: "the sign-in did not finish in time; the page is signed out; ask with browser_vault" };
+    }
+    if (onVisit) {
+      /* Before pullRefusal and before any spawn: off, not in the vault, the
+         lane already signed in to it, or sensitive. None of these is a pull. */
+      const no = await visitGate({
+        readonly: process.env.AGENTGLASS_BROWSER_READONLY === "1",
+        marker: () => signInOnVisit,
+        index: buildVaultIndex,
+        hasLogin: async () => {
+          try { return (await session.fromPartition(ephemeralPartition(lane)).cookies.get({ domain: site })).length > 0; }
+          catch { return true; }
+        },
+        markOff: markVisitOff,
+      }, site);
+      if (no) {
+        if (no.code === "sensitive" || no.code === "no-copy") log({ event: "refused", count: 0, why: no.code });
+        return no;
+      }
+    }
+    const refused = pullRefusal({ readonly: process.env.AGENTGLASS_BROWSER_READONLY === "1", lane: laneHosts.get(lane), site });
+    if (refused) { log({ event: "refused", count: 0, why: refused }); return { ok: false, code: "refused", error: refused }; }
+    /* An adopted server was never piped main's key: it cannot be told which
+       lane to guard, so no lane is filled (finding 3). */
+    if (!mainKey) {
+      log({ event: "refused", count: 0, why: "adopted server" });
+      return { ok: false, code: "no-ok", error: "this server was not started by the app, so it cannot guard a lane signed in from the vault: restart the server from the app" };
+    }
+    /* Remove and Empty raise this; checked again after the person's yes (finding 6). */
+    const epoch = vaultLanes.epoch();
+    /* The lane can close while the person is asked or a cookie goes in (the
+       server gives up, the agent closes it): checked again after the yes and
+       before each set, so no login lands in a jar nothing owns (New 3). */
+    const laneGone = () => !laneHosts.has(lane);
+    let got;
+    try { got = vaultAnswer(await runCookieReader(["vault-pull", "--site", site, ...(vault ? ["--vault", vault] : [])])); }
+    catch (err) { return { ok: false, error: String(err instanceof Error ? err.message : err) }; }
+    if (!got.ok) {
+      log({ event: "refused", count: 0, why: got.code || "error" });
+      return got.code === "ambiguous"
+        ? { ok: false, code: "ambiguous", error: got.error, vaults: got.vaults }
+        : { ok: false, code: got.code, error: got.error };
+    }
+    /* Nothing is set yet: past the deadline, the answer is simply dropped. */
+    if (late()) {
+      log({ event: "aborted", vault: got.vault, count: 0, why: "too late" });
+      return { ok: false, code: "late", error: "the sign-in did not finish in time; the page is signed out; ask with browser_vault" };
+    }
+    /* A stale index: the helper says sensitive on a visit. No dialog on visit. */
+    if (onVisit && got.sensitive) {
+      log({ event: "refused", vault: got.vault, count: 0, why: "sensitive" });
+      return { ok: false, code: "sensitive", error: `${site} is marked sensitive: ask for it with browser_vault; the person is asked` };
+    }
+    /* A sensitive site needs the person's OK for THIS pull (decision D),
+       asked here by main, never by the window: a flag a page sends is not
+       read. Deny, five minutes, or a server that refuses main's report: the
+       values are dropped. */
+    if (got.sensitive && !(await askSensitive(site, agent, lane))) {
+      log({ event: "refused", vault: got.vault, count: 0, why: "sensitive, not OKed" });
+      return { ok: false, code: "no-ok", sensitive: true, error: `the person did not OK signing this lane in to ${site} (denied, or no answer in 5 minutes)` };
+    }
+    /* The vault may have been emptied, or this site removed, while the
+       person was being asked: then nothing goes in (finding 6). */
+    if (vaultLanes.epoch() !== epoch) {
+      log({ event: "refused", vault: got.vault, count: 0, why: "vault changed" });
+      return { ok: false, code: "changed", error: "the vault changed while the pull waited (a Remove or Empty): nothing was put in; ask again" };
+    }
+    if (laneGone()) {
+      log({ event: "refused", vault: got.vault, count: 0, why: "lane closed" });
+      return { ok: false, code: "closed", error: "the lane closed while the pull waited: nothing was put in" };
+    }
+    if (late()) {
+      log({ event: "aborted", vault: got.vault, count: 0, why: "too late" });
+      return { ok: false, code: "late", error: "the sign-in did not finish in time; the page is signed out; ask with browser_vault" };
+    }
+    /* Guarded on the server, and in main's own book, before the first cookie:
+       a sweep that runs while the cookies go in finds this lane. */
+    if (!(await reportVaultLane(lane, got.signOutAtEnd)) || vaultLanes.epoch() !== epoch) {
+      log({ event: "refused", vault: got.vault, count: 0, why: "server did not guard the lane" });
+      return { ok: false, code: "no-guard", error: "the server did not take the lane's guard, so nothing was put in" };
+    }
+    const partition = ephemeralPartition(lane);
+    vaultLanes.mark(lane, partition, agent, site, got.vault);
+    const ses = session.fromPartition(partition);
+    /* Past the deadline after the mark: what went in is wiped, the lane is as
+       signed out as the server's reply says. */
+    const tooLate = () => {
+      vaultPending.delete(lane);
+      vaultLanes.drop(lane);
+      wipeEphemeralPartition(partition);
+      log({ event: "aborted", vault: got.vault, count: set, why: "too late" });
+      return { ok: false, code: "late", error: "the sign-in did not finish in time; what was set is wiped; ask with browser_vault" };
+    };
+    const put = await putLaneCookies(got.cookies || [], { set: (/** @type {any} */ c) => ses.cookies.set(/** @type {any} */ (c)), gone: laneGone, late });
+    let { set, failed } = put;
+    const { chips } = put;
+    const gone = put.stop === "gone";
+    if (put.stop === "late") return tooLate();
+    /* Partitioned cookies and site storage go in through the lane's own page
+       (CDP on its guest): Electron's cookies.set has no partition key, and
+       localStorage has no session-side setter at all. */
+    if (gone || laneGone()) {
+      /* What did go in is wiped with the jar, and main's book forgets the lane. */
+      vaultLanes.drop(lane);
+      wipeEphemeralPartition(partition);
+      log({ event: "aborted", vault: got.vault, count: set, why: "lane closed" });
+      return { ok: false, code: "closed", error: "the lane closed while the login went in: what was set is wiped" };
+    }
+    if (late()) return tooLate();
+    const storage = (Array.isArray(got.storage) ? got.storage : []).map(toLaneStorage).filter(Boolean);
+    const filled = await fillLaneGuest(lane, chips, /** @type {any} */ (storage));
+    set += filled.set;
+    failed += filled.failed;
+    if (laneGone()) {
+      vaultPending.delete(lane);
+      vaultLanes.drop(lane);
+      wipeEphemeralPartition(partition);
+      log({ event: "aborted", vault: got.vault, count: set, why: "lane closed" });
+      return { ok: false, code: "closed", error: "the lane closed while the login went in: what was set is wiped" };
+    }
+    if (late()) return tooLate();
+    log({ event: "pull", vault: got.vault, count: set });
+    return {
+      ok: true, site, vault: got.vault, label: got.label, sensitive: !!got.sensitive, set, failed,
+      partitioned: chips.length, waiting: filled.waiting,
+      session: (got.cookies || []).filter((/** @type {any} */ c) => c.expirationDate === undefined).length,
+      storage: storage.length,
+    };
+  });
+
+  /* Import into the vault (mockup state 2): the person's own click, one
+     source, the sites they chose, after a native confirm. The answer is
+     counts per vault; no value crosses to the window. */
+  ipcMain.handle("ag:vaultImport", async (e, req) => {
+    if (!fromWindow(e)) return { ok: false, error: "only the app window" };
+    const source = typeof req?.source === "string" ? req.source : "";
+    const sites = Array.isArray(req?.sites) ? req.sites.filter((/** @type {unknown} */ s) => typeof s === "string" && /^[a-z0-9.-]{1,253}$/.test(s)).slice(0, 2000) : [];
+    if (!source || !sites.length) return { ok: false, error: "choose a browser and at least one site" };
+    const answer = await dialog.showMessageBox(win, {
+      type: "question", buttons: ["Put in the vault", "Cancel"], defaultId: 1, cancelId: 1,
+      message: `Put your logins for ${sites.length} site${sites.length === 1 ? "" : "s"} in the vault?`,
+      detail: "Agents can ask for one site at a time. Sensitive sites ask you each time.",
+    });
+    if (answer.response !== 0) return { ok: false, error: "cancelled" };
+    let got;
+    try { got = vaultAnswer(await runCookieReader(["vault-import", "--source", source, "--sites", sites.join(",")])); }
+    catch (err) { return { ok: false, error: String(err instanceof Error ? err.message : err) }; }
+    if (got.ok) staleVaultIndex();
+    return got;
+  });
+
+  /* Is this lane signed in from the vault? Main's book, not the server's. */
+  ipcMain.handle("ag:vaultLanes", (e) => fromWindow(e) ? vaultLanes.ids() : []);
+
+  /* Mockup state 4: the lanes signed in from the vault right now, by name,
+     and "Sign out now" for one of them (the lane dies, its jar is wiped). */
+  ipcMain.handle("ag:vaultSignedIn", (e) => fromWindow(e)
+    ? vaultLanes.holding().map((l) => ({ lane: l.lane, agent: l.agent, sites: [...l.sites.keys()] }))
+    : []);
+  ipcMain.handle("ag:vaultSignOut", (e, req) => {
+    if (!fromWindow(e)) return { ok: false, error: "only the app window" };
+    const lane = typeof req?.lane === "string" ? req.lane : "";
+    if (!vaultLanes.has(lane)) return { ok: false, error: "that lane is not signed in from the vault" };
+    return { ok: destroyLaneHost(lane) };
+  });
+
+  ipcMain.handle("ag:vaultList", async (e) => {
+    if (!fromWindow(e)) return { ok: false, error: "only the app window" };
+    try { return vaultAnswer(await runCookieReader(["vault-list"])); }
+    catch (err) { return { ok: false, error: String(err instanceof Error ? err.message : err) }; }
+  });
+
+  ipcMain.handle("ag:vaultSettings", async (e, req) => {
+    if (!fromWindow(e)) return { ok: false, error: "only the app window" };
+    /** @type {Record<string, unknown>} */
+    const ask = {};
+    if (typeof req?.site === "string") ask.site = req.site;
+    for (const k of ["sensitive", "noCopy", "needsStorage", "signOutAtEnd", "signInOnVisit"]) if (typeof req?.[k] === "boolean") ask[k] = req[k];
+    if (typeof req?.defaultVault === "string" || req?.defaultVault === null) ask.defaultVault = req.defaultVault;
+    /* Taking the sensitive mark off means the next pull asks nobody, and
+       turning sign-out off leaves lanes signed in after the task: the person
+       says so here, in main's own dialog, not the window (finding 2, New 2). */
+    /* Turning sign-in on visit OFF tightens: the off marker is written at
+       once, even if the helper then fails, so nothing is tried next visit. */
+    if (ask.signInOnVisit === false) markVisitOff();
+    /* Turning it ON names how many sites agents could then reach. */
+    /** @type {{ visitSites?: number }} */
+    const info = {};
+    if (ask.signInOnVisit === true) {
+      try { const n = visitSiteCount(await runCookieReader(["vault-list"])); if (n !== null) info.visitSites = n; } catch { /* the dialog says no number */ }
+    }
+    const confirms = settingsConfirmDialogs(ask, info);
+    if (confirms.length && !mainWindow) return { ok: false, error: "the app window is not open" };
+    for (const d of confirms) {
+      const a = await dialog.showMessageBox(/** @type {Electron.BrowserWindow} */ (mainWindow), d);
+      if (a.response !== 1) return { ok: false, code: "cancelled", error: "cancelled: nothing was changed" };
+    }
+    let got;
+    try { got = vaultAnswer(await runCookieReader(["vault-settings", "--set", JSON.stringify(ask)])); }
+    catch (err) { return { ok: false, error: String(err instanceof Error ? err.message : err) }; }
+    if (got.ok) {
+      staleVaultIndex();
+      if (ask.signInOnVisit === true) {
+        try { fs.rmSync(visitOffMarker, { force: true }); signInOnVisit = true; }
+        catch (err) { return { ok: false, error: `the setting was saved, but main could not remove its off marker: ${String(err instanceof Error ? err.message : err)}` }; }
+      }
+    }
+    return got;
+  });
+
+  /* Remove one vault, or Empty them all, and sweep every lane main signed in
+     from it (decision F2): the lane dies, its jar is wiped, the log says so. */
+  ipcMain.handle("ag:vaultRemove", async (e, req) => {
+    if (!fromWindow(e)) return { ok: false, error: "only the app window" };
+    const all = req?.all === true;
+    const vault = typeof req?.vault === "string" ? req.vault : "";
+    const site = !all && typeof req?.site === "string" ? req.site.trim().toLowerCase() : "";
+    if (!all && !vault) return { ok: false, error: "name a vault" };
+    const answer = await dialog.showMessageBox(win, {
+      type: "warning", buttons: [all ? "Empty vault" : "Remove", "Cancel"], defaultId: 1, cancelId: 1,
+      message: all ? "Empty the login vault?" : site ? `Remove ${site} from this vault?` : "Remove this vault?",
+      detail: "Agent lanes signed in from it are closed now. Your own browser is not touched.",
+    });
+    if (answer.response !== 0) return { ok: false, error: "cancelled" };
+    /* Before the helper runs: a pull waiting on its dialog now stops (finding 6). */
+    vaultLanes.bump();
+    let got;
+    try { got = vaultAnswer(await runCookieReader(["vault-remove", ...(all ? ["--all"] : ["--vault", vault, ...(site ? ["--site", site] : [])])])); }
+    catch (err) { return { ok: false, error: String(err instanceof Error ? err.message : err) }; }
+    let swept = 0;
+    /* One site out: only the lanes signed in to THAT site from this vault close. */
+    for (const l of vaultLanes.holding(all ? undefined : vault)) {
+      if (site && l.sites.get(site) !== vault) continue;
+      if (destroyLaneHost(l.lane)) swept += 1;
+    }
+    staleVaultIndex();
+    return { ...got, swept };
+  });
+
+  /* "Use in my browser" (decision F4): one vault, all or chosen sites, into
+     the person's own jar, after a native confirm that names them. */
+  ipcMain.handle("ag:vaultUseInMyBrowser", async (e, req) => {
+    if (!fromWindow(e)) return { ok: false, error: "only the app window" };
+    const vault = typeof req?.vault === "string" ? req.vault : "";
+    const sites = Array.isArray(req?.sites) ? req.sites.filter((/** @type {unknown} */ s) => typeof s === "string").slice(0, 2000) : [];
+    if (!vault) return { ok: false, error: "choose a vault" };
+    /* Read first, so main's confirm can name the sensitive sites; the values
+       stay here while the person is asked (finding 7). */
+    const epoch = vaultLanes.epoch();
+    let got;
+    try { got = vaultAnswer(await runCookieReader(["vault-read", "--vault", vault, ...(sites.length ? ["--sites", sites.join(",")] : [])])); }
+    catch (err) { return { ok: false, error: String(err instanceof Error ? err.message : err) }; }
+    if (!got.ok) return { ok: false, code: got.code, error: got.error };
+    const sensitive = Array.isArray(got.sensitive) ? got.sensitive.filter((/** @type {unknown} */ x) => typeof x === "string") : [];
+    const noCopy = Array.isArray(got.noCopy) ? got.noCopy.filter((/** @type {unknown} */ x) => typeof x === "string") : [];
+    const answer = await dialog.showMessageBox(win, useInBrowserDialog(sites, sensitive, noCopy));
+    if (answer.response !== 0) return { ok: false, error: "cancelled" };
+    if (vaultLanes.epoch() !== epoch) return { ok: false, code: "changed", error: "the vault changed while you were asked: nothing was put in" };
+    const ses = session.fromPartition(BROWSER_PARTITION);
+    let set = 0;
+    let failed = 0;
+    for (const c of got.cookies || []) {
+      const cookie = toLaneCookie(c);
+      if (!cookie) continue;
+      try { await ses.cookies.set(/** @type {any} */ (cookie)); set += 1; } catch { failed += 1; }
+    }
+    try { await ses.cookies.flushStore(); } catch { /* best effort */ }
+    return { ok: true, set, failed, noCopy };
+  });
+
   /**
    * Undo. Not "delete the partition" — the sites named, and nothing else.
    *
@@ -1741,6 +2582,26 @@ function registerIpc(win) {
       try { await ses.cookies.flushStore(); } catch { /* best effort */ }
     }
     return { ok: true, removed, profiles: partitions.length };
+  });
+
+  /*
+   * Empty a dropped container's whole jar: cookies, storage, cache.
+   *
+   * `ag:forgetCookies` clears the sites it is told; a container that is gone
+   * has nobody left to name its sites, so this takes the lot. Only a named
+   * container of the browser's own family — never the default jar, which is
+   * the person's, and never anything outside the family.
+   */
+  ipcMain.handle("ag:wipeContainers", async (_e, req) => {
+    const asked = Array.isArray(req?.partitions) ? req.partitions.filter((/** @type {unknown} */ p) => isBrowserPartition(p) && p !== BROWSER_PARTITION) : [];
+    let wiped = 0;
+    for (const partition of new Set(asked)) {
+      const ses = session.fromPartition(partition);
+      /* The container is gone: so is what the vault put in it. */
+      for (const k of vaultPutHashes.keys()) if (containerPartition(k.split("|")[0]) === partition) vaultPutHashes.delete(k);
+      try { await ses.clearStorageData(); await ses.clearCache(); wiped += 1; } catch { /* already gone */ }
+    }
+    return { ok: true, wiped };
   });
 
   /*
@@ -2170,6 +3031,55 @@ function registerIpc(win) {
     }
   });
 
+  /**
+   * Guide mode: watch the pointed element from a CDP isolated world (see
+   * guide-observer.js) and hand its rect and the person's press to the window
+   * that hosts the guest, as `ag:guide-observed`. `stop` (guide end, agent
+   * detach) and the guest going away take it down. `{ok:false}` means it could
+   * not be made: the panel falls back to the last rect.
+   */
+  ipcMain.handle("ag:browserGuideObserve", async (_e, req) => {
+    const wanted = Number(req && req.guestId);
+    const guest = Number.isFinite(wanted) && wanted > 0 ? browserGuestById(wanted) : null;
+    if (!guest || guest.isDestroyed()) return { ok: false, error: "that tab is not a browser pane in this window" };
+    let o = guideObservers.get(guest);
+    if (req && req.stop) { if (o) await o.stop(); return { ok: true }; }
+    if (guest.debugger.isAttached() && !guestOwnsDebugger.has(guest)) {
+      return { ok: false, error: "the inspector is attached to this page — close it and try again" };
+    }
+    try {
+      if (!guestOwnsDebugger.has(guest)) { guest.debugger.attach("1.3"); guestOwnsDebugger.add(guest); }
+    } catch (e) { return { ok: false, error: String(e instanceof Error ? e.message : e) }; }
+    if (!o) {
+      const host = guest.hostWebContents;
+      const made = createGuideObserver({
+        send: (/** @type {string} */ m, /** @type {any} */ p) => guest.debugger.sendCommand(m, p),
+        emit: (/** @type {unknown} */ ev) => { try { if (host && !host.isDestroyed()) host.send("ag:guide-observed", ev); } catch { /* window going away */ } },
+      });
+      o = made;
+      guideObservers.set(guest, made);
+      guest.debugger.on("message", (/** @type {unknown} */ _ev, /** @type {string} */ m, /** @type {unknown} */ params) => made.onMessage(m, params));
+      guest.debugger.on("detach", () => { void made.stop(); });
+      guest.once("destroyed", () => { void made.stop(); guideObservers.delete(guest); });
+    }
+    const s = req || {};
+    return o.start({
+      tab: String(s.tab || ""), selector: typeof s.selector === "string" ? s.selector : "",
+      role: typeof s.role === "string" ? s.role : "", name: typeof s.name === "string" ? s.name : "",
+      waitClick: s.waitClick === true, ...(s.step ? { step: s.step } : {}),
+      ...(typeof s.stepId === "number" ? { stepId: s.stepId } : {}), ...(typeof s.say === "string" ? { say: s.say } : {}),
+      /* guide run: the label among matches, the plan's selector to find it again, the wait, and lost-watching. Data only. */
+      ...(typeof s.text === "string" && s.text ? { text: s.text.slice(0, 200) } : {}),
+      ...(s.again && typeof s.again === "object" ? { again: {
+        ...(typeof s.again.selector === "string" ? { selector: s.again.selector } : {}),
+        ...(typeof s.again.role === "string" ? { role: s.again.role } : {}),
+        ...(typeof s.again.name === "string" ? { name: s.again.name } : {}),
+      } } : {}),
+      ...(typeof s.wait === "string" && ["ok", "click", "nav", "input", "submit"].includes(s.wait) ? { wait: s.wait } : {}),
+      ...(s.watchLost === true ? { watchLost: true } : {}),
+    });
+  });
+
   /*
    * §5: the DevTools protocol itself, one call wide.
    *
@@ -2195,9 +3105,6 @@ function registerIpc(win) {
    * be holding a connection to see them is back to the polling §1 removed.
    * They queue here, newest last, and `cdp --events` drains them.
    */
-  /** @type {Map<Electron.WebContents, Array<{at: number, method: string, params: unknown}>>} */
-  const guestCdpEvents = new Map();
-  const CDP_EVENT_CAP = 500;
   /**
    * Screencast frames, kept apart from the events above and for two reasons:
    * a frame is a picture — thirty of them would push every debugger pause
@@ -2209,80 +3116,6 @@ function registerIpc(win) {
   const guestScreencast = new Map();
   const SCREENCAST_CAP = 30;
 
-  /*
-   * WHERE A DOWNLOAD IS MEANT TO LAND, per guest.
-   *
-   * `download` arms `Browser.setDownloadBehavior` with a directory, clicks, and
-   * then waits for `Page.downloadWillBegin` and `Page.downloadProgress` to come
-   * back through the event buffer. Measured through the CLI: the click happens
-   * — the test server logged three requests for the file — and neither event
-   * ever arrives, so the verb waits out its whole timeout and nothing lands.
-   *
-   * The reason is that Electron takes a guest's download itself, on the
-   * session's `will-download`, before the protocol is involved at all. Nothing
-   * in this app listened for it (grep: zero handlers), so the item was left to
-   * the default behaviour and CDP had nothing to report.
-   *
-   * So the path is remembered here when the verb asks for it, the session
-   * handler below saves the file where it was asked to go, and it pushes the
-   * two events the waiting loop is already listening for. Same shape as the
-   * printToPDF branch further down and for the same reason: the answer stops
-   * coming from the protocol without anything downstream needing to learn that.
-   */
-  /** Save paths chosen for downloads still in flight. @type {Set<string>} */
-  const reservedSavePaths = new Set();
-  /** lstat, not exists: a dangling symlink is a name that is taken. @param {string} p */
-  const pathTaken = (p) => { try { fs.lstatSync(p); return true; } catch { return false; } };
-  /** Sessions already wired, so a second download does not stack handlers. */
-  const downloadWired = new WeakSet();
-
-  /** @param {Electron.WebContents} guest */
-  const wireDownloads = (guest) => {
-    const ses = guest.session;
-    if (downloadWired.has(ses)) return;
-    downloadWired.add(ses);
-    ses.on("will-download", (_ev, item, wc) => {
-      // Keyed by the tab the download came from and by nothing else: a fallback
-      // to the tab that wired the session let a download from ANY other tab of
-      // the profile land in an agent's directory.
-      const dir = guestDownloadDir.get(wc);
-      if (!dir) return; // nobody asked for this one; leave Electron's default alone
-      // One download per arming. The verb arms a directory for the click it is
-      // about to make; left armed, the next download of the profile took it.
-      guestDownloadDir.delete(wc);
-      // Chromium renames onto the path only when the download finishes, so a
-      // name is held from here to `done`: two downloads into one directory
-      // must not both find it free.
-      const savePath = uniqueSavePath(dir, item.getFilename(), (p) => reservedSavePaths.has(p) || pathTaken(p));
-      reservedSavePaths.add(savePath);
-      const name = path.basename(savePath);
-      item.setSavePath(savePath);
-      // Spelled out because this file is typechecked and an untyped parameter
-      // here is two more tsc errors on a list that has to stay readable.
-      /** @param {string} method @param {Record<string, unknown>} params */
-      const push = (method, params) => {
-        const buf = guestCdpEvents.get(wc);
-        if (!buf) return;
-        buf.push({ at: Date.now(), method, params });
-        if (buf.length > CDP_EVENT_CAP) buf.splice(0, buf.length - CDP_EVENT_CAP);
-      };
-      // The guid is the protocol's way of pairing the two events. Electron has
-      // no equivalent, so one is minted and used for both — the waiting loop
-      // only ever compares it with itself.
-      const guid = `agx-dl-${Date.now()}-${Math.round(Math.random() * 1e6)}`;
-      push("Page.downloadWillBegin", { guid, suggestedFilename: name, url: item.getURL() });
-      item.once("done", (_e2, state) => {
-        reservedSavePaths.delete(savePath);
-        push("Page.downloadProgress", {
-          guid,
-          // `completed` and `canceled` are the two the loop acts on; anything
-          // else it keeps waiting through, which is right — an interrupted
-          // download that resumes still finishes.
-          state: state === "completed" ? "completed" : state === "cancelled" ? "canceled" : String(state),
-        });
-      });
-    });
-  };
 
   /*
    * A favicon as `data:`, so the tab strip stops asking the network.
@@ -2388,6 +3221,8 @@ function registerIpc(win) {
   });
 
   ipcMain.handle("ag:browserCdp", async (_e, req) => {
+    // Same gate as ag:browserInput: only the app's own window or a lane's.
+    if (_e.sender !== win.webContents && !isLaneHost(_e.sender)) return { ok: false, error: "only the app's own window sends DevTools calls" };
     /*
      * THE TAB THE CALLER NAMED, not whichever one is in front.
      *
@@ -2487,7 +3322,7 @@ function registerIpc(win) {
     if (method === "Browser.setDownloadBehavior") {
       const p = (req && req.params) || {};
       if (p.behavior === "allow" && typeof p.downloadPath === "string" && p.downloadPath) {
-        guestDownloadDir.set(guest, p.downloadPath);
+        guestDownloadDir.set(guest, { dir: p.downloadPath, at: Date.now() });
         wireDownloads(guest);
       } else {
         guestDownloadDir.delete(guest);
@@ -3270,7 +4105,11 @@ function registerIpc(win) {
       const base = slug.toLowerCase().endsWith(".png") ? slug.slice(0, -4) : slug;
       const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
       const file = path.join(app.getPath("downloads"), `${base}-${stamp}.png`);
-      fs.writeFileSync(file, img.toPNG());
+      // Async: a sync write froze the main thread (and with it every window)
+      // for as long as Downloads took to accept the file. toPNG() itself still
+      // encodes here; Electron has no off-thread encoder. Not measured: sizes
+      // are estimates from the audit, not a profile.
+      await fs.promises.writeFile(file, img.toPNG());
       return { ok: true, path: file };
     } catch (e) {
       return { ok: false, error: String(e instanceof Error ? e.message : e) };
@@ -3339,7 +4178,7 @@ function registerIpc(win) {
           if (how === "save") {
             const stamp0 = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
             const file0 = path.join(app.getPath("downloads"), `agentglass-page-${sz.width}x${sz.height}-${stamp0}.png`);
-            fs.writeFileSync(file0, img0.toPNG());
+            await fs.promises.writeFile(file0, img0.toPNG()); // async: see ag:saveImage
             return { ok: true, width: sz.width, height: sz.height, cut: false, path: file0 };
           }
           clipboard.writeImage(img0);
@@ -3368,7 +4207,7 @@ function registerIpc(win) {
       if (how === "save") {
         const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
         const file = path.join(app.getPath("downloads"), `agentglass-page-${width}x${height}-${stamp}.png`);
-        fs.writeFileSync(file, img.toPNG());
+        await fs.promises.writeFile(file, img.toPNG()); // async: see ag:saveImage
         return { ok: true, width, height, cut, path: file };
       }
       clipboard.writeImage(img);
@@ -3459,6 +4298,17 @@ function registerIpc(win) {
 
   ipcMain.handle("ag:setFullscreen", (_e, on) => { win.setFullScreen(!!on); return win.isFullScreen(); });
   ipcMain.handle("ag:isFullscreen", () => win.isFullScreen());
+  /* The renderer's answer to "ag:open-link" when the setting says the machine's
+     browser: the one place the window hands a URL to the OS. http(s) only. */
+  ipcMain.handle("ag:open-machine", (e, url) => {
+    if (e.sender !== win.webContents) return false;
+    try {
+      const u = new URL(String(url));
+      if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+      void shell.openExternal(u.href);
+      return true;
+    } catch { return false; }
+  });
   ipcMain.handle("ag:setZoom", (_e, f) => { win.webContents.setZoomFactor(f); return f; });
   /* The see-through sidebar. macOS and Windows take it on a live window
      (vibrancy, acrylic). On Linux a window is transparent or it is not from the
@@ -3482,6 +4332,7 @@ function registerIpc(win) {
 
   ipcMain.handle("ag:powerStatus", () => power.status());
   ipcMain.handle("ag:setPowerMode", (_e, m) => power.setMode(String(m)));
+  ipcMain.handle("ag:releasePower", () => power.release());
 
   // What pressing a notification does first: the window it leads to has to be
   // on screen. Only the app's own window answers, so a guest page cannot use
@@ -3684,6 +4535,10 @@ const guestInitScripts = new WeakMap();
  *  means something different when the attacher is this map instead of a
  *  human's DevTools, so it checks here before believing that. */
 const guestOwnsDebugger = new WeakSet();
+/** Guide mode's isolated-world observer per guest (guide-observer.js), made on
+ *  the first point and stopped on guide end, detach or the guest's destroyed.
+ *  @type {WeakMap<WebContents, ReturnType<typeof createGuideObserver>>} */
+const guideObservers = new WeakMap();
 
 /** What `intercept` is holding for each guest, newest set wins. Empty means the
  *  Fetch domain is off — see `Fetch.agxSetRules`.
@@ -3847,6 +4702,8 @@ function guardWebviews(win, opts = {}) {
 
   win.webContents.on("did-attach-webview", (_e, guest) => {
     if (opts.lane) laneGuests.add(guest);
+    // Agent lanes get the download handler from the start: see will-download.
+    if (opts.lane) wireDownloads(guest);
     // A guest is its own Chromium process and its key events never reach the
     // renderer, so with a page focused every app shortcut silently stops
     // working — the workspace cannot be switched or closed and the pane is a
@@ -4128,7 +4985,7 @@ function guardWebviews(win, opts = {}) {
          with an empty directory. While THIS tab is armed the link is fetched
          here, by the tab that holds the arming, and no tab opens. A lane takes
          this branch too: it is where agents run the verb. */
-      if (guestDownloadDir.has(guest)) {
+      if (armedEntry(guest)) {
         guest.downloadURL(safe);
         return { action: "deny" };
       }
@@ -4291,8 +5148,9 @@ function guardWebviews(win, opts = {}) {
         try {
           const line = `${new Date().toISOString()} ${what} ${String(detail || "").slice(0, 300)}\n`;
           const file = path.join(app.getPath("userData"), "browser-popups.log");
-          if (fs.existsSync(file) && fs.statSync(file).size > 100_000) fs.writeFileSync(file, "");
-          fs.appendFileSync(file, line);
+          // The shared buffered writer: a page spamming popups cost 3 sync
+          // syscalls per note. It rotates to .1/.2 now instead of truncating.
+          rotatingAppend(file, line, 100_000);
         } catch { /* a log nobody can write is not worth an exception */ }
       };
       note("open", details.url);
@@ -4390,7 +5248,8 @@ function guardWebviews(win, opts = {}) {
  * app's own renderer asks (`ag:laneOpen`, `ag:laneClose`). The count and the
  * memory are capped here too, because this is where they are spent.
  */
-const LANE_FRAME_RATE = 30;
+/* Paint rate: 30 fps while an agent drives the lane, not painting after 10 s
+   with no verb, raised before the next one acts (electron/lane-paint.js). */
 const LANE_MAX = 4;
 /** Working set of every lane's processes together, in MB. A lane is a renderer
  *  plus a guest; software paint makes an animated page dear. */
@@ -4398,6 +5257,10 @@ const LANE_RSS_MB = Number(process.env.AGENTGLASS_LANE_RSS_MB) || 2048;
 /** id -> its window, its guest, and its container. Ids are what the server minted.
  *  @type {Map<string, { host: Electron.BrowserWindow, guest: Electron.WebContents | null, slug: string, private: boolean, ephemeral: boolean }>} */
 const laneHosts = new Map();
+
+/** id -> the person's watch on that lane, while the Browser pane shows it (lane-watch.js).
+ *  @type {Map<string, ReturnType<typeof createLaneWatch>>} */
+const laneWatches = new Map();
 
 /** Clear an in-memory ephemeral partition's storage and cache — a lane's fork
  *  (`destroyLaneHost`, below) and a tab's (`ag:tabEphemeralClose`, further
@@ -4467,15 +5330,92 @@ function createLaneHost(id, slug, ephemeral) {
       backgroundThrottling: false,
     },
   });
-  host.webContents.setFrameRate(LANE_FRAME_RATE);
+  const paint = createLanePaint(host.webContents);
+  paint.touch();
   guardWebviews(host, { lane: true, laneId: id });
   const entry = /** @type {NonNullable<ReturnType<typeof laneHosts.get>>} */
     ({ host, guest: null, slug, private: !ephemeral && slug === id, ephemeral: !!ephemeral });
-  host.webContents.on("did-attach-webview", (_e, guest) => { entry.guest = guest; });
+  host.webContents.on("did-attach-webview", (_e, guest) => { entry.guest = guest; watchLaneGuest(guest, paint); paint.touch(); onVaultLaneGuest(id, guest); });
   laneHosts.set(id, entry);
-  host.once("closed", () => { laneHosts.delete(id); });
+  host.once("closed", () => { paint.dispose(); laneWatches.get(id)?.stop(); laneWatches.delete(id); laneHosts.delete(id); });
   host.loadURL(`${APP_ORIGIN}/#lane=${encodeURIComponent(id)}${ephemeral ? "&t=eph" : slug ? `&p=${slug}` : ""}`);
   return host;
+}
+
+/**
+ * What a vault pull still has to put into a lane through its page: partitioned
+ * cookies (until the guest exists) and localStorage per origin (until the
+ * guest is on that origin). Values; main only; dropped when the lane dies.
+ * @type {Map<string, { chips: Record<string, unknown>[], storage: Map<string, { origin: string, local: Record<string, string> }> }>}
+ */
+const vaultPending = new Map();
+
+/** Network.setCookie on a lane's guest, sharing the debugger the way the other
+ *  verbs do: attach only when nobody is, detach only what this attached.
+ *  @param {Electron.WebContents} guest @param {Record<string, unknown>[]} chips */
+async function setChipsOnGuest(guest, chips) {
+  let set = 0;
+  let failed = 0;
+  if (!chips.length) return { set, failed };
+  const ours = guestOwnsDebugger.has(guest);
+  if (guest.debugger.isAttached() && !ours) return { set, failed: chips.length };
+  let attached = false;
+  try {
+    if (!ours) { guest.debugger.attach("1.3"); attached = true; }
+    for (const c of chips) {
+      try { const r = await guest.debugger.sendCommand("Network.setCookie", c); if (r && r.success === false) failed += 1; else set += 1; }
+      catch { failed += 1; }
+    }
+  } catch { failed += chips.length - set - failed; }
+  finally { if (attached) { try { guest.debugger.detach(); } catch { /* gone */ } } }
+  return { set, failed };
+}
+
+/** Put one origin's storage into the guest's document when it is on that
+ *  origin, then reload once so the site's own scripts start with it.
+ *  @param {string} id @param {Electron.WebContents} guest */
+async function pourLaneStorage(id, guest) {
+  const p = vaultPending.get(id);
+  if (!p || !p.storage.size || guest.isDestroyed()) return;
+  let origin;
+  try { origin = new URL(guest.getURL()).origin; } catch { return; }
+  const s = p.storage.get(origin);
+  if (!s) return;
+  p.storage.delete(origin);
+  try {
+    const n = await guest.executeJavaScriptInIsolatedWorld(999, [{ code: storageScript(s) }]);
+    if (Number(n) > 0 && !guest.isDestroyed()) guest.reload();
+  } catch { /* the page went away; the lane can be filled again */ }
+}
+
+/** Partitioned cookies now when the lane's guest exists, else when it
+ *  attaches; storage when the guest reaches each origin.
+ *  @param {string} id @param {Record<string, unknown>[]} chips
+ *  @param {{ origin: string, local: Record<string, string> }[]} storage */
+async function fillLaneGuest(id, chips, storage) {
+  const p = vaultPending.get(id) || { chips: /** @type {Record<string, unknown>[]} */ ([]), storage: new Map() };
+  for (const s of storage) p.storage.set(s.origin, s);
+  const guest = laneHosts.get(id)?.guest;
+  let done = { set: 0, failed: 0 };
+  if (guest && !guest.isDestroyed()) {
+    done = await setChipsOnGuest(guest, chips);
+    /* The lane can close during that await: destroyLaneHost already cleared
+       vaultPending, so nothing is written back for a dead lane (New 4). */
+    if (!laneHosts.has(id)) return { ...done, waiting: 0 };
+    void pourLaneStorage(id, guest);
+  } else p.chips.push(...chips);
+  if (p.chips.length || p.storage.size) vaultPending.set(id, p);
+  return { ...done, waiting: p.chips.length + p.storage.size };
+}
+
+/** A lane's guest just attached: what a pull left waiting goes in now.
+ *  @param {string} id @param {Electron.WebContents} guest */
+function onVaultLaneGuest(id, guest) {
+  guest.on("did-navigate", () => { void pourLaneStorage(id, guest); });
+  const p = vaultPending.get(id);
+  if (!p || !p.chips.length) return;
+  const chips = p.chips.splice(0);
+  void setChipsOnGuest(guest, chips);
 }
 
 /** @param {Electron.WebContents} wc */
@@ -4487,7 +5427,18 @@ function destroyLaneHost(id) {
   const l = laneHosts.get(id);
   if (!l) return false;
   laneHosts.delete(id);
+  laneWatches.get(id)?.stop();
+  laneWatches.delete(id);
   if (!l.host.isDestroyed()) l.host.destroy();
+  /* Sign-out = the lane dies (decision F1): its ephemeral jar is wiped just
+     below. Logged per site so the pull log shows it. */
+  vaultPending.delete(id);
+  const filled = vaultLanes.drop(id);
+  if (filled) {
+    for (const [site, vault] of filled.sites) {
+      try { appendPullLog(vaultDirFor(), { event: "signout", site, agent: filled.agent, lane: id, vault, count: 0 }); } catch { /* the log is best effort; the wipe is not */ }
+    }
+  }
   if (l.ephemeral) {
     // See `wipeEphemeralPartition`: nothing on disk to begin with, but the
     // template's cookies/storage/cache are still live in this process's
@@ -4609,7 +5560,7 @@ function createWindow() {
   let saveTimer;
   const remember = () => {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => saveWindowState(win), 400);
+    saveTimer = setTimeout(() => saveWindowState(win), 1000);
   };
   /* Listed rather than looped, for the reason spelled out beside the winState
      subscriptions above — and because a `for (const ev of [...])` gives tsc a
@@ -4624,6 +5575,15 @@ function createWindow() {
      during a drag and would drown the file; leaving maximised happens once. */
   win.on("unmaximize", () => noteWindow("unmaximize", win));
   win.on("leave-full-screen", () => noteWindow("leave-full-screen", win));
+  /* The one failure the renderer cannot report — see noteHang. */
+  win.on("unresponsive", () => noteHang(win, true));
+  win.on("responsive", () => noteHang(win, false));
+  /* The renderer's process dying outright is not a hang (no `unresponsive`
+     fires for it) and is its own line: reason and exit code, nothing else
+     running at the time can tell you that. */
+  win.webContents.on("render-process-gone", (_e, details) => {
+    appendWindowLog(`${new Date().toISOString()} render-process-gone reason=${details.reason} exitCode=${details.exitCode}\n`);
+  });
   /*
    * And what the relaunch made of the saved state.
    *
@@ -4643,7 +5603,7 @@ function createWindow() {
   });
   // And once more on the way out, unthrottled: the debounce would otherwise be
   // cancelled by the process ending.
-  win.on("close", () => { clearTimeout(saveTimer); saveWindowState(win); });
+  win.on("close", () => { clearTimeout(saveTimer); saveWindowState(win, true); });
   /*
    * THE MOUSE'S BACK BUTTON NEVER REACHES THE PAGE.
    *
@@ -4770,12 +5730,34 @@ function keepUsefulShortcuts(win) {
 
 /** @param {AppWindow} win */
 function openLinksOutside(win) {
+  /* A link is never dropped: until the renderer has registered its route (the
+     one-time "ag:link-route-ready"), URLs wait here and flush on ready. A
+     reloading renderer loses its route, so it waits again; a crashed one hands
+     http(s) to the OS. */
+  let linkRouteReady = false;
+  /** @type {string[]} */
+  const pendingLinks = [];
+  ipcMain.on("ag:link-route-ready", (e) => {
+    if (e.sender !== win.webContents) return;
+    linkRouteReady = true;
+    for (const u of pendingLinks.splice(0)) if (!win.isDestroyed()) win.webContents.send("ag:open-link", u);
+  });
+  win.webContents.on("did-start-navigation", (_e, _u, inPlace, isMain) => { if (isMain && !inPlace) linkRouteReady = false; });
+  win.webContents.on("render-process-gone", () => {
+    linkRouteReady = false;
+    for (const u of pendingLinks.splice(0)) shell.openExternal(u);
+  });
   /** @param {string} url */
   const external = (url) => {
     try {
       const u = new URL(url);
       if (u.protocol !== "http:" && u.protocol !== "https:") return false;
-      shell.openExternal(url);
+      /* The "Open web links in" setting lives in the renderer, so it decides
+         (agentglass browser or the machine's). Only a window that cannot be
+         asked goes straight to the OS. */
+      if (!win.isDestroyed() && !win.webContents.isDestroyed() && linkRouteReady && !win.webContents.isCrashed()) win.webContents.send("ag:open-link", u.href);
+      else if (!win.isDestroyed() && !win.webContents.isDestroyed() && !linkRouteReady && !win.webContents.isCrashed()) pendingLinks.push(u.href);
+      else shell.openExternal(u.href);
       return true;
     } catch { return false; }
   };
@@ -4798,7 +5780,37 @@ function openLinksOutside(win) {
   });
 }
 
+/* A GPU process or utility process dying is app-wide, not one window's, so it
+ * is registered once rather than per window. */
+app.on("child-process-gone", (_e, details) => {
+  appendWindowLog(`${new Date().toISOString()} child-process-gone type=${details.type} reason=${details.reason} exitCode=${details.exitCode}\n`);
+});
+
+/**
+ * THE MAIN THREAD STALLING, without a renderer ever going unresponsive.
+ *
+ * `unresponsive` is Chromium timing the RENDERER out; nothing watches this
+ * process's own event loop. A `setInterval` due every two seconds that
+ * fires 700ms late has been blocked by something ON THIS THREAD for 700ms —
+ * synchronous fs, a big JSON.parse, anything — and `unresponsive` never sees
+ * it because the renderer was never asked to answer. One timer, armed once:
+ * see `stallProbe.lagOf`/`isStall` for the math this reads off a real clock.
+ */
+function startMainStallProbe() {
+  let scheduledAt = Date.now() + stallProbe.INTERVAL_MS;
+  setInterval(() => {
+    const now = Date.now();
+    const lag = stallProbe.lagOf(scheduledAt, now);
+    scheduledAt = now + stallProbe.INTERVAL_MS;
+    if (stallProbe.isStall(lag)) {
+      appendWindowLog(`${new Date(now).toISOString()} main stall ms=${lag} last=${lastIpcChannel}\n`);
+    }
+  }, stallProbe.INTERVAL_MS);
+}
+
 app.whenReady().then(async () => {
+  startMainStallProbe();
+  protectMemory((m) => appendWindowLog(`${new Date().toISOString()} ${m}\n`));
   // No menu bar, at all.
   //
   // `autoHideMenuBar` only hides it until Alt is pressed — and this app embeds
@@ -4891,6 +5903,33 @@ app.whenReady().then(async () => {
     let gone = 0;
     for (const id of Array.from(laneHosts.keys())) if (!ids.includes(id) && destroyLaneHost(id)) gone++;
     return gone;
+  });
+  /* The person's Browser pane lists each lane's tab and can watch it: read
+     and look only. Nothing here sends the page an event or takes its focus. */
+  ipcMain.handle("ag:laneTabs", (e) => {
+    if (!mainWindow || e.sender !== mainWindow.webContents) return [];
+    return [...laneHosts.entries()].map(([id, l]) => {
+      const g = l.guest && !l.guest.isDestroyed() ? l.guest : null;
+      return { id, url: g ? g.getURL() : "", title: g ? g.getTitle() : "" };
+    });
+  });
+  ipcMain.handle("ag:laneWatch", (e, id, on) => {
+    if (!mainWindow || e.sender !== mainWindow.webContents) return { ok: false, error: "only the app window watches lanes" };
+    const l = typeof id === "string" ? laneHosts.get(id) : undefined;
+    if (!l || l.host.isDestroyed()) return { ok: false, error: "no lane with that id" };
+    if (on !== true) { laneWatches.get(id)?.stop(); laneWatches.delete(id); return { ok: true }; }
+    if (laneWatches.has(id)) return { ok: true };
+    const to = mainWindow.webContents;
+    const w = createLaneWatch(l.host.webContents, (image) => {
+      if (to.isDestroyed() || image.isEmpty()) return;
+      const size = image.getSize();
+      const small = size.width > 960 ? image.resize({ width: 960 }) : image;
+      const g = l.guest && !l.guest.isDestroyed() ? l.guest : null;
+      to.send("ag:laneFrame", { id, src: `data:image/jpeg;base64,${small.toJPEG(70).toString("base64")}`, url: g ? g.getURL() : "", title: g ? g.getTitle() : "" });
+    });
+    laneWatches.set(id, w);
+    w.start();
+    return { ok: true };
   });
   ipcMain.handle("ag:laneClose", (e, id) => {
     if (!mainWindow || e.sender !== mainWindow.webContents) return { ok: false, error: "only the app window closes lanes" };
@@ -5002,7 +6041,11 @@ app.whenReady().then(async () => {
   void ensureServer(adopt);
   /* Never fatal. A window that keeps the machine awake is a convenience; a
      window that does not open is not one. */
-  try { power.init({ configDir: CONFIG_DIR, apiOrigin: () => apiOrigin, token: () => (sidecarUp ? currentToken() : "") }); }
+  try { power.init({
+    configDir: CONFIG_DIR, apiOrigin: () => apiOrigin, token: () => (sidecarUp ? currentToken() : ""),
+    // Pushed, so the header button needs no clock of its own.
+    onChange: (st) => { for (const w of BrowserWindow.getAllWindows()) { try { w.webContents.send("ag:power-changed", st); } catch { /* window went away */ } } },
+  }); }
   catch (e) { console.error("[power] not started:", e instanceof Error ? e.message : e); }
 });
 
@@ -5020,6 +6063,8 @@ app.whenReady().then(async () => {
  * SIGKILL is the one case this cannot cover; nothing in-process can.
  */
 let stopped = false;
+/** Timestamps of recent unexpected sidecar exits; decideRespawn reads it. */
+let respawnFailures = /** @type {number[]} */ ([]);
 function stopSidecar() {
   if (stopped) return;
   stopped = true;
@@ -5045,6 +6090,7 @@ function killSidecar() {
 app.on("before-quit", () => { try { session.defaultSession.flushStorageData(); } catch { /* no session yet */ } });
 app.on("before-quit", stopSidecar);
 app.on("will-quit", stopSidecar);
+app.on("will-quit", flushLogsSync);
 process.on("exit", stopSidecar);
 for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
   process.on(sig, () => { stopSidecar(); app.quit(); });
