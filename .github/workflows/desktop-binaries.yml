@@ -12,9 +12,20 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "An existing release tag to rebuild and upload installers onto (e.g. v1.1.0). Empty: build only."
+        required: false
+        default: ""
 
 permissions:
   contents: read
+
+# The tag the installers belong to: the pushed tag, or the one named when the
+# workflow is run by hand to rebuild a platform that failed (a retired runner
+# image left v1.1.0 without its .dmg files).
+env:
+  RELEASE_TAG: ${{ inputs.tag || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || '' }}
 
 
 jobs:
@@ -33,10 +44,10 @@ jobs:
           - os: ubuntu-22.04 # oldest supported glibc — newer runners break older distros
             bunTarget: bun-linux-x64
             builder: --linux AppImage deb
-          - os: macos-14
+          - os: macos-15
             bunTarget: bun-darwin-arm64
             builder: --mac dmg --arm64
-          - os: macos-14 # Intel mac cross-built from the arm64 runner
+          - os: macos-15 # Intel mac cross-built from the arm64 runner
             bunTarget: bun-darwin-x64
             builder: --mac dmg --x64
           - os: windows-latest
@@ -48,6 +59,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          # A rebuild by hand builds the tag's code, not the branch it was run from.
+          ref: ${{ inputs.tag || github.ref }}
           # Full history + tags, so `git describe --tags` in build.mjs can name
           # the release this build descends from. A shallow checkout has no tag
           # object, which would stamp the installer with an empty baseTag and
@@ -174,9 +187,9 @@ jobs:
       # latest-linux.yml says `version: 9.9.9`, the deb's control Version is
       # 9.9.9, and `git status electron/package.json` is empty afterwards.
       - name: Version from the tag
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.RELEASE_TAG != ''
         shell: bash
-        run: echo "PKG_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+        run: echo "PKG_VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
 
       # Stamp provenance INTO staging, next to the sidecar CI just compiled, so
       # the installer carries build-info.json (version/commit/origin/baseTag)
@@ -229,7 +242,7 @@ jobs:
       # Per matrix leg on purpose: the subject has to be hashed on the machine
       # that built it, before anything else can touch the bytes.
       - name: Attest the installers
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.RELEASE_TAG != ''
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-path: |
@@ -239,7 +252,7 @@ jobs:
             electron/dist-app/*.exe
 
       - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.RELEASE_TAG != ''
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -248,11 +261,11 @@ jobs:
             \( -name '*.AppImage' -o -name '*.deb' -o -name '*.dmg' -o -name '*.exe' \) \
             -print0 | while IFS= read -r -d '' path; do
               echo "uploading $path"
-              gh release upload "$GITHUB_REF_NAME" "$path" --clobber --repo "$GITHUB_REPOSITORY"
+              gh release upload "$RELEASE_TAG" "$path" --clobber --repo "$GITHUB_REPOSITORY"
             done
 
       - name: Keep the build even when there is no tag
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        if: env.RELEASE_TAG == ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: agentglass-${{ matrix.bunTarget }}
@@ -283,7 +296,7 @@ jobs:
   # matrix leg went red — it grades the release, not the jobs above it.
   release-integrity:
     needs: build
-    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ always() && (inputs.tag != '' || startsWith(github.ref, 'refs/tags/v')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write # the SHA256SUMS upload
@@ -296,7 +309,7 @@ jobs:
           # `|| true`, and it is the whole point: a tag with nothing attached —
           # every leg red — is the case this job exists to REPORT. Dying here
           # would report it as a broken workflow instead of as a broken release.
-          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir assets \
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir assets \
             --pattern '*.dmg' --pattern '*.AppImage' --pattern '*.deb' --pattern '*.exe' --pattern '*.apk' || true
           ls -l assets
 
@@ -319,12 +332,12 @@ jobs:
           shopt -s nullglob
           files=(*.dmg *.AppImage *.deb *.exe *.apk)
           if [ ${#files[@]} -eq 0 ]; then
-            echo "::warning::$GITHUB_REF_NAME has no installers attached — nothing to checksum"
+            echo "::warning::$RELEASE_TAG has no installers attached — nothing to checksum"
             exit 0
           fi
           sha256sum "${files[@]}" > SHA256SUMS
           cat SHA256SUMS
-          gh release upload "$GITHUB_REF_NAME" SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload "$RELEASE_TAG" SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
 
       # The gate. One check per button the download page offers, matched with
       # the same patterns scripts/landing-release.mjs uses to fill those buttons
@@ -341,9 +354,9 @@ jobs:
           have '\.exe$'                    || missing+=("Windows (.exe)")
           if [ ${#missing[@]} -gt 0 ]; then
             for m in "${missing[@]}"; do
-              echo "::error::$GITHUB_REF_NAME has no installer for $m — its download button leads nowhere"
+              echo "::error::$RELEASE_TAG has no installer for $m — its download button leads nowhere"
             done
             echo "Fix the platform's build and re-run this workflow on the tag; the release stays incomplete until then." >&2
             exit 1
           fi
-          echo "every advertised platform has an installer on $GITHUB_REF_NAME"
+          echo "every advertised platform has an installer on $RELEASE_TAG"
