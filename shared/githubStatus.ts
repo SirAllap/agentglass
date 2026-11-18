@@ -28,6 +28,24 @@ export interface GithubProblem {
   url: string;
 }
 
+/**
+ * What a failed read says by itself: the status code and GitHub's own words,
+ * taken from the error the read returned ("gh: Bad Gateway (HTTP 502)",
+ * "HTTP 404: Not Found (https://api.github.com/...)"). Null when the error has
+ * no status code in it (a timeout, no `gh`): then there is nothing GitHub said.
+ */
+export function problemFromReadError(error: string | null | undefined): GithubProblem | null {
+  const line = (error ?? "").trim().split("\n")[0] ?? "";
+  const code = /\bHTTP\s+(\d{3})\b/.exec(line)?.[1];
+  if (!code) return null;
+  const message = line
+    .replace(/^gh:\s*/i, "")
+    .replace(/\(?\bHTTP\s+\d{3}\b\)?:?/g, "")
+    .replace(/\(https?:\/\/[^)]*\)/g, "")
+    .replace(/\s+/g, " ").trim();
+  return { text: message ? `${code} ${message}` : code, url: "https://www.githubstatus.com" };
+}
+
 /** Whole minutes UNKNOWN has been showing, or null while it is not yet worth saying. */
 export function stuckMinutes(since: number | null | undefined, now: number): number | null {
   if (since == null || now < since || now - since < STUCK_AFTER_MS) return null;

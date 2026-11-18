@@ -12,6 +12,7 @@
  */
 import { ROLE_IDS, closed, looksLikeSecret, validChain, type Chain, type Validated } from "./orchestration.ts";
 import { NEVER_LIFTABLE, type RoleId } from "./workerRoles.ts";
+import { refusal } from "./refusal.ts";
 
 export interface FlowRole {
   /** Unique inside one flow, and never reused for another role. */
@@ -28,12 +29,28 @@ export interface FlowRole {
   tools: string[];
   readsOnly: boolean;
   /** Command prefixes this role may run that the floor refuses, `docker` or
-   *  `make deploy`; never one of `NEVER_LIFTABLE`. */
+   *  `git commit`: only what the project's ceiling already lifts, and never one
+   *  of `NEVER_LIFTABLE`. */
   allow?: string[];
+  /** May call the Agent tool, so a team skill that spawns reviewer subagents
+   *  (/adversarial-review) can run. Off by default: a worker's subagent
+   *  inherits its own sandbox and envelope, nothing wider, but starting one
+   *  spends its own tokens and is a class escalation to turn on
+   *  (shared/settingClass.ts), never applied for an agent without the
+   *  person's click. Left out means off, as every role ran before this field
+   *  existed. */
+  mayStartSubagents?: boolean;
   /** The orchestrator must not skip this step when it is on the path. */
   required: boolean;
   /** An id from `stages`. */
   stage: string;
+  /** Sent as the turn's first line, alone, before the prompt: a command Claude
+   *  Code runs itself, e.g. `/jira-fix-card {card}`. `{card}` becomes the card
+   *  key the worker was started with, or its `--prompt` text when it has none.
+   *  Empty, or left out, means the turn starts as it always did. Only a Claude
+   *  turn's first message carries it; another engine, or a later turn of the
+   *  same worker, is unchanged. */
+  firstCommand?: string;
   /** The block's icon name and colour token, chosen by the person and drawn as
    *  it is. `hue` is a token name: the screen reads `var(--<hue>)`. */
   ico: string;
@@ -81,10 +98,35 @@ export const FLOW_MAX_STAGES = 12;
 export const FLOW_MAX_EDGES = 40;
 export const FLOW_MAX_TOOLS = 12;
 export const FLOW_MAX_ALLOW = 8;
-export const FLOW_PROMPT_MAX = 2000;
+export const FLOW_PROMPT_MAX = 10000;
 export const FLOW_NAME_MAX = 60;
+
+/** The id of the shipped Gate, the person's last word. A person step of your own is an ordinary step; this one is fixed. */
+export const FLOW_GATE_ID = "landing";
+
+/**
+ * Why a path is refused for where the Gate sits, or null. When the Gate is on
+ * the path it is last: nothing runs after the person's answer. The server, the
+ * List, the Board and the Canvas all ask this one rule.
+ */
+export function gatePathWhy(path: readonly string[], was?: readonly string[]): string | null {
+  const at = path.indexOf(FLOW_GATE_ID);
+  if (at < 0 || at === path.length - 1) return null;
+  /* A flow saved before this rule may already have the Gate mid-path. It still loads, and any
+     move that does not leave the Gate further from the end than it was is allowed, so the
+     person can fix it a step at a time or leave it. Only a new break is refused. */
+  if (was && gateGap(path) <= gateGap(was)) return null;
+  return `the Gate ("${FLOW_GATE_ID}") has to be the last step: nothing runs after the person's answer`;
+}
+
+/** How many steps follow the Gate; 0 when it is last or not on the path. */
+export function gateGap(path: readonly string[]): number {
+  const at = path.indexOf(FLOW_GATE_ID);
+  return at < 0 ? 0 : path.length - 1 - at;
+}
 export const FLOW_DOES_MAX = 200;
 export const FLOW_ROUNDS_MAX = 12;
+export const FLOW_FIRST_COMMAND_MAX = 200;
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 ._:/'()+\u00b7-]{0,59}$/;
@@ -114,7 +156,7 @@ const bad = (field: string, what: string): { ok: false; error: string } => ({ ok
 const failed = (r: unknown): r is { ok: false; error: string } =>
   !!r && typeof r === "object" && (r as { ok?: unknown }).ok === false && typeof (r as { error?: unknown }).error === "string";
 
-const ROLE_KEYS = ["id", "name", "does", "prompt", "policyRole", "chain", "tools", "readsOnly", "allow", "required", "stage", "ico", "hue", "actor", "resolvedChain"] as const;
+const ROLE_KEYS = ["id", "name", "does", "prompt", "firstCommand", "policyRole", "chain", "tools", "readsOnly", "allow", "mayStartSubagents", "required", "stage", "ico", "hue", "actor", "resolvedChain"] as const;
 const ROLE_REQUIRED = ["id", "name", "does", "prompt", "chain", "tools", "readsOnly", "required", "stage", "ico", "hue"] as const;
 
 function wholeIn(v: unknown, lo: number, hi: number): v is number {
@@ -160,7 +202,7 @@ function validAllow(v: unknown, field: string): Validated<string[]> {
     if (looksLikeSecret(t)) return bad(`${field}[${i}]`, "looks like a key; a command prefix is all this field takes");
     const c = t.trim();
     const never = NEVER_LIFTABLE.find((n) => c === n || c.startsWith(`${n} `));
-    if (never) return bad(`${field}[${i}]`, `"${never}" is never granted to a worker, whatever its role: that is done by a person`);
+    if (never) return bad(`${field}[${i}]`, `"${never}" is never granted to a worker, whatever its role: ${refusal("floor", never)}`);
     if (out.includes(c)) return bad(`${field}[${i}]`, "repeats a command the role already has");
     out.push(c);
   }
@@ -171,7 +213,7 @@ function validAllow(v: unknown, field: string): Validated<string[]> {
  * Check a whole flow. Every refusal names the field and says what a person
  * would have to do about it; no stack names reach the screen.
  */
-export function validateFlow(raw: unknown): Validated<Flow> {
+export function validateFlow(raw: unknown, opts: { legacyGate?: boolean } = {}): Validated<Flow> {
   const top = closed(raw, "flow", ["version", "path", "blocks", "roster", "stages", "edges"]);
   if (failed(top)) return top;
   if (top.version !== 1) return bad("flow.version", "has to be 1");
@@ -216,6 +258,13 @@ export function validateFlow(raw: unknown): Validated<Flow> {
     const prompt = o.prompt.trim();
     if (!prompt) return bad(`${at}.prompt`, "is empty; a role says what it does and what it hands back");
     if (prompt.length > FLOW_PROMPT_MAX) return bad(`${at}.prompt`, `is longer than ${FLOW_PROMPT_MAX} characters`);
+    let firstCommand = "";
+    if (o.firstCommand !== undefined) {
+      if (typeof o.firstCommand !== "string") return bad(`${at}.firstCommand`, "has to be text");
+      firstCommand = o.firstCommand.trim();
+      if (firstCommand.length > FLOW_FIRST_COMMAND_MAX) return bad(`${at}.firstCommand`, `is longer than ${FLOW_FIRST_COMMAND_MAX} characters`);
+      if (looksLikeSecret(firstCommand)) return bad(`${at}.firstCommand`, "looks like a key; a command is all this field takes");
+    }
     if (typeof o.readsOnly !== "boolean") return bad(`${at}.readsOnly`, "has to be yes or no");
     if (typeof o.required !== "boolean") return bad(`${at}.required`, "has to be yes or no");
     if (typeof o.stage !== "string" || !stageIds.includes(o.stage)) return bad(`${at}.stage`, "is not one of the stages");
@@ -242,12 +291,15 @@ export function validateFlow(raw: unknown): Validated<Flow> {
     if (!tools.ok) return tools;
     const allow = o.allow === undefined ? { ok: true as const, value: [] } : validAllow(o.allow, `${at}.allow`);
     if (!allow.ok) return allow;
+    if (o.mayStartSubagents !== undefined && typeof o.mayStartSubagents !== "boolean") return bad(`${at}.mayStartSubagents`, "has to be yes or no");
     const role: FlowRole = {
       id: o.id, name: name.value, does, prompt, chain: chain.value, tools: tools.value,
       readsOnly: o.readsOnly, required: o.required, stage: o.stage,
       ico, hue: o.hue as string,
     };
     if (allow.value.length) role.allow = allow.value;
+    if (o.mayStartSubagents === true) role.mayStartSubagents = true;
+    if (firstCommand) role.firstCommand = firstCommand;
     if (o.policyRole !== undefined) role.policyRole = o.policyRole as RoleId;
     if (o.actor === "person") role.actor = "person";
     roles.push(role);
@@ -263,6 +315,9 @@ export function validateFlow(raw: unknown): Validated<Flow> {
     if (onPath.includes(id)) return bad(`flow.path[${i}]`, `"${id}" is on the path twice; a step runs once in one order`);
     onPath.push(id);
   }
+  // `legacyGate`: a stored flow from before the Gate-last rule still loads; the rule is checked on a new save.
+  const gateWhy = opts.legacyGate ? null : gatePathWhy(onPath);
+  if (gateWhy) return bad("flow.path", gateWhy);
   for (let i = 0; i < roles.length; i++) {
     const r = roles[i]!;
     if (r.required && !onPath.includes(r.id)) {

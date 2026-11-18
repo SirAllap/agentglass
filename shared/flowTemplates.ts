@@ -5,7 +5,8 @@
  * Data and not a fixture in a screen, because the Flow screens draw whatever
  * this says, and a project that never saves a flow must still have one to draw.
  * The names, the one-line descriptions and the prompts are the approved Flow
- * mockup's roster, word for word, so the data and the screens cannot drift.
+ * mockup's roster, word for word, and the General role is the one added after
+ * it, so the data and the screens cannot drift.
  */
 import type { Flow, FlowEdge, FlowRole, FlowStage } from "./flow.ts";
 
@@ -37,7 +38,7 @@ const ROSTER: FlowRole[] = [
     id: "builder", name: "Builder", policyRole: "builder", stage: "development", ico: "rover", hue: "g-workspace",
     does: "Writes the change in its own copy and runs the tests it can name.",
     tools: ["read", "run", "write", "commit"],
-    prompt: "You are the Builder. You make the change the handoff asks for, in your own copy of the tree.\n\n- Read the handoff, then the files it names. Do not touch anything else.\n- Run the project tests that cover what you changed. Paste the command and its result.\n- Keep the diff to the ask. No renames, no formatting of files you did not need.\n- Commit locally when the tests pass. Never push.\n- End with: what changed, what you ran, what is still open.",
+    prompt: "You are the Builder. You make the change the handoff asks for, in your own copy of the tree.\n\n- Read the handoff, then the files it names. Do not touch anything else.\n- Drive the browser through its MCP tools, never the agentglass-browser shell command: the shell is sandboxed and has no route to the relay.\n- Run the project tests that cover what you changed. Paste the command and its result.\n- Keep the diff to the ask. No renames, no formatting of files you did not need.\n- Commit locally when the tests pass. Never push.\n- End with: what changed, what you ran, what is still open.",
   }),
   role({
     id: "inspector", name: "Inspector", policyRole: "reviewer", stage: "review", ico: "lens", hue: "g-library", readsOnly: true,
@@ -73,14 +74,14 @@ const ROSTER: FlowRole[] = [
   role({
     id: "devops-server", name: "DevOps · server", stage: "verify", ico: "dish", hue: "g-connections", readsOnly: true,
     does: "Reads the server, the ports and the environment for what the change needs.",
-    chain: [{ engine: "claude", model: "claude-sonnet-5" }, { engine: "opencode", model: "glm-4.6" }],
+    chain: [{ engine: "claude", model: "claude-sonnet-5-5" }, { engine: "opencode", model: "glm-4.6" }],
     tools: ["read", "run"],
     prompt: "You are the DevOps agent for the server. You read the environment; you change nothing.\n\n- Read the compose files, the ports and the environment names the change touches.\n- Name every setting a person must add before the change can run.\n- Never print a secret. Name the key, not its value.\n- End with the list of settings, and what breaks without each one.",
   }),
   role({
     id: "security", name: "Security", stage: "review", ico: "shieldstar", hue: "error", readsOnly: true,
     does: "Reads the diff for what a stranger could do with it.",
-    chain: [{ engine: "claude", model: "claude-sonnet-5" }, { engine: "codex", model: "gpt-5.6-codex" }],
+    chain: [{ engine: "claude", model: "claude-sonnet-5-5" }, { engine: "codex", model: "gpt-5.6-codex" }],
     tools: ["read"],
     prompt: "You are the Security reviewer. You read the diff for what a stranger could do with it.\n\n- Follow every value that comes from outside: a request, a file, a queue, a name.\n- Name the line, the input, and the action it reaches.\n- Say when a guard exists and what it does not cover.\n- Do not repeat a linter. Do not print a secret.\n- End with CLEAR, or the findings worst first.",
   }),
@@ -126,6 +127,13 @@ const ROSTER: FlowRole[] = [
     chain: [{ engine: "opencode", model: "glm-4.6" }, { engine: "opencode", model: "big-pickle" }],
     tools: ["read"],
     prompt: "You are the Docs agent. You check that the words still match the code.\n\n- Read the diff, then the docs that describe the same thing.\n- Name each line that is now false, and the sentence that replaces it.\n- Do not rewrite a page for style. Only what the change made wrong.\n- End with the files you changed and the ones you checked and left alone.",
+  }),
+  role({
+    id: "general", name: "General", policyRole: "builder", stage: "development", ico: "chart", hue: "g-general",
+    does: "Anything no other role fits; the brief alone steers it.",
+    tools: ["read", "run", "write", "commit"],
+    // A role must have a prompt, so this one is only the contract: no persona, no habits. Its model follows the builder's policy.
+    prompt: "Do what the brief says and nothing else.\n\n- Take the brief as the whole task; assume nothing about your role.\n- End with what you did, what you did not do, and where the detail is.",
   }),
 ];
 

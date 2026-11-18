@@ -103,6 +103,28 @@ def _default_server(host):
     return f"http://{host}:{port}"
 
 
+def _port_override_note():
+    """AGENTGLASS_PORT set on purpose (an isolated server) loses to the port
+    file, by design: a pane can inherit a stale one. Say so once on stderr,
+    with the way out, instead of quietly reaching the live app."""
+    env = os.environ.get("AGENTGLASS_PORT", "").strip()
+    if not env or os.environ.get("AGENTGLASS_SERVER"):
+        return
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    path = os.path.join(base, "agentglass", "port")
+    try:
+        with open(path, encoding="utf-8") as f:
+            port = f.read().strip()
+    except OSError:
+        return
+    if port.isdigit() and 0 < int(port) < 65536 and port != env:
+        print(f"{os.path.basename(sys.argv[0]) or 'agentglass'}: using :{port} from {path}, not AGENTGLASS_PORT={env}. "
+              f"A pane can inherit a stale one, and then nothing is wrong. "
+              f"Only if you started a test server on :{env}, set AGENTGLASS_SERVER=http://127.0.0.1:{env}",
+              file=sys.stderr)
+
+
+_port_override_note()
 SERVER = _server_or_die((os.environ.get("AGENTGLASS_SERVER") or _default_server("localhost")).rstrip("/"))
 
 

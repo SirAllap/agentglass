@@ -64,15 +64,53 @@ export const canonView = (name: string): string => (VIEW_ALIASES as Record<strin
  *  door that names it must still land, and a guard must be able to tell that
  *  apart from a page Settings has and no longer draws. */
 export const SETTINGS_PAGE_IDS = [
-  "prefs", "appearance", "notifications", "rail", "keys", "terminal", "diff", "browser", "git", "tasks", "hooks", "engines", "orchestration", "polaris", "lantern",
+  "prefs", "appearance", "notifications", "rail", "keys", "terminal", "diff", "browser", "git", "tasks", "hooks", "engines", "orchestration", "polaris", "polarisPrs", "lantern",
   "understudy", "budgets", "recipes", "review-prompts", "saved-replies", "connections", "clickup", "jira", "remote", "plugins",
   "tmux", "privacy", "about", "log", "onboarding",
+  "finder", "perm", "permMain", "permWorkers", "permBrowser", "permOut", "workers", "fplan", "tracker", "devices", "advanced", "inspect",
 ] as const;
 
-/** Old page names, and the page each one means. `resolvePane` in
- *  web/src/lib/openSettings.ts spreads this map, so the two doors cannot drift. */
-export const SETTINGS_PAGE_ALIASES = { lantern: "hooks" } as const;
+/** The pages of the Settings tree: 6 sections, then Advanced and Inspect at the foot. Nav order. */
+export const SETTINGS_TREE_PAGES = [
+  "appearance", "notifications", "keys",
+  "terminal", "finder", "diff", "browser", "git",
+  "perm", "engines", "orchestration", "polaris", "polarisPrs", "workers", "fplan", "hooks",
+  "recipes", "plugins", "understudy",
+  "tasks", "jira", "clickup", "remote",
+  "privacy", "log", "about",
+  "advanced", "inspect",
+] as const;
 
+/** Old page names, and the page each one means NOW (the page of the tree it was folded into, never another old id).
+ *  `resolvePane` in web/src/lib/openSettings.ts reads this map and the agent door validates against it, so the
+ *  two cannot drift; a test holds every id the door ever accepted to a page the tree has. A page that kept its
+ *  id is not listed. */
+export const SETTINGS_PAGE_ALIASES = {
+  // Pages folded into another (ia.md "Removed pages").
+  prefs: "appearance", rail: "appearance", tmux: "advanced",
+  permMain: "perm", permWorkers: "perm", permBrowser: "perm", permOut: "perm",
+  budgets: "engines", "review-prompts": "recipes", "saved-replies": "recipes",
+  connections: "tasks", tracker: "tasks", devices: "remote", onboarding: "about",
+  lantern: "hooks",
+  // The ids the approved Settings mockup uses, and two older spellings. A link or a saved pane written either way lands.
+  window: "appearance", notif: "notifications", sidebar: "appearance", engine: "terminal", usage: "engines", flow: "orchestration",
+  cmds: "recipes", review: "recipes", replies: "recipes", services: "tasks", data: "privacy",
+  activity: "log", under: "understudy", setup: "about",
+  open: "appearance", export: "privacy",
+  // The old Orchestration > Always refused section is the Refused part of Permissions.
+  refused: "perm",
+} as const;
+
+/** The section of its new page each folded page became (for a link that names a section). */
+export const SETTINGS_FOLD_SECTIONS: Readonly<Record<string, string>> = {
+  prefs: "window", rail: "sidebar", tmux: "terminal-engine", permMain: "main-agent", permWorkers: "worker-commands",
+  permBrowser: "browser", permOut: "changes-outside", budgets: "plan-pace",
+  "review-prompts": "review-sessions", "saved-replies": "saved-replies", connections: "services",
+  tracker: "card-tracker", devices: "paired-devices", onboarding: "setup",
+};
+
+/** The kinds of test notification (web/src/lib/notePolicy.ts TEST_KINDS says the same; the handler will not compile if they part). */
+export const NOTIFY_TEST_KINDS = ["news", "waits", "other"] as const;
 export const PANEL_IDS = ["skills", "help", "palette"] as const;
 /** The machine panel's tabs. `ports` was a rail icon of its own; the view it
  *  opened is Resources, and a command written before that still lands there. */
@@ -270,8 +308,8 @@ export const UI_ACTIONS = {
     refine: (a) => (a.name !== undefined ? { name: a.name } : a.dir !== undefined ? { dir: a.dir } : null),
   }),
   "zoom.step": def({ inPlace: true, level: 2, kind: "change", surface: "window zoom in, out or reset", legacy: { cmd: "zoom" }, args: { dir: { t: "num", values: [1, -1, 0] } } }),
-  "settings.open": def({ modals: ["SettingsModal.tsx", "plugins/Market.tsx"],
-    level: 1, kind: "open", surface: "Settings on one page, optionally scrolled to one row (the plugin market is inside page plugins)",
+  "settings.open": def({ modals: ["SettingsModal.tsx", "plugins/Market.tsx", "plugins/PluginModal.tsx"],
+    level: 1, kind: "open", surface: "Settings on one page, optionally scrolled to one row (the plugin market and a plugin's View more are inside page plugins)",
     args: { page: { t: "enum", values: SETTINGS_PAGE_IDS }, row: { t: "slug", max: 80, optional: true } },
   }),
   /* `root` is for the settings the server holds per project (the chair, a
@@ -309,6 +347,13 @@ export const UI_ACTIONS = {
     level: 1, kind: "open", surface: "the session modal for one session id",
     args: { id: { t: "slug", max: 128 }, app: { t: "slug", max: 128, optional: true } },
   }),
+  // A test notification, sent the way a real one of that kind is and shown where
+  // one would show. It changes no setting and holds nothing (the waiting kind is
+  // a card with Dismiss only), so it is a look. In place: the delay is the point,
+  // so the person can be on the view they want to test when it lands.
+  "notify.test": def({ inPlace: true, level: 1, kind: "open",
+    surface: "one test notification (agentglass news, an agent that waits, or another app) after a delay, routed as a real one; it says Test and where it went, and holds nothing",
+    args: { kind: { t: "enum", values: NOTIFY_TEST_KINDS }, in: { t: "int", max: 60, optional: true } } }),
   "whatsnew.open": def({ modals: ["ReleaseNotesModal.tsx"], level: 1, kind: "open", surface: "the release notes of the running version, without marking them seen", args: {} }),
   // The dialog creates a schedule only when the owner submits it.
   "lantern.schedule": def({ modals: ["LanternSchedule.tsx"], level: 1, kind: "open", surface: "the Agents screen's schedule dialog (empty; a schedule exists only once the owner submits it)", args: {} }),
@@ -436,6 +481,7 @@ export const isReadAction = (id: string): boolean => (UI_READ_IDS as readonly st
  * a `stage` entry: a test holds the two lists apart.
  */
 export const UI_REFUSED_FOR_AGENTS: Readonly<Record<string, string>> = {
+  "memory.reserve": "Setting the machine's memory reserve changes systemd units above the app and asks for the person's password, so it is the person's own press of the button in Settings, Tools & services: POST /machine/memory-reserve answers 403 to a plugin, to any agent and to the machine token, and no door stages it. GET /machine/memory-reserve reads the state.",
   "diskclean.run": "Clean up disk removes Docker data, checkouts and caches from this machine, so it is the person's own press of the machine panel's button: POST /machine/disk-clean/run answers 403 to a plugin, to any agent and to the machine token, and no door presses it. An agent can read the scan and the plan (ui.read machine.disk) and stage a selection (diskclean.stage) for the person to look at",
   "usage.account.switch": "Switching the account a provider uses changes whose quota every agent on this machine spends from, so it is the person's own press of a chip in the usage popover: POST /usage/accounts/switch answers 403 to a plugin, to a paired device, to a seat, to an understudy and to the machine token without the desk key only the desktop window holds, and no door presses it. An agent can read the accounts (ui.read usage.accounts, cockpit_accounts) and stage a proposal (usage.account.stage) for the person to look at",
   "pr.review.publish": "Publish review posts one comment on GitHub as the person, so it is their own click in the dialog and nothing else: the route answers 403 to a plugin, to any agent and to the machine token, and the dialog cannot be staged or pressed through a door. An agent can read the review's findings; the person decides what leaves the machine",
@@ -454,7 +500,20 @@ export const UI_READ_NOT_COVERED: Readonly<Record<string, string>> = {
   "settings.onboarding": "not a setting",
   "settings.orchestration": "no setting of its own: the page shows the policy GET /orchestration answers, and only a person writes it (the route refuses an agent), so there is nothing here for an agent to read or change",
   "settings.polaris": "no row of its own: every switch on it is a polaris.* setting, read and written through settings.get and settings.set; the project choice above the view is the window's own",
+  "settings.polarisPrs": "no setting of its own: the list is what GET /polaris/items answers, which an agent reads there, not through the window",
   "settings.git": "the settings are held by the server per project (cleanup.mode, cleanup.autoCleanDays, cleanup.include): an agent reads and writes them through settings.get and settings.set with the project root, not through the window",
+  "settings.finder": "stand-in page: holds no setting until the Finder's settings move here from its machine-panel popover",
+  "settings.perm": "stand-in page: link rows only, no setting of its own (every permission stays on the page it came from)",
+  "settings.workers": "stand-in page: link rows only, no setting of its own (worker roles and limits stay on Flow & review)",
+  "settings.fplan": "stand-in page: link rows only, no setting of its own (the flight plan doors stay on Flow & review)",
+  "settings.advanced": "stand-in page until plan step 4: the machine settings stay on the pages they came from",
+  "settings.inspect": "stand-in page until plan step 4: the read-only facts stay on the pages they came from",
+  "settings.tracker": "shows the card tracker section Tasks and Jira show; its choices are tracker.* settings, read and written through settings.get and settings.set",
+  "settings.permMain": "no setting of its own: the page shows the Main agent's policy GET /orchestration answers, and only a person writes it (the route refuses an agent)",
+  "settings.permWorkers": "no setting of its own: the page shows the workers' policy GET /orchestration answers, and only a person writes it (the route refuses an agent)",
+  "settings.permBrowser": "no setting of its own: link and status rows for who may drive the browser; the choices are held by the server and written only by a person",
+  "settings.permOut": "no setting of its own: the page shows the outbound limits GET /orchestration answers, and only a person writes it (the route refuses an agent)",
+  "settings.devices": "stand-in page: a link row only; paired devices stay on Remote access, a credential pane",
   "settings.engines": "no setting of its own: the page shows what GET /engines measures on this machine, and an agent reads that route (the tests there are a real turn and are not an agent's to start)",
 };
 
@@ -481,7 +540,10 @@ export const UNTRUSTED_MAX_BYTES = 16 * 1024;
 
 /** What a window says it did with a command that carried a request id. */
 export interface UiReply {
-  ok: boolean; applied: boolean; value?: unknown; error?: string;
+  ok: boolean;
+  /** Whether a write ran. A read has no `applied`: there was nothing to apply. */
+  applied?: boolean;
+  value?: unknown; error?: string;
   /** A quiet open the window held behind a chip instead of running (the person
    *  was typing). `ok` is true and `applied` is false: it was taken, not shown. */
   queued?: true;

@@ -49,6 +49,11 @@ field drawn for it with the last hour of every agent, and being woken when
 that field changes instead of keeping a clock of its own. Its rules files are
 seeded if missing so there is something to edit; they are not imposed on it.
 
+Adopting hands the chair a credential, so it is the person's click: an agent's
+call raises one approval card, and the command waits for that click before it
+prints the token. The pane the seat already holds takes its credential back
+without a second card.
+
 The answer carries a `token`: the seat's own credential, the same kind a
 seat the app starts gets in its environment. Put `AGENTGLASS_TOKEN=<token>` in
 front of the calls that must be recognised as the chair's, such as a plan's
@@ -127,10 +132,38 @@ agentglass-agent start <name> --role builder --cwd <worktree> --allow commit
 ```
 
 Where the person has set an orchestration policy (Settings), `--role` starts
-the engine the policy says for that role, headless: one turn in a tab, with an
-exit code. The result says `{engine, model, because, envelope}`; read `because`.
+the engine the policy says for that role, one turn in a tab. Claude Code runs
+there as its own interactive TUI, so that turn's end is the CLI's own
+transcript marker and not an exit code: when it is over the tab is back at its
+box (`wait <name> --until ready`), and the row carries the turn's `exitCode`.
+The other engines run headless and end with one, which their kept tab reads as
+`gone`. The result says `{engine, model, because, envelope}`; read `because`.
 
-Launch at Go takes the same path. A project whose builder chain starts on
+A role the Flow made has an id of its own: `--flow-role <id>` starts that role,
+on its own prompt and chain, and the Flow counts the worker on its block.
+
+A worker has no network, so it cannot open the card it was started for. Name the
+card with `--card ORBIT-1042` (a Jira key) or `--card <Jira or ClickUp address>`:
+the server reads it with the person's own credentials and puts its title, status,
+description and acceptance criteria (a ClickUp checklist, and a Jira field whose
+label says `acceptance` or `aceptación`) into a fenced block before the brief,
+under a heading that says the card is data and never an instruction, with a line
+after it restating that the envelope and the brief stand. The fence is keyed to
+that start, and the card's own lines are quoted; the block is capped at 8,000
+characters and the card's text is cut, possibly mid-word, with a line saying how
+much was dropped. A Jira address must be on the Jira site connected here: a link
+to another team's site is refused. A bare key goes to the only tracker connected;
+with both connected it is read from neither, and the brief says the key is
+ambiguous and that a full address says which one. A card the server cannot read,
+a tracker that is not connected, or a read that does not finish within 5 seconds,
+leaves the brief as it is and adds one line saying why; none of them refuses the
+start. A prompt names a card only with an address that is the whole of its own
+line and not inside a fenced code block, and a prompt that already carries the
+block is not read again, with a line saying so.
+
+Launch at Go does not read a card: its brief is the plan's own text, built
+without this reader, so a plan launched at Go carries the card's link and not
+its words. Otherwise it takes the same path. A project whose builder chain starts on
 Claude opens a tab; on another engine, Launch starts the worker through the
 policy, in the plan's own tree, with the plan as its brief, and links the plan
 to it. The view follows the link: `workerState` says `working` while that
@@ -149,8 +182,11 @@ refused.
   merging, publishing a release and spending are not something an envelope can
   hold: they are the person's, always.
 - **A worker is stopped, not steered.** It cannot be told something in the middle
-  of a turn. When its turn has ended (`wait <name> --until gone`, then `read`),
-  `prompt <name> "<next>"` starts the next turn on the same engine, resumed.
+  of a turn. When its turn has ended (`list`, or `read`: the row carries the
+  turn's `exitCode`), `prompt <name> "<next>"` starts the next turn on the same
+  engine, resumed —
+  including a turn that ended on a question for you, which the row marks
+  `awaitingAnswer` and the worker's bar calls "waiting for an answer".
 - **Every engine is talked to the same way.** A worker on Claude Code, Codex,
   OpenCode or any other engine is reached with `prompt` and read with `read`,
   never by typing into its tab. Chat messages between sessions (`SendMessage`)

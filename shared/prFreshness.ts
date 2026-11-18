@@ -56,6 +56,28 @@ export const POLL_RUNNING_MS = 30_000;
 export const POLL_CAP_MS = 90 * 60_000;
 
 /**
+ * Does this pull request's merge state need reading again?
+ *
+ * A detail read carries its merge state and its checks together. A checks read
+ * from the notify watch that lands later is newer than that merge state: if it
+ * is green, the merge state was taken while a required check was still
+ * running, and the notification proved it moved. One more read settles it; the
+ * caller decides how often it may ask, this only decides whether to.
+ *
+ * A read at or after the checks is not stale, and neither is one GitHub
+ * already calls mergeable.
+ */
+export function mergeReadOwed(
+  d: Pick<PrDetail, "readAt" | "mergeState" | "mergeable" | "checks" | "checking">,
+  newer: { at: number } | null,
+): boolean {
+  if (!newer || d.checking) return false;
+  if (d.readAt != null && newer.at <= d.readAt) return false;
+  if (d.checks.total === 0 || !d.checks.allDone || d.checks.verdict !== "green") return false;
+  return d.mergeState === "BLOCKED" || d.mergeState === "UNKNOWN" || d.mergeable === "UNKNOWN";
+}
+
+/**
  * When to look again at the pull request on screen, or null for never.
  * Events come first (hooks, notifications); this is only for an open PR whose
  * checks are running or whose reading is not current. Nothing while hidden.

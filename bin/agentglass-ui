@@ -16,9 +16,21 @@ registry of doors a Stream Deck button does (POST /control).
     agentglass-ui settings set seat.powers speak --root /home/me/code/orbit   # narrows: applies at once
     agentglass-ui settings requests             # what still waits for the person
     agentglass-ui polaris items --root R        # pull requests; `polaris act N sync|propose|...`, `polaris requests`
+    agentglass-ui flow get --root R             # the flow the project's seat follows, and who made its last change
+    agentglass-ui flow role add planner-x --name "Planner X" --does "Cuts the ask into steps." \
+        --prompt "Plan the work and hand it back." --root R   # on the path; --team-only keeps it off
+    agentglass-ui flow role rename planner-x "Planner X" --root R
+    agentglass-ui flow role edit planner-x --prompt "..." --chain opencode:deepseek-v4.1-flash --root R
+    agentglass-ui flow path add planner-x --after builder --root R
+    agentglass-ui flow path set planner builder inspector verifier landing --root R
+    agentglass-ui flow undo --root R            # the person's own window only
     agentglass-ui stage pr.comment.stage --arg repo=acme/orbit --arg number=42 --arg body="Looks right."
                                                 # level 3: the comment box opens filled in; the person presses Comment
 
+    agentglass-ui notify test --kind waits --in 5   # one test notification, routed as a real one; holds nothing
+
+    agentglass-ui pr reviews acme/orbit 318     # who reviewed, and what they said: {state, untrusted}, read by the server
+    agentglass-ui pr comments acme/orbit 318    # the conversation and the line comments
     agentglass-ui jira card ORBIT-1042          # a Jira card: {state, untrusted}, state.updated is the stamp a step needs
     agentglass-ui jira moves ORBIT-1042         # the moves it can make now
     agentglass-ui jira steps                    # the configured steps (handoff, review, merge) and whether each is on
@@ -118,6 +130,28 @@ def _default_server(host):
     return f"http://{host}:{port}"
 
 
+def _port_override_note():
+    """AGENTGLASS_PORT set on purpose (an isolated server) loses to the port
+    file, by design: a pane can inherit a stale one. Say so once on stderr,
+    with the way out, instead of quietly reaching the live app."""
+    env = os.environ.get("AGENTGLASS_PORT", "").strip()
+    if not env or os.environ.get("AGENTGLASS_SERVER"):
+        return
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    path = os.path.join(base, "agentglass", "port")
+    try:
+        with open(path, encoding="utf-8") as f:
+            port = f.read().strip()
+    except OSError:
+        return
+    if port.isdigit() and 0 < int(port) < 65536 and port != env:
+        print(f"{os.path.basename(sys.argv[0]) or 'agentglass'}: using :{port} from {path}, not AGENTGLASS_PORT={env}. "
+              f"A pane can inherit a stale one, and then nothing is wrong. "
+              f"Only if you started a test server on :{env}, set AGENTGLASS_SERVER=http://127.0.0.1:{env}",
+              file=sys.stderr)
+
+
+_port_override_note()
 SERVER = _server_or_die((os.environ.get("AGENTGLASS_SERVER") or _default_server("localhost")).rstrip("/"))
 SLUG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
@@ -546,6 +580,291 @@ def settings_set(id, value, as_name=None, root=None):
     return door_explain(status, ans)
 
 
+# ── the flow: what the project's orchestrator is told to do next ─────────────
+#
+# A seat edits its own project's flow here instead of hand-writing JSON: the
+# server validates the result, and each write keeps one step back for the
+# person's Undo. `--root` is the project; every write is refused unless the
+# person turned `flow.agentEdit` on for it.
+
+FLOW_DEFAULTS = {"stage": "development", "ico": "chart", "hue": "g-general", "tools": ["read", "run", "write", "commit"]}
+
+
+def _flow_answer(status, ans):
+    if status in (200, 202) and isinstance(ans, dict) and ans.get("ok"):
+        return ans
+    return {"ok": False, "error": explain(status, ans)["error"]}
+
+
+def _flow_get(root):
+    return _flow_answer(*http(f"/flow?root={urllib.parse.quote(root)}"))
+
+
+def _flow_options(root):
+    return _flow_answer(*http(f"/flow/options?root={urllib.parse.quote(root)}"))
+
+
+def _flow_save(root, flow):
+    return _flow_answer(*http(f"/flow?root={urllib.parse.quote(root)}", flow, timeout=30, origin=False, method="PUT"))
+
+
+def _flow_result(ans):
+    """What a caller needs back: the flow, which record answered, and the undo step."""
+    if not ans.get("ok"):
+        return ans
+    return {"ok": True, **{k: ans[k] for k in ("scope", "root", "flow", "undo", "undone") if k in ans}}
+
+
+def _flow_tools(text):
+    return [t.strip() for t in text.split(",") if t.strip()]
+
+
+def _flow_chain(text):
+    """`engine:model,engine:model` as the flow stores it, or an error."""
+    out = []
+    for part in text.split(","):
+        engine, sep, model = part.partition(":")
+        if not sep or not engine.strip() or not model.strip():
+            return None
+        out.append({"engine": engine.strip(), "model": model.strip()})
+    return out or None
+
+
+def _flow_one_of(value, allowed, what):
+    if value not in allowed:
+        return {"ok": False, "error": f"{what} is one of {', '.join(allowed)}; got {value!r}"}
+    return None
+
+
+def _flow_role(flow, rid):
+    return next((r for r in flow.get("roster", []) if r.get("id") == rid), None)
+
+
+def _flow_settle(flow):
+    """The arrows the path implies: one passing arrow per neighbouring pair, and
+    a failing arrow only while it still goes back along the path. Required roles
+    are left as they are, so the validator refuses a path that leaves one off."""
+    at = {rid: i for i, rid in enumerate(flow.get("path", []))}
+    fails = [e for e in flow.get("edges", []) if e.get("on") == "fail" and e.get("from") in at and e.get("to") in at and at[e["to"]] < at[e["from"]]]
+    path = flow.get("path", [])
+    passes = [{"from": path[i], "to": path[i + 1], "on": "pass"} for i in range(len(path) - 1)]
+    flow["edges"] = passes + fails
+    return flow
+
+
+def _flow_new_block(flow, rid):
+    """The page's own place for a new block: after the rightmost one, on the last step's row."""
+    xs = [b["x"] for b in flow.get("blocks", []) if isinstance(b.get("x"), int)]
+    by_id = {b.get("id"): b for b in flow.get("blocks", [])}
+    path = flow.get("path", [])
+    last = by_id.get(path[-1]) if path else None
+    return {"id": rid, "x": (max(xs) if xs else 0) + 240, "y": last.get("y", 0) if isinstance(last, dict) else 0}
+
+
+def flow_get(root):
+    ans = _flow_get(root)
+    return _flow_result(ans) if ans.get("ok") else ans
+
+
+def flow_set(root, path):
+    try:
+        if path == "-":
+            raw = sys.stdin.read()
+        else:
+            with open(path, encoding="utf-8") as f:
+                raw = f.read()
+        flow = json.loads(raw)
+    except OSError as e:
+        return {"ok": False, "error": f"could not read {path}: {e.strerror}"}
+    except json.JSONDecodeError as e:
+        return {"ok": False, "error": f"{path} is not JSON: {e.msg} at line {e.lineno}"}
+    return flow_write(root, flow)
+
+
+def flow_write(root, flow):
+    """Save a flow value that is already parsed (the MCP door hands one in)."""
+    return _flow_result(_flow_save(root, flow))
+
+
+def _flow_ico(value, opts):
+    """The validator's own normaliser for a legacy icon name."""
+    return (opts.get("iconAliases") or {}).get(value, value)
+
+
+def flow_role_add(root, a):
+    got = _flow_get(root)
+    if not got.get("ok"):
+        return got
+    opts = _flow_options(root)
+    if not opts.get("ok"):
+        return opts
+    flow = got["flow"]
+    if _flow_role(flow, a.id):
+        return {"ok": False, "error": f"{a.id} is already a role of this flow; an id is never reused"}
+    chain = _flow_chain(a.chain) if a.chain else None
+    if a.chain and chain is None:
+        return {"ok": False, "error": "--chain is engine:model or a comma list of them"}
+    policy = a.policy_role
+    person = a.actor == "person"
+    if not policy and chain is None and not person:
+        return {"ok": False, "error": "one of --policy-role or --chain is required: a role needs the chain it runs on, unless --actor person answers it"}
+    bad = _flow_one_of(policy, opts["policyRoles"], "--policy-role") if policy else None
+    if bad:
+        return bad
+    bad = _flow_one_of(_flow_ico(a.ico, opts), opts["icons"], "--ico") or _flow_one_of(a.hue, opts["hues"], "--hue")
+    if bad:
+        return bad
+    stages = [s["id"] for s in opts["stages"]]
+    bad = _flow_one_of(a.stage, stages, "--stage")
+    if bad:
+        return bad
+    role = {
+        "id": a.id, "name": a.name, "does": a.does, "prompt": a.prompt,
+        "chain": chain or [], "tools": _flow_tools(a.tools) or list(FLOW_DEFAULTS["tools"]),
+        "readsOnly": a.reads_only == "yes", "required": False, "stage": a.stage, "ico": a.ico, "hue": a.hue,
+    }
+    if a.may_start_subagents == "yes":
+        role["mayStartSubagents"] = True
+    if a.first_command:
+        role["firstCommand"] = a.first_command
+    if policy:
+        role["policyRole"] = policy
+    if person:
+        role["actor"] = "person"
+    flow["roster"] = [*flow["roster"], role]
+    if not a.team_only:
+        block = _flow_new_block(flow, a.id)
+        path = flow["path"]
+        if a.after is not None:
+            if a.after not in path:
+                return {"ok": False, "error": f"--after {a.after} is not on the path"}
+            at = path.index(a.after) + 1
+        else:
+            at = len(path)
+        flow["path"] = [*path[:at], a.id, *path[at:]]
+        flow["blocks"] = [*flow.get("blocks", []), block]
+        _flow_settle(flow)
+    return _flow_result(_flow_save(root, flow))
+
+
+def flow_role_rename(root, rid, name):
+    got = _flow_get(root)
+    if not got.get("ok"):
+        return got
+    flow = got["flow"]
+    role = _flow_role(flow, rid)
+    if role is None:
+        return {"ok": False, "error": f"{rid} is not a role of this flow"}
+    role["name"] = name
+    return _flow_result(_flow_save(root, flow))
+
+
+def flow_role_edit(root, rid, a):
+    got = _flow_get(root)
+    if not got.get("ok"):
+        return got
+    flow = got["flow"]
+    role = _flow_role(flow, rid)
+    if role is None:
+        return {"ok": False, "error": f"{rid} is not a role of this flow"}
+    closed = {k: v for k, v in (("stage", a.stage), ("ico", a.ico), ("hue", a.hue)) if v is not None}
+    if closed:
+        opts = _flow_options(root)
+        if not opts.get("ok"):
+            return opts
+        stages = [s["id"] for s in opts["stages"]]
+        bad = (_flow_one_of(a.stage, stages, "--stage") if a.stage is not None else None) \
+            or (_flow_one_of(_flow_ico(a.ico, opts), opts["icons"], "--ico") if a.ico is not None else None) \
+            or (_flow_one_of(a.hue, opts["hues"], "--hue") if a.hue is not None else None)
+        if bad:
+            return bad
+    for key, value in (("name", a.name), ("does", a.does), ("prompt", a.prompt), ("stage", a.stage), ("ico", a.ico), ("hue", a.hue)):
+        if value is not None:
+            role[key] = value
+    if a.first_command is not None:
+        if a.first_command:
+            role["firstCommand"] = a.first_command
+        else:
+            role.pop("firstCommand", None)
+    if a.tools is not None:
+        role["tools"] = _flow_tools(a.tools)
+    if a.allow is not None:
+        role["allow"] = _flow_tools(a.allow)
+    if a.reads_only is not None:
+        role["readsOnly"] = a.reads_only == "yes"
+    if a.may_start_subagents is not None:
+        if a.may_start_subagents == "yes":
+            role["mayStartSubagents"] = True
+        else:
+            role.pop("mayStartSubagents", None)
+    if a.required is not None:
+        role["required"] = a.required == "yes"
+    if a.policy_role:
+        role["policyRole"] = a.policy_role
+    if a.actor == "person":
+        # A person answers this step: it runs nothing, so it keeps neither a
+        # chain nor a policy role.
+        role["actor"] = "person"
+        role.pop("policyRole", None)
+        role["chain"] = []
+    elif a.actor == "none":
+        role.pop("actor", None)
+    # A built-in's chain is the policy's, read when the flow is read; --chain ""
+    # clears a chain a person's role no longer needs.
+    if a.chain is not None:
+        chain = [] if not a.chain.strip() else _flow_chain(a.chain)
+        if chain is None:
+            return {"ok": False, "error": "--chain is engine:model, a comma list of them, or empty to clear it"}
+        role["chain"] = chain
+    elif a.policy_role:
+        role["chain"] = []
+    return _flow_result(_flow_save(root, flow))
+
+
+def flow_path(root, verb, ids, after=None):
+    got = _flow_get(root)
+    if not got.get("ok"):
+        return got
+    flow = got["flow"]
+    for rid in ids:
+        if _flow_role(flow, rid) is None:
+            return {"ok": False, "error": f"{rid} is not a role of this flow"}
+    dropped = {}
+    if verb == "set":
+        at = {rid: i for i, rid in enumerate(ids)}
+        off = {r["id"] for r in flow.get("roster", []) if r["id"] not in at}
+        dropped_edges = [
+            e for e in flow.get("edges", [])
+            if e.get("on") == "fail" and (e.get("from") not in at or e.get("to") not in at or at[e["to"]] >= at[e["from"]])
+        ]
+        dropped_required = [r["id"] for r in flow.get("roster", []) if r.get("required") and r["id"] in off]
+        flow["edges"] = [e for e in flow.get("edges", []) if e not in dropped_edges]
+        for r in flow.get("roster", []):
+            if r["id"] in dropped_required:
+                r["required"] = False
+        flow["path"] = list(ids)
+        if dropped_edges:
+            dropped["edges"] = [f"{e.get('from')}->{e.get('to')} ({e.get('on')})" for e in dropped_edges]
+        if dropped_required:
+            dropped["required"] = dropped_required
+    else:
+        rid = ids[0]
+        if rid in flow["path"]:
+            flow["path"].remove(rid)
+        at = len(flow["path"]) if after is None else flow["path"].index(after) + 1 if after in flow["path"] else None
+        if at is None:
+            return {"ok": False, "error": f"--after {after} is not on the path"}
+        flow["path"].insert(at, rid)
+    out = _flow_result(_flow_save(root, _flow_settle(flow)))
+    if dropped and out.get("ok"):
+        out["dropped"] = dropped
+    return out
+
+
+def flow_undo(root):
+    return _flow_answer(*http(f"/flow/undo?root={urllib.parse.quote(root)}", {}, timeout=30, origin=False, method="POST"))
+
+
 def rules_list(root, only_suggested=False):
     """The project's rules (GET /agent-rules): base, learned, suggested, derived, history."""
     status, body = http("/agent-rules?" + urllib.parse.urlencode({"root": root}))
@@ -570,8 +889,48 @@ def rules_set(root, match, setting, as_name=None, action=None, source="chat"):
     return {"ok": False, "error": explain(status, ans)["error"]}
 
 
+def _seat_flight_token():
+    """A pane that is the project's seat but holds the machine token asks the server's private seat-cred socket for its own plan credential. Nothing is said
+    here: the server names the caller from the kernel's SO_PEERCRED and the process tree. No socket or no match: None, and the call goes as it was."""
+    import socket as _socket
+    path = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "agentglass", "seat-cred", "seat-cred.sock")
+    try:
+        with _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM) as s:
+            s.settimeout(3)
+            s.connect(path)
+            s.sendall(b"seat-flight\n")
+            s.shutdown(_socket.SHUT_WR)
+            raw = b""
+            while True:
+                chunk = s.recv(4096)
+                if not chunk:
+                    break
+                raw += chunk
+        res = json.loads(raw.decode("utf-8") or "{}")
+    except (OSError, ValueError):
+        return None
+    return res.get("token") if res.get("ok") else None
+
+
 def _fp(path, body=None, as_name=None, method=None):
-    """One Flight plan call: the server's answer, or its sentence."""
+    """One Flight plan call: the server's answer, or its sentence. The seat's own plan credential is good for one request, so it is asked for here and put back after."""
+    spent = False
+    if body is not None and path.endswith(("/go", "/no-go", "/launch")) and not os.environ.get("AGENTGLASS_SEAT"):
+        seat = _seat_flight_token()
+        if seat:
+            spent = os.environ.get("AGENTGLASS_TOKEN")
+            os.environ["AGENTGLASS_TOKEN"] = seat
+    try:
+        return _fp_call(path, body, as_name, method)
+    finally:
+        if spent is not False:
+            if spent is None:
+                os.environ.pop("AGENTGLASS_TOKEN", None)
+            else:
+                os.environ["AGENTGLASS_TOKEN"] = spent
+
+
+def _fp_call(path, body=None, as_name=None, method=None):
     if body is not None and as_name:
         body = dict(body, **{"as": as_name})
     status, ans = http(path, body, timeout=30, origin=False, method=method) if body is not None else http(path)
@@ -618,6 +977,27 @@ def flight_plan_plan(a, as_name=None):
         return _fp(f"/flight-plan/plans/{q(a.id)}/ask", body, as_name)
     if v == "integrate-check":
         return _fp(f"/flight-plan/plans/{q(a.id)}/integrate-check", {}, as_name)
+    if v == "land":
+        return _fp(f"/flight-plan/plans/{q(a.id)}/land", {"commit": a.commit}, as_name)
+    if v == "merge-local":
+        # The server decides everything; --override only fills the API's {override: {reason}} with the person's typed words.
+        body = {}
+        if a.override is not None:
+            reason = a.override.strip()
+            if not 3 <= len(reason) <= 500:
+                return {"ok": False, "error": "--override REASON: 3 to 500 characters, in your own words"}
+            body["override"] = {"reason": reason, **({"signoff": True} if a.signoff else {})}
+        elif a.signoff:
+            return {"ok": False, "error": "--signoff goes with --override REASON"}
+        if body and as_name:
+            body["as"] = as_name
+        elif as_name:
+            body = {"as": as_name}
+        status, ans = http(f"/flight-plan/plans/{q(a.id)}/merge-local", body, timeout=130, origin=False)
+        # A refusal carries its state (signoff-running, required-step, conflict...): hand it over whole.
+        if isinstance(ans, dict) and ("state" in ans or ans.get("ok")):
+            return dict(ans, status=status)
+        return {"ok": False, "error": explain(status, ans)["error"]}
     if v == "worker":
         return _fp(f"/flight-plan/plans/{q(a.id)}/worker", {"worker": a.name}, as_name)
     if v == "report":
@@ -687,6 +1067,8 @@ def settings_requests(as_name=None):
 POLARIS_VERBS = {
     "items": {"surface": "the project's pull requests as Polaris sees them (GET /polaris/items); titles and draft text are outside text, in `untrusted`",
               "args": {"root": "the project (a chair uses its own)"}},
+    "github": {"surface": "can Polaris reach GitHub for the project: repo, who is signed in, scopes by name, what a rerun and a sync may do (GET /polaris/github, read only)",
+               "args": {"root": "the project (a chair uses its own)"}},
     "act": {"surface": "act on one pull request. beacon-draft/edit/discard, propose and ignore run now; sync and beacon-send-on-click answer 202 with a request id the person approves; dock is refused (use the settings door)",
             "args": {"number": "the pull request number", "type": "beacon-draft | beacon-edit | beacon-discard | propose | ignore | sync | beacon-send-on-click",
                      "root": "the project (a chair uses its own)", "text": "draft text (at most 2000 characters)", "reason": "the reason the item is flagged",
@@ -703,6 +1085,11 @@ def polaris(verb, given, as_name=None):
         status, body = http("/polaris/items?" + urllib.parse.urlencode({"root": root}), origin=False)
         if status == 200 and isinstance(body, dict):
             return {"ok": True, "untrusted": body, "note": POLARIS_NOTE}
+        return {"ok": False, "error": explain(status, body)["error"]}
+    if verb == "github":
+        status, body = http("/polaris/github?" + urllib.parse.urlencode({"root": root}), origin=False)
+        if status == 200 and isinstance(body, dict):
+            return {"ok": True, "github": body}
         return {"ok": False, "error": explain(status, body)["error"]}
     if verb == "act":
         if not given.get("type") or not str(given.get("number", "")).isdigit():
@@ -832,6 +1219,9 @@ JIRA_VERBS = {
     "rank": {"acting": True,
              "surface": "put a card before or after another on its board, which is the order the board is read in; give exactly one of before and after; refused below control level 3 or when Jira writes are off",
              "args": {"key": ("the card to move, such as ORBIT-1042", True), "before": ("the card it goes in front of", False), "after": ("the card it goes behind", False)}},
+    "sprint-move": {"acting": True,
+                    "surface": "put a card (and, with `keys`, more cards) into the sprint with that id; one request, no stamp. Refused below control level 3, when Jira writes are off, or when the site has no such sprint",
+                    "args": {"key": ("the card to move, such as ORBIT-1042", True), "sprint": ("the sprint's number", True), "keys": ("more cards, comma separated, such as ORBIT-1043,ORBIT-1044", False)}},
     "attach": {"acting": True,
                "surface": "add a file to a card from words (text) or bytes (data, base64) the caller holds, at most 25 MB; nothing is read from a path; refused below control level 3 or when Jira writes are off",
                "args": {"key": ("a card id such as ORBIT-1042", True), "name": ("the file's name, as it should show", True),
@@ -840,7 +1230,7 @@ JIRA_VERBS = {
                  "surface": "take one of your own files off a card, by the `fileId` `card` listed for it; refused for a file the card does not hold or one somebody else added, below control level 3, when Jira writes are off, and unless confirm is true",
                  "args": {"key": ("a card id such as ORBIT-1042", True), "id": ("the file's id, from `card`", True), "confirm": ("true to say you mean it", True)}},
 }
-_JIRA_INT = ("updated", "pr_number", "start")
+_JIRA_INT = ("updated", "pr_number", "start", "sprint")
 _JIRA_BOOL = ("stay", "clear", "confirm", "off")
 
 
@@ -870,6 +1260,10 @@ def jira_body(verb, given, as_name=None):
                 v = low == "true"
             elif not isinstance(v, bool):
                 return None, f"{k} must be true or false"
+        elif k == "keys":
+            if not isinstance(v, str):
+                return None, "keys must be text, comma separated"
+            v = [x.strip() for x in v.split(",") if x.strip()]
         elif k == "fields":
             if isinstance(v, str):
                 try:
@@ -881,7 +1275,9 @@ def jira_body(verb, given, as_name=None):
         elif not isinstance(v, str):
             return None, f"{k} must be text"
         flat[k] = v
-    body = {k: flat[k] for k in ("key", "trigger", "updated", "url", "title", "field", "value", "add", "remove", "id", "text", "reply_to", "confirm", "off", "other", "type", "direction", "fields") if k in flat}
+    body = {k: flat[k] for k in ("key", "trigger", "updated", "url", "title", "field", "value", "add", "remove", "id", "text", "reply_to", "confirm", "off", "other", "type", "direction", "fields", "sprint") if k in flat}
+    if verb == "sprint-move":
+        body["keys"] = [flat["key"]] + [x for x in flat.get("keys", []) if x != flat["key"]]
     # `clear` is a step's choice on a step and a top-level word on an edit.
     if verb == "edit" and "clear" in flat:
         body["clear"] = flat["clear"]
@@ -894,6 +1290,20 @@ def jira_body(verb, given, as_name=None):
     if as_name:
         body["as"] = as_name
     return body, None
+
+
+PR_DOOR_VERBS = ("reviews", "comments")
+
+
+def run_pr_read(verb, repo, number, as_name=None):
+    """Who reviewed and what was said on a pull request, read by the server with its own gh: `{state, untrusted}`."""
+    body = {"repo": repo, "number": number, **({"as": as_name} if as_name else {})}
+    status, res = http(f"/pr/door/{verb}", body, timeout=60)
+    if status == 404 and not res.get("error"):
+        return {"ok": False, "error": "this agentglass is older than the pull request read door: update the app (it has no POST /pr/door)"}
+    if not isinstance(res, dict) or "ok" not in res:
+        return {"ok": False, "error": (res or {}).get("error") or f"agentglass answered {status}"}
+    return res
 
 
 def run_jira(verb, given, as_name=None):
@@ -916,6 +1326,49 @@ def emit(res):
     return 0 if res.get("ok") else 1
 
 
+# The freeze trace's read side. Local files, no server round trip: the point
+# of the trace is to still be readable when the app itself is the thing that
+# froze or crashed, so this never asks it for anything.
+#
+# electron/main.js writes window.log into Electron's userData, which is
+# $XDG_CONFIG_HOME/<productName>; a few build variants exist, so every one is
+# checked. loopwatch.ts writes server-stall.log into the state dir the server
+# itself uses (childledger.ts' stateDir()).
+_FREEZE_APP_NAMES = ("agentglass", "agentglass-release", "agentglass-local-review")
+
+
+def _freeze_config_dirs():
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    return [os.path.join(base, name) for name in _FREEZE_APP_NAMES]
+
+
+def _freeze_state_dir():
+    base = os.environ.get("AGENTGLASS_STATE_DIR")
+    if base:
+        return base
+    xdg = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    return os.path.join(xdg, "agentglass")
+
+
+def _tail(path, n):
+    try:
+        with open(path, "r", errors="replace") as f:
+            return [ln.rstrip("\n") for ln in f if ln.strip()][-n:]
+    except OSError:
+        return []
+
+
+def freezes(n=20):
+    lines = []
+    for d in _freeze_config_dirs():
+        lines += _tail(os.path.join(d, "window.log"), n)
+    lines += _tail(os.path.join(_freeze_state_dir(), "server-stall.log"), n)
+    # Every line starts with an ISO timestamp (main.js, loopwatch.ts); sorting
+    # on that interleaves the shell's and the server's lines in order.
+    lines.sort(key=lambda ln: ln[:24])
+    return {"ok": True, "lines": lines[-n:]}
+
+
 def _list():
     actions, level, why = fetch_actions()
     if why:
@@ -935,6 +1388,8 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("list", help="the doors this app offers, with their arguments and levels")
     sub.add_parser("state", help="what is open now (ui.state)")
+    p = sub.add_parser("freezes", help="the last lines of the freeze trace: the shell's hang/stall/gone log and the server's own stall log, newest last")
+    p.add_argument("--lines", type=int, default=20, help="how many lines (default 20)")
     p = sub.add_parser("read", help="one panel's state, shown nowhere (ui.read)")
     p.add_argument("panel")
     p = sub.add_parser("open", help="open something on screen, by registry id")
@@ -953,6 +1408,10 @@ def main(argv=None):
     pm.add_argument("--quiet", action="store_true", help="wait behind a chip if the person is typing (the default)")
     p = sub.add_parser("pr", help="the pull request board's filter and saved views, by repo (owner/name): filter-get, filter-set, views, view-save, view-delete")
     ps = p.add_subparsers(dest="pverb", required=True)
+    for verb, why in (("reviews", "who reviewed a pull request and what they said, read by the server (answer: {state, untrusted})"), ("comments", "the conversation and line comments of a pull request, read by the server (answer: {state, untrusted})")):
+        q = ps.add_parser(verb, help=why)
+        q.add_argument("repo")
+        q.add_argument("number", type=int)
     for verb, why in (("filter-get", "the board's live filter, as text"), ("views", "the saved views, each as name and text")):
         ps.add_parser(verb, help=why).add_argument("repo")
     q = ps.add_parser("filter-set", help="replace the live filter with text in the board's syntax, or --clear it")
@@ -966,7 +1425,7 @@ def main(argv=None):
     q = ps.add_parser("view-delete", help="delete the view with that name")
     q.add_argument("repo")
     q.add_argument("name")
-    p = sub.add_parser("jira", help="a Jira card through the routes the screen uses: card, moves, links, linktypes, activity, steps, step, link, edit, comment, comment-edit, comment-delete, move, subtask, relate, unrelate, weblink, unweblink, worklog, worklog-edit, worklog-delete, watch, vote, rank, attach, unattach")
+    p = sub.add_parser("jira", help="a Jira card through the routes the screen uses: card, moves, links, linktypes, activity, steps, step, link, edit, comment, comment-edit, comment-delete, move, subtask, relate, unrelate, weblink, unweblink, worklog, worklog-edit, worklog-delete, watch, vote, rank, sprint-move, attach, unattach")
     js = p.add_subparsers(dest="jverb", required=True)
     for verb, spec in JIRA_VERBS.items():
         q = js.add_parser(verb, help=spec["surface"])
@@ -1056,6 +1515,13 @@ def main(argv=None):
     q.add_argument("--recommend", type=int, default=None, metavar="N", help="which --choice you recommend (1 = the first)")
     q = pp.add_parser("integrate-check", help="before you bring a launched builder's work in: stops with the reason when its real diff touches auth, migrations, secrets, payments, CI or a dependency")
     q.add_argument("id")
+    q = pp.add_parser("land", help="close a plan whose work reached the base branch outside Launch: names the commit; refused when that commit is not in the base")
+    q.add_argument("id")
+    q.add_argument("--commit", required=True, help="a commit sha that is in the project's base branch")
+    q = pp.add_parser("merge-local", help="merge a launched plan's branch into the local base: the server applies the flow's gates and its own review of the diff, never pushes. 202 means the review runs: call again")
+    q.add_argument("id")
+    q.add_argument("--override", default=None, metavar="REASON", help="the person's alone: lift the flow's gates with a reason (3-500 characters), logged")
+    q.add_argument("--signoff", action="store_true", help="with --override: sign off a review that could not run")
     q = pp.add_parser("worker", help="link the plan to the named worker that builds it, so the view follows it; pass an empty name to clear the link")
     q.add_argument("id")
     q.add_argument("name", help="the worker's name, as `agentglass-agent start` gave it")
@@ -1075,6 +1541,69 @@ def main(argv=None):
     q.add_argument("finding", help="F1, F2, ...")
     q.add_argument("action", choices=("fix", "contest", "ask", "dismiss", "none"))
     q.add_argument("--note", default=None)
+    p = sub.add_parser("flow", help="a project's flow and roster: read it, save it, add or edit a role, put roles on the path, undo the last write")
+    fs = p.add_subparsers(dest="flverb", required=True)
+    q = fs.add_parser("get", help="the flow in force for the project")
+    q.add_argument("--root", default=os.getcwd(), help="the project (default: this directory)")
+    q = fs.add_parser("set", help="save a whole flow from a JSON file ('-' reads stdin)")
+    q.add_argument("file", help="a JSON flow, or - for stdin")
+    q.add_argument("--root", default=os.getcwd(), help="the project (default: this directory)")
+    q = fs.add_parser("undo", help="put back the flow from before the last write (the person's own window)")
+    q.add_argument("--root", default=os.getcwd(), help="the project (default: this directory)")
+    fr = fs.add_parser("role", help="add, rename or edit a role in the team").add_subparsers(dest="frverb", required=True)
+    q = fr.add_parser("add", help="add a role; it is appended to the path (or after --after) unless --team-only")
+    q.add_argument("id")
+    q.add_argument("--name", required=True)
+    q.add_argument("--does", required=True, help="one line: what the role does")
+    q.add_argument("--prompt", required=True, help="the role's whole prompt")
+    q.add_argument("--first-command", default=None, help="sent as the turn's own first line, e.g. /jira-fix-card {card}; {card} becomes the card key the worker was started with")
+    q.add_argument("--policy-role", default=None, choices=["builder", "scout", "reviewer", "verifier"], help="a built-in kind; its chain is the policy's (one of this or --chain)")
+    q.add_argument("--chain", default=None, help="its own chain, engine:model[,engine:model] (one of this or --policy-role)")
+    q.add_argument("--stage", default=FLOW_DEFAULTS["stage"], help="a stage of this flow")
+    q.add_argument("--ico", default=FLOW_DEFAULTS["ico"], help="an icon a block draws (a legacy name is read as the icon it became)")
+    q.add_argument("--hue", default=FLOW_DEFAULTS["hue"], help="a colour token a block draws")
+    q.add_argument("--tools", default=",".join(FLOW_DEFAULTS["tools"]), help=f"comma list (default {','.join(FLOW_DEFAULTS['tools'])})")
+    q.add_argument("--reads-only", default=None, choices=["yes", "no"], help="look and read only; nothing it can change (default: no)")
+    q.add_argument("--may-start-subagents", default=None, choices=["yes", "no"], help="may call the Agent tool, for a team skill that spawns reviewer subagents (default: no)")
+    q.add_argument("--actor", default=None, choices=["person"], help="a person answers this step: nothing runs, so it takes no --chain or --policy-role")
+    q.add_argument("--after", default=None, help="the role it follows on the path (default: the end)")
+    q.add_argument("--team-only", action="store_true", help="in the team, off the path: no block")
+    q.add_argument("--root", default=os.getcwd(), help="the project (default: this directory)")
+    q = fr.add_parser("rename", help="change a role's label; an id never changes")
+    q.add_argument("id")
+    q.add_argument("name")
+    q.add_argument("--root", default=os.getcwd(), help="the project (default: this directory)")
+    q = fr.add_parser("edit", help="change one or more fields of a role; the id stays")
+    q.add_argument("id")
+    q.add_argument("--name", default=None)
+    q.add_argument("--does", default=None)
+    q.add_argument("--prompt", default=None)
+    q.add_argument("--first-command", default=None, help="sent as the turn's own first line, e.g. /jira-fix-card {card}; empty clears it")
+    q.add_argument("--policy-role", default=None, choices=["builder", "scout", "reviewer", "verifier"])
+    q.add_argument("--chain", default=None, help="engine:model[,engine:model]; its own chain, or empty to clear it")
+    q.add_argument("--stage", default=None)
+    q.add_argument("--ico", default=None, help="an icon a block draws (a legacy name is read as the icon it became)")
+    q.add_argument("--hue", default=None)
+    q.add_argument("--tools", default=None, help="comma list, replacing the old one")
+    q.add_argument("--allow", default=None, help="comma list of command prefixes, replacing the old one")
+    q.add_argument("--reads-only", default=None, choices=["yes", "no"])
+    q.add_argument("--may-start-subagents", default=None, choices=["yes", "no"], help="may call the Agent tool, for a team skill that spawns reviewer subagents")
+    q.add_argument("--required", default=None, choices=["yes", "no"])
+    q.add_argument("--actor", default=None, choices=["person", "none"], help="a person answers this step: nothing runs, and its chain is cleared; none clears it")
+    q.add_argument("--root", default=os.getcwd(), help="the project (default: this directory)")
+    fp = fs.add_parser("path", help="the suggested order of steps").add_subparsers(dest="fpverb", required=True)
+    q = fp.add_parser("set", help="replace the whole path; arrows and hard rules whose ends leave it are dropped and listed")
+    q.add_argument("ids", nargs="+")
+    q.add_argument("--root", default=os.getcwd(), help="the project (default: this directory)")
+    q = fp.add_parser("add", help="insert one role on the path, after --after or at the end")
+    q.add_argument("id")
+    q.add_argument("--after", default=None, help="the role it follows")
+    q.add_argument("--root", default=os.getcwd(), help="the project (default: this directory)")
+    p = sub.add_parser("notify", help="notifications: `notify test` sends one test note, routed as a real one")
+    ns = p.add_subparsers(dest="nverb", required=True)
+    q = ns.add_parser("test", help="one test notification after a delay, shown where a real one of that kind would; it says Test and where it went, and holds nothing")
+    q.add_argument("--kind", choices=("news", "waits", "other"), required=True, help="news: agentglass news (a PR check); waits: an agent that waits on you (no real hold); other: another app's note")
+    q.add_argument("--in", dest="delay", type=int, default=5, help="seconds to wait first, 0 to 60 (default 5), so you can switch to the view you want to test")
     p = sub.add_parser("settings", help="list, read or change the settings an agent may touch")
     ss = p.add_subparsers(dest="verb", required=True)
     ss.add_parser("list", help="every setting, the window's and the server's, with its class; and the requests waiting for the person")
@@ -1095,8 +1624,12 @@ def main(argv=None):
         return emit(_list())
     if a.cmd == "state":
         return emit(run_door("ui.state", {}, a.as_name))
+    if a.cmd == "freezes":
+        return emit(freezes(a.lines))
     if a.cmd == "read":
         return emit(run_door("ui.read", {"panel": a.panel}, a.as_name))
+    if a.cmd == "pr" and a.pverb in PR_DOOR_VERBS:
+        return emit(run_pr_read(a.pverb, a.repo, a.number, a.as_name))
     if a.cmd == "pr":
         door = {"filter-get": "pr.filter.get", "filter-set": "pr.filter.set", "views": "pr.views.list", "view-save": "pr.views.save", "view-delete": "pr.views.delete"}[a.pverb]
         given = {"repo": a.repo}
@@ -1139,6 +1672,11 @@ def main(argv=None):
             typed[k] = v
         present = "now" if a.now else "quiet" if a.quiet else None
         return emit(run_door(a.id, typed, a.as_name, listing, present))
+    if a.cmd == "notify":
+        if not 0 <= a.delay <= 60:
+            print("agentglass-ui: notify test --in is 0 to 60 seconds", file=sys.stderr)
+            return 2
+        return emit(run_door("notify.test", {"kind": a.kind, "in": a.delay}, a.as_name))
     if a.cmd == "flight-plan":
         return emit(flight_plan(a.fverb, a, a.as_name))
     if a.cmd == "polaris":
@@ -1148,6 +1686,20 @@ def main(argv=None):
         if a.rverb == "set":
             return emit(rules_set(root, a.match, a.setting, a.as_name, a.action))
         return emit(rules_list(root, only_suggested=a.rverb == "suggest"))
+    if a.cmd == "flow":
+        if a.flverb == "get":
+            return emit(flow_get(a.root))
+        if a.flverb == "set":
+            return emit(flow_set(a.root, a.file))
+        if a.flverb == "undo":
+            return emit(flow_undo(a.root))
+        if a.flverb == "role":
+            if a.frverb == "add":
+                return emit(flow_role_add(a.root, a))
+            if a.frverb == "rename":
+                return emit(flow_role_rename(a.root, a.id, a.name))
+            return emit(flow_role_edit(a.root, a.id, a))
+        return emit(flow_path(a.root, a.fpverb, a.ids if a.fpverb == "set" else [a.id], getattr(a, "after", None)))
     if a.verb == "list":
         return emit(settings_list(a.as_name))
     if a.verb == "requests":

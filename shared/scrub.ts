@@ -63,6 +63,9 @@ const SECRET_PATTERNS: RegExp[] = [
   /\b[A-Za-z0-9+]{40,}={0,2}\b/g, // long high-entropy blob (raw base64/hex secrets); no "/" so it never eats a path
 ];
 
+// A PEM private key spans many lines; an unterminated block (a cut log) runs to the end.
+const PRIVATE_KEY_RE = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g;
+
 /**
  * Redact credential-shaped text, leaving everything else alone.
  *
@@ -72,7 +75,7 @@ const SECRET_PATTERNS: RegExp[] = [
  * a key on a changed line must not.
  */
 export function stripSecrets(s: string): string {
-  let out = s;
+  let out = s.replace(PRIVATE_KEY_RE, "<redacted-secret>");
   for (const re of SECRET_PATTERNS) out = out.replace(re, "<redacted-secret>");
   return out;
 }
@@ -128,9 +131,45 @@ function appRelative(p: string): string | null {
 // app, otherwise dropped to <path>.
 const PATH_RE = /(?<![\w.])(?:[A-Za-z]:\\[^\s"'`):]+|\/[^\s"'`):]+(?:\/[^\s"'`):]+)+\/?)/g;
 
+// A home dir (/home/x, /Users/x, ~/…) runs to the line's next quote or its end:
+// a folder name may hold spaces, so stopping at whitespace would leak the rest.
+// A path that runs through the app still keeps its safe tail.
+// Also /root, WSL (/mnt/c/Users), /var/home and a Windows C:\\Users\\x, whose
+// folder names may hold spaces too.
+const HOME_RE = /(?:(?<![\w.])\/(?:home|Users|root|var\/home|mnt\/[A-Za-z]\/Users)\/|(?<![\w])~\/|(?<![\w])[A-Za-z]:\\Users\\)[^\n"'`]*/g;
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g;
+const URL_QUERY_RE = /\bhttps?:\/\/[^\s"'`]*\?[^\s"'`]*/gi;
+// ::ffff:10.1.2.3 is one address; IPV6_RE alone would stop at "::ffff:10".
+const IPV4_MAPPED_RE = /(?<![\w:])::ffff:(?:\d{1,3}\.){3}\d{1,3}(?![\w.])/gi;
+const IPV4_RE = /(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])/g;
+// Needs "::" or all eight groups, so a clock time like 12:34:56 is not an address.
+const IPV6_RE = /(?<![\w:])(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,7}:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})?|::[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6})(?![\w:])/gi;
+
 function redactPaths(s: string): string {
-  return s.replace(PATH_RE, (p) => appRelative(p) ?? "<path>");
+  return s
+    .replace(HOME_RE, (p) => appRelative(p) ?? "<path>")
+    .replace(PATH_RE, (p) => appRelative(p) ?? "<path>");
 }
+
+function redactIdentity(s: string): string {
+  return s
+    .replace(URL_QUERY_RE, "<url>")
+    .replace(EMAIL_RE, "<email>")
+    .replace(IPV4_MAPPED_RE, "<ip>")
+    .replace(IPV6_RE, "<ip>")
+    .replace(IPV4_RE, "<ip>");
+}
+
+/** A leading run of base64-looking lines with no BEGIN marker: the body of a key
+ *  whose BEGIN line fell outside a log window. PRIVATE_KEY_RE cannot see it, so
+ *  it is cut here, with a lone END line and a short last body line after it.
+ *  A short first fragment starts the run only when 2+ full lines follow and an
+ *  END line closes it, so a text starting `Error` then one SHA line is kept. */
+export function dropHeadlessKeyBody(text: string): string {
+  return text.replace(/^(?:[ \t]*[A-Za-z0-9+\/]{1,31}={0,2}[ \t]*\r?\n(?=(?:[ \t]*[A-Za-z0-9+\/]{32,}={0,2}[ \t]*\r?\n){2,}(?:[A-Za-z0-9+\/]+={0,2}\r?\n)?-----END [A-Z ]*KEY-----))?(?:[ \t]*[A-Za-z0-9+\/]{32,}={0,2}[ \t]*\r?\n)*(?:[A-Za-z0-9+\/]+={0,2}\r?\n(?=-----END))?(?:-----END [A-Z ]*PRIVATE KEY-----[ \t]*\r?\n?)?/, "");
+}
+
+const stripKeys = (s: string) => s.replace(PRIVATE_KEY_RE, "<redacted-secret>");
 
 /** Reduce free text to something safe to send: secrets gone, paths dropped
  *  unless they are the app's own. Exported for tests. */
@@ -140,7 +179,7 @@ export function redactText(s: string): string {
   // any other absolute path (a user repo, ~/.claude, a home dir) is dropped
   // whole — taking any token buried inside it with it. Then secrets, for tokens
   // sitting in open text.
-  return stripSecrets(redactPaths(s));
+  return stripSecrets(redactPaths(redactIdentity(stripKeys(s))));
 }
 
 function scrubFrames(stack: string): string[] {

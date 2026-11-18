@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""The read-only GitHub door (`agentglass-gh`) as an MCP server, stdio.
+
+One tool per read verb: gh_pr_view, gh_pr_diff, gh_pr_checks, gh_pr_list,
+gh_run_view, gh_run_list, gh_issue_view, gh_issue_list. Each takes `args`: the
+words after the verb, like ["123", "--comments"]. The app does the call with its
+own credential, for this worker's project repo only. A write verb is not a tool.
+"""
+import importlib.machinery
+import importlib.util
+import json
+import os
+import sys
+
+NAME = "agentglass-gh"
+VERBS = ["pr view", "pr diff", "pr checks", "pr list", "run view", "run list", "issue view", "issue list"]
+
+
+def _load(file, modname):
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), file)
+    loader = importlib.machinery.SourceFileLoader(modname, path)
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    mod = importlib.util.module_from_spec(spec)
+    sys.dont_write_bytecode = True
+    loader.exec_module(mod)
+    return mod
+
+
+def tools():
+    return [{
+        "name": "gh_" + v.replace(" ", "_"),
+        "description": f"gh {v} (read-only, via the app, this project's repo only). args: the words after the verb, e.g. [\"123\"].",
+        "inputSchema": {"type": "object", "properties": {"args": {"type": "array", "items": {"type": "string"}}}},
+    } for v in VERBS]
+
+
+def run(name, args):
+    verb = name[len("gh_"):].replace("_", " ") if name.startswith("gh_") else ""
+    if verb not in VERBS:
+        return {"content": [{"type": "text", "text": f"{name} is not a tool here."}], "isError": True}
+    rest = (args or {}).get("args") or []
+    if not isinstance(rest, list):
+        return {"content": [{"type": "text", "text": "args is a list of strings."}], "isError": True}
+    ok, out, err, code = _load("agentglass-gh", "agentglass_gh").read(verb.split() + [str(a) for a in rest])
+    text = out if ok and code == 0 else (err or out or "failed")
+    return {"content": [{"type": "text", "text": text}], "isError": not (ok and code == 0)}
+
+
+def handle(msg):
+    i, m = msg.get("id"), msg.get("method")
+    if i is None:
+        return None
+    if m == "initialize":
+        return {"jsonrpc": "2.0", "id": i, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": NAME, "version": "1.0.0"}}}
+    if m == "tools/list":
+        return {"jsonrpc": "2.0", "id": i, "result": {"tools": tools()}}
+    if m == "tools/call":
+        p = msg.get("params") or {}
+        try:
+            r = run(p.get("name", ""), p.get("arguments"))
+        except Exception as e:  # one bad call must not end the session
+            r = {"content": [{"type": "text", "text": f"the tool failed: {type(e).__name__}"}], "isError": True}
+        return {"jsonrpc": "2.0", "id": i, "result": r}
+    if m == "ping":
+        return {"jsonrpc": "2.0", "id": i, "result": {}}
+    return {"jsonrpc": "2.0", "id": i, "error": {"code": -32601, "message": f"method not found: {m}"}}
+
+
+def main():
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out = handle(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+        if out is not None:
+            sys.stdout.write(json.dumps(out) + "\n")
+            sys.stdout.flush()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""Read GitHub through the app, when `gh` itself cannot (a walled worker).
+
+    agentglass-gh pr view 123 [--comments] [--json state,title]
+    agentglass-gh pr diff 123 [--name-only]
+    agentglass-gh pr checks 123
+    agentglass-gh pr list [--state open]
+    agentglass-gh run view 456 [--log-failed]
+    agentglass-gh run list [--branch main]
+    agentglass-gh issue view 78
+
+The app runs `gh` with its own credential, for the repo of the project this
+worker belongs to, and sends the output back. Reads only: any other verb is
+refused with one sentence. No token is ever printed. 30 reads a minute.
+Inside a Claude worker's sandbox this shell has no route to the app; the same
+verbs are the `gh_*` tools of `agentglass-gh-mcp`.
+"""
+import importlib.machinery
+import importlib.util
+import os
+import sys
+
+
+def _load(file, modname):
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), file)
+    loader = importlib.machinery.SourceFileLoader(modname, path)
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    mod = importlib.util.module_from_spec(spec)
+    sys.dont_write_bytecode = True
+    loader.exec_module(mod)
+    return mod
+
+
+def read(argv):
+    """-> (ok, stdout, stderr, code). The transport is agentglass-agent's."""
+    A = _load("agentglass-agent", "agentglass_agent")
+    r = A.call("/gh/read", {"argv": list(argv)}, timeout=60)
+    if not r.get("ok"):
+        return False, "", r.get("error") or "refused", 1
+    return True, r.get("stdout", ""), r.get("stderr", "") + ("\n[output cut at 200000 characters]" if r.get("truncated") else ""), int(r.get("code", 0))
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if not argv or argv[0] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0 if argv else 2
+    ok, out, err, code = read(argv)
+    if out:
+        sys.stdout.write(out)
+    if err:
+        sys.stderr.write(err if err.endswith("\n") else err + "\n")
+    return code if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -73,13 +73,15 @@ export interface DoorValue { mode: string; [param: string]: unknown }
 export interface PolarisSettings {
   version: number;
   enabled: boolean;
+  /** Bot logins whose review comments and check summaries are read for the bot-verdict signal. Empty reads nothing. */
+  botReviewers: string[];
   /** The label of what was last chosen; any later change of one door stores custom. */
   preset: PolarisPresetName;
   doors: Record<DoorId, DoorValue>;
   [unknownKey: string]: unknown;
 }
 /** What a scope writes down: only what the person set. A missing door reads the next layer. */
-export interface StoredPolaris { version?: number; enabled?: boolean; preset?: PolarisPresetName; doors?: Partial<Record<DoorId, DoorValue>>; [unknownKey: string]: unknown }
+export interface StoredPolaris { version?: number; enabled?: boolean; botReviewers?: string[]; preset?: PolarisPresetName; doors?: Partial<Record<DoorId, DoorValue>>; [unknownKey: string]: unknown }
 
 export const POLARIS_VERSION = 1;
 /** The format a door first appeared in. A door not listed has been there since format 1. */
@@ -111,6 +113,7 @@ const WATCH: Record<DoorId, DoorValue> = {
   ...Object.fromEntries(DOOR_IDS.map((d) => [d, safeDoor(d)])) as Record<DoorId, DoorValue>,
   follow: door("follow", "on"), dock: door("dock", "on"), cleared: door("cleared", "quiet"), labels: door("labels", "on"),
   approvals: door("approvals", "people"), redsNamed: door("redsNamed", "name"), match: door("match", "use"),
+  signals: door("signals", "on"),
   lookAgain: door("lookAgain", "on", { minutes: 30, steps: 1 }),
 };
 const GUIDED: Record<DoorId, DoorValue> = {
@@ -131,6 +134,49 @@ export const PRESETS: Record<PresetId, { label: string; doors: Record<DoorId, Do
   fullAutopilot: { label: "Full autopilot", doors: FULL },
 };
 
+/** Doors whose promise no code keeps in any position: badged, and never counted as on. */
+export const UNWIRED: readonly DoorId[] = ["rerunButton", "startSession"];
+/** The badge follows the position: Diagnose at "click" is stored and read by nothing, while "auto" wakes the seat. */
+export const isUnwired = (door: DoorId, mode: unknown): boolean =>
+  UNWIRED.includes(door) || (door === "diagnose" && mode === "click");
+
+/** Whether a door is doing its thing. A door whose safest position is itself doing something (people-only approvals) is on there. */
+export const doorOn = (door: DoorId, value: DoorValue | undefined): boolean =>
+  !!value && (DOOR_MODES[door][0] === "off" ? value.mode !== "off" : true);
+
+/**
+ * How many of these doors are on, counted once for the whole app: the stage cards,
+ * the panel footer and anything reading config.json call this rather than each
+ * deciding for itself. A door is set but promises nothing when it is unwired in the
+ * position it holds, so it is not on.
+ */
+export function doorsOn(doors: Partial<Record<DoorId, DoorValue>>, ids: readonly DoorId[]): number {
+  return ids.filter((d) => !isUnwired(d, doors[d]?.mode) && doorOn(d, doors[d])).length;
+}
+
+/** The layer that holds the master switch, or "default" when neither does. */
+export function enabledLayerOf(layers: { project?: unknown; global?: unknown }): Layer {
+  const bool = (l: unknown) => !!l && typeof l === "object" && typeof (l as { enabled?: unknown }).enabled === "boolean";
+  return bool(layers.project) ? "project" : bool(layers.global) ? "global" : "default";
+}
+
+/**
+ * The master switch, from the stored layers: the project's boolean, else the
+ * global one, else off. A value that is not a boolean is not a switch and never
+ * reads as on; `enabledInvalid` names it so the window can say so.
+ */
+export function polarisEnabled(layers: { project?: unknown; global?: unknown }): boolean {
+  const layer = enabledLayerOf(layers);
+  if (layer === "default") return false;
+  return ((layer === "project" ? layers.project : layers.global) as { enabled: boolean }).enabled;
+}
+
+/** The layer holding a master switch that is not true or false; the window says "invalid value in config" and never rewrites it. */
+export function enabledInvalid(layers: { project?: unknown; global?: unknown }): Layer | null {
+  const bad = (l: unknown) => !!l && typeof l === "object" && "enabled" in l && typeof (l as { enabled?: unknown }).enabled !== "boolean";
+  return bad(layers.project) ? "project" : bad(layers.global) ? "global" : null;
+}
+
 const presetName = (v: unknown): PolarisPresetName =>
   v === "watchOnly" || v === "guided" || v === "fullAutopilot" || v === "custom" ? v : "none";
 
@@ -146,7 +192,7 @@ export const withEnabled = (cur: StoredPolaris | null, on: boolean): StoredPolar
 /** Off, every door in its safe position. A door a later version adds reads this way until the person sets it. */
 export function defaultPolaris(): PolarisSettings {
   const doors = Object.fromEntries(DOOR_IDS.map((d) => [d, safeDoor(d)])) as Record<DoorId, DoorValue>;
-  return { version: POLARIS_VERSION, enabled: false, preset: "none", doors };
+  return { version: POLARIS_VERSION, enabled: false, botReviewers: [], preset: "none", doors };
 }
 
 /**
@@ -166,7 +212,11 @@ export function normalizePolaris(raw: unknown): PolarisSettings {
   }
   const { preset: _p, ...rest } = o;
   const version = Number.isInteger(o.version) && (o.version as number) >= 1 ? (o.version as number) : POLARIS_VERSION;
-  return { ...rest, version, enabled: o.enabled === true, preset: presetName(o.preset), doors: doors as Record<DoorId, DoorValue> };
+  // A bot login is a short token; anything else in the list is not one and is dropped on read, never written back.
+  const botReviewers = Array.isArray(o.botReviewers)
+    ? o.botReviewers.filter((x): x is string => typeof x === "string" && x.length > 0 && x.length <= 100).slice(0, 20)
+    : [];
+  return { ...rest, version, enabled: o.enabled === true, botReviewers, preset: presetName(o.preset), doors: doors as Record<DoorId, DoorValue> };
 }
 
 /** The stored form of a request, or why it is refused. Unknown keys pass; a known key that is wrong is named. */
@@ -174,6 +224,9 @@ export function validateStoredPolaris(raw: unknown): { ok: true; value: StoredPo
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: "polaris: an object" };
   const o = raw as Record<string, unknown>;
   if ("enabled" in o && typeof o.enabled !== "boolean") return { ok: false, error: "enabled: true or false" };
+  if ("botReviewers" in o && !(Array.isArray(o.botReviewers) && o.botReviewers.length <= 20 && o.botReviewers.every((b) => typeof b === "string" && b.length > 0 && b.length <= 100))) {
+    return { ok: false, error: "botReviewers: up to 20 bot logins" };
+  }
   if ("version" in o && (!Number.isInteger(o.version) || (o.version as number) < 1)) return { ok: false, error: "version: a whole number" };
   if ("preset" in o && presetName(o.preset) !== o.preset) return { ok: false, error: "preset: watchOnly, guided, fullAutopilot, custom or none" };
   const rest = o;
@@ -191,7 +244,7 @@ export function validateStoredPolaris(raw: unknown): { ok: true; value: StoredPo
 
 export type Layer = "project" | "global" | "default";
 /** The settings in force: per door, the project's value, else the global one, else the safe default. */
-export function resolvePolaris(global: unknown, project: unknown): { settings: PolarisSettings; layers: Record<DoorId, Layer>; enabledLayer: Layer; presetLayer: Layer } {
+export function resolvePolaris(global: unknown, project: unknown): { settings: PolarisSettings; layers: Record<DoorId, Layer>; enabledLayer: Layer; enabledInvalid: Layer | null; presetLayer: Layer } {
   const g = (global && typeof global === "object" ? global : {}) as StoredPolaris;
   const p = (project && typeof project === "object" ? project : {}) as StoredPolaris;
   const doors: Record<string, unknown> = {};
@@ -201,11 +254,12 @@ export function resolvePolaris(global: unknown, project: unknown): { settings: P
     layers[d] = hasP ? "project" : hasG ? "global" : "default";
     if (hasP) doors[d] = p.doors![d]; else if (hasG) doors[d] = g.doors![d];
   }
-  const enabledLayer: Layer = typeof p.enabled === "boolean" ? "project" : typeof g.enabled === "boolean" ? "global" : "default";
-  const enabled = enabledLayer === "project" ? p.enabled : enabledLayer === "global" ? g.enabled : false;
+  const enabledLayer = enabledLayerOf({ project: p, global: g });
+  const enabled = polarisEnabled({ project: p, global: g });
+  const invalid = enabledInvalid({ project: p, global: g });
   const presetLayer: Layer = p.preset !== undefined ? "project" : g.preset !== undefined ? "global" : "default";
   const preset = presetLayer === "project" ? p.preset : presetLayer === "global" ? g.preset : "none";
-  return { settings: normalizePolaris({ ...g, ...p, enabled, preset, doors }), layers, enabledLayer, presetLayer };
+  return { settings: normalizePolaris({ ...g, ...p, enabled, preset, doors }), layers, enabledLayer, enabledInvalid: invalid, presetLayer };
 }
 
 /** Which way is narrower for a setting a door carries: 1 = lower, -1 = higher. A setting not listed here has no direction. */
@@ -323,6 +377,8 @@ export interface Verdict { cls: PolarisClass; reason: PolarisReason | null; sent
 
 /** One run of a failed check and the job inside it that could be run again. */
 export interface RunRef { runId: number; attempt: number; pending: boolean; job: PolarisJob & { id: number } }
+/** One quiet line under an item: a fact about the item, never a change to its class or its reason. */
+export interface PolarisSignal { kind: "staleCard" | "overlap" | "botVerdict"; text: string }
 export interface PolarisItem extends Verdict {
   number: number;
   title: string;
@@ -343,6 +399,8 @@ export interface PolarisItem extends Verdict {
   inherited?: { checks: string[]; baseSha: string };
   /** The base is green again at a newer commit and nothing is running here: a click may sync this one. */
   canSync: boolean;
+  /** Read-only lines from the Signals door. They never change `cls`, `reason` or `sentence`. */
+  signals?: PolarisSignal[];
 }
 /** A base branch some pull requests inherit a red from. Present only while at least one does. */
 export interface BaseRed {
@@ -363,8 +421,12 @@ export interface ItemsAnswer { ok: true; enabled: boolean; items: PolarisItem[];
 export interface SettingsAnswer extends PolarisSettings {
   ok: true;
   root?: string;
+  /** The project's own layer (or the global one, on the global page) as stored, for reading the master switch. */
+  stored?: StoredPolaris;
   layers: Record<DoorId, Layer>;
   enabledLayer: Layer;
+  /** The layer holding a master switch that is not a boolean: the window says "invalid value in config" and never rewrites it. */
+  enabledInvalid?: Layer | null;
   presetLayer: Layer;
   /** A project's answer also carries the global layer as stored, so a door this layer drops can be read as what takes its place. */
   below?: StoredPolaris;
@@ -452,3 +514,6 @@ export function classifyPr(f: PrFacts, o: ClassifyOptions = {}): Verdict {
   if (split && optional.length) return say("redsNamed", `Cleared to land. Optional and red: ${list2(optional.map((c) => c.name))}.`, optional.map((c) => c.name));
   return say("ready", "Cleared to land.");
 }
+
+/** GET /polaris/github: can Polaris reach GitHub for this project. Names only, never a token. */
+export interface GithubAnswer { ok: boolean; repo?: string; login?: string; auth: "ok" | "signed-out" | "no-gh"; scopes: string[]; canRerun: boolean; canUpdateBranch: boolean; problem?: string }

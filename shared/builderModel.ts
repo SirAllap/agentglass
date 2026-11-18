@@ -57,14 +57,14 @@ export interface BuilderPick { model: BuilderModel; why: string }
 /**
  * The model this plan's builder starts on, and one sentence saying why. `strong`
  * is the project's model for sensitive work; an unknown name leaves the role's.
+ * `hit`: sensitiveHit of this plan text when the caller already has it.
  */
-export function builderPick(plan: { size: BuilderSize | null; planMd: string }, role: { provider: string; model: string }, strong: string): BuilderPick {
+export function builderPick(plan: { size: BuilderSize | null; planMd: string }, role: { provider: string; model: string }, strong: string, hit = sensitiveHit(plan.planMd)): BuilderPick {
   const normal = roleModel(role);
   const strongSet = isBuilderModel(strong);
   const pick: BuilderModel = strongSet ? strong : normal;
   // With no usable name for sensitive work the model is the role's: saying otherwise would be false.
   const from = strongSet ? "the model set for sensitive work" : "the builder role's model";
-  const hit = sensitiveHit(plan.planMd);
   if (plan.size === "L") return { model: pick, why: `${modelLabel(pick)}: this is an L plan, so it launches on ${from}.` };
   if (hit) return { model: pick, why: `${modelLabel(pick)}: this plan touches ${hit}, so it launches on ${from}.` };
   return { model: normal, why: `${modelLabel(normal)}: this plan is ${plan.size ?? "unsized"} and touches nothing sensitive, so it launches on the builder role's model.` };

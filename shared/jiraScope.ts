@@ -49,8 +49,11 @@ const quote = (s: string): string => `"${s.replace(/\\/g, "\\\\").replace(/"/g, 
 /** The search a place is: its cards, newest change first. Sub-tasks stay under their parents, so they are left out. */
 export function scopeJql(s: Scope): string {
   const where = [`project = ${s.space}`, "issuetype != Epic"];
-  if (s.component !== undefined) where.push(s.component ? `component = ${quote(s.component)}` : "component is EMPTY");
+  // An epic page is the whole epic, as the row counts it: a child without the component is still its child.
+  if (s.component !== undefined && !s.epic) where.push(s.component ? `component = ${quote(s.component)}` : "component is EMPTY");
   if (s.epic) where.push(`parent = ${s.epic}`);
+  // The tree's row counts leave sub-tasks out (jiraSpaces.ts), so the page does too; an epic's children are never sub-tasks.
+  else where.push("issuetype not in subTaskIssueTypes()");
   if (s.noEpic) where.push("parent is EMPTY");
   return `${where.join(" AND ")} ORDER BY updated DESC`;
 }

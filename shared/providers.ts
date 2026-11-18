@@ -163,6 +163,26 @@ export interface JiraPerson {
   id: string;
   name: string;
   avatar?: string;
+  /** Jira's own address, when the token may read it: what tells two similar names apart. */
+  email?: string;
+  /** Jira's `accountType`: "atlassian" for a person, "app" for an automation account. Absent on Data Center. */
+  accountType?: string;
+  /** The connected account, which a question starts at when the step says "me". */
+  me?: boolean;
+}
+
+/**
+ * A GitHub login and the Jira account that was put on a card with it, learned from
+ * what the person did on one pull request. Local to this machine; see
+ * server/src/jiraPairs.ts. `n` counts the picks, `at` is the last one.
+ */
+export interface JiraPair {
+  login: string;
+  accountId: string;
+  name: string;
+  email?: string;
+  n: number;
+  at: number;
 }
 
 /**
@@ -180,7 +200,7 @@ export interface JiraHandoffRule {
 
 /** One Jira step: where it shows is its key in `JiraSteps`, what it does is its blocks. Steps are global by status NAME, like ClickUp's. */
 export interface JiraStep { enabled: boolean; blocks: StepBlock[] }
-export interface JiraSteps { handoff: JiraStep; review: JiraStep; merge: JiraStep }
+export interface JiraSteps { handoff: JiraStep; review: JiraStep; merge: JiraStep; people: JiraStep; note: JiraStep }
 /** Which step a button runs: the key it has in `JiraSteps`. */
 export type JiraStepKey = keyof JiraSteps;
 /** What a person chose when a step asked (all optional): the status by name, the assignee, the comment as edited. */
@@ -189,9 +209,9 @@ export interface JiraStepChoice { to?: string; clear?: boolean; assign?: string 
  * What one block of a step did, in the order the server ran them. `assignee` stands for the take-off and the
  * assign together: the server writes who is on the card once. `why` is a sentence of ours, never the site's words.
  */
-export interface JiraBlockOutcome { block: "move" | "assignee" | "comment" | "link"; state: "done" | "skipped" | "failed"; why?: string }
+export interface JiraBlockOutcome { block: "move" | "assignee" | "comment" | "field" | "link"; state: "done" | "skipped" | "failed"; why?: string }
 /** The pull request a step links on the card. */
-export interface JiraStepPr { url: string; title?: string; number?: number; author?: string }
+export interface JiraStepPr { url: string; title?: string; number?: number; author?: string; /** The logins picked as reviewers here, to offer the paired Jira account first. */ reviewers?: string[] }
 
 /** `GET /jira/settings`: the write switch and the hand-off, by project key. */
 export interface JiraSettings { writes: boolean; handoff: Record<string, JiraHandoffRule> }
@@ -211,7 +231,8 @@ export interface JiraStepsRead { steps: JiraSteps; overrides: string[] }
 export type JiraViewKind = "board" | "filter" | "jql";
 
 /** One board column, in the board's own order and words, by the status ids it holds. */
-export interface JiraColumn { name: string; statusIds: string[] }
+/** `max`: the column's work-in-progress limit, when the board sets one by card count. */
+export interface JiraColumn { name: string; statusIds: string[]; max?: number }
 
 /** `GET /jira/views`: read from the local store, no request to Jira. */
 export interface JiraViews {
@@ -240,9 +261,19 @@ export interface JiraViewRead {
    * on an older read kept on disk.
    */
   statuses?: ListStatus[];
+  /**
+   * For a non-board view whose statuses came from one project's board (the
+   * common case: a single-project filter, search or scope), that board's own
+   * id and name - what the header reads "Columns as on" against. Absent for
+   * a board's own view, for a view across several projects, and for a view
+   * no board's order could be found for.
+   */
+  statusBoard?: { id: string; name: string; key: string };
   /** When the rows were read; 0 when there is nothing yet. */
   at: number;
   truncated?: boolean;
+  /** Only the backlog page was cut: the sprint's own cards are all here. */
+  backlogCut?: boolean;
   /** These rows are the last read kept on disk, not a new one. */
   cached?: boolean;
 }
@@ -252,6 +283,9 @@ export interface JiraQuickFilter { id: string; name: string; description?: strin
 
 /** The sprint a scrum board is in the middle of (a future one is the backlog's, not the header's). Dates are epoch milliseconds, 0 when the site says none. */
 export interface JiraBoardSprint { id: string; name: string; state: "active"; start: number; end: number; goal?: string }
+
+/** The sprint a scrum board will start next (the soonest future one), for the header when none is active. */
+export interface JiraBoardNextSprint { id: string; name: string; start: number; end: number }
 
 /** An epic of the board, for its colour. `color` is one of Jira's named epic colours. */
 export interface JiraBoardEpic { key: string; name: string; color?: string; done?: boolean }
@@ -265,6 +299,12 @@ export interface JiraBoardContext {
   error?: string;
   filters: JiraQuickFilter[];
   sprint?: JiraBoardSprint;
+  /** The next sprint the board has planned (the soonest future one), whether or not one is active. */
+  next?: JiraBoardNextSprint;
+  /** Every future sprint the board has planned, in the board's order: the card menu's Sprint row offers each. */
+  futures?: JiraBoardNextSprint[];
+  /** The board's own kind from its configuration (`scrum`, `kanban`); absent when it did not load. */
+  boardType?: string;
   epics: JiraBoardEpic[];
 }
 
@@ -283,7 +323,12 @@ export interface JiraViewChoice {
   /** Board only: `scrum` | `kanban` | `simple`, as the site says. */
   type?: string;
   projectKey?: string;
+  /** Filter only, server side: the search behind it. `/jira/view-choices` does not send it. */
+  jql?: string;
 }
+
+/** One of the person's favourite filters on the site, as the sidebar's "Sync with Jira filters" lists it. */
+export interface JiraFavourite { id: string; name: string; jql: string }
 
 export interface JiraProjectChoice { key: string; name: string }
 
@@ -444,6 +489,16 @@ export interface ProviderTask {
    * actually has a sprint.
    */
   sprint?: string | null;
+  /** The sprint above is running now (Jira's state "active"): what "Current sprint" keeps, in every space at once. */
+  sprintActive?: boolean;
+  /** The id of that sprint on the site (Jira), the one a move into it names; absent where the read had none. */
+  sprintId?: string;
+  /** "closed" when that sprint is over (no active or future one holds the card): no board offers it, so it names no board. */
+  sprintState?: "closed";
+  /** That sprint's own dates (ms) and goal, from the card's sprint field: what a view that is no board's has to say days left from. */
+  sprintStart?: number;
+  sprintEnd?: number;
+  sprintGoal?: string;
   /** Whether YOU are on it — resolved server-side against the connected
    *  account, because the client has no business knowing your user id. */
   mine?: boolean;
@@ -482,10 +537,14 @@ export interface ProviderTask {
   blocks?: string[];
   /** How many subtasks it has, so a card with hidden work says so. */
   subtasks?: number;
+  /** Its sub-tasks as the board's own search sent them (key, status, and the colour class of the status), for the umbrella tile. */
+  children?: { key: string; title?: string; status: string; kind: "done" | "progress" | "todo" | "blocked" }[];
   /** The card this one sits under, when it has one (a Jira subtask's parent, a story's epic). Read on a card's own read, not on a board's. */
   /** The components the card is filed under, by name; absent when the read did not ask for them. */
   components?: string[];
   parent?: { key: string; title: string; /** What the parent is ("Epic"), on a board read. */ type?: string };
+  /** A sub-task's epic: its parent's own parent, read on a board read (the parent may not be on the board). */
+  epic?: { key: string; title: string };
   /** A flag raised on the card (Jira's Impediment): a board row says so. */
   flagged?: boolean;
   /** The kind of card as the site names it ("Story", "Bug"), on the card's own read and on the rows it carries. */
@@ -599,6 +658,10 @@ export interface SavedView {
   /** This one ships with the app rather than being pasted — see
    *  `ASSIGNED_VIEW_ID`. It cannot be removed and has no address. */
   builtin?: boolean;
+  /** Jira only: marked as shared with the team. Kept in the local store; nothing is written to the site. */
+  team?: boolean;
+  /** Jira only: shown as a tab above the list ("Show as tab"). Kept in the local store. */
+  tab?: boolean;
   /**
    * The colour the tracker draws this list's icon in.
    *
@@ -762,6 +825,12 @@ export interface ListStatus {
   type: string;
   orderindex: number;
   color?: string;
+  /** A Jira board's work-in-progress limit for the column that holds only this status. */
+  wip?: number;
+  /** No column of the board holds it (a "Blocked", a "Won't do"): drawn as a column, but not a step of the flow, so no "Move to" points at it or starts from it. */
+  offFlow?: true;
+  /** The spaces (project keys) whose workflow has this status; absent when the tracker has no such notion. */
+  spaces?: string[];
 }
 
 /**
@@ -773,10 +842,12 @@ export type HandoffUnassign = "none" | "me" | "all";
 /**
  * Who a step that moves a card also makes sure is on it. `none` touches no one,
  * `me` is whoever presses the control, `author` is the pull request's author as
- * the tracker knows them, `person` is one member chosen in settings. Ensured, not
+ * the tracker knows them, `person` is one member chosen in settings, and
+ * `reviewer` is the Jira account learned for one of the pull request's reviewers
+ * (see jiraPairs), which only a Jira block that asks may start at. Ensured, not
  * replaced: the person is added when missing and everybody else stays.
  */
-export type AssignWho = "none" | "me" | "author" | "person";
+export type AssignWho = "none" | "me" | "author" | "person" | "reviewer";
 
 /**
  * Is a pull request's author the same person as a member of this tracker? Only where the tracker's
@@ -981,6 +1052,8 @@ export interface ViewTasksResponse {
   /** Where the board's own list sits — Space / Folder / List. Absent for the
    *  built-in board, whose rows come from many lists; those carry their own. */
   place?: ListPlace;
+  /** For a non-board view, the one project's board its `statuses` order came from, when it is known. Jira only. */
+  columnsFrom?: { id: string; name: string; key: string };
   /**
    * The blurb the list carries in ClickUp — the brief, the docs, the team.
    *
@@ -998,6 +1071,8 @@ export interface ViewTasksResponse {
   /** There was more behind this than we were willing to follow. Said out loud,
    *  because a list that silently stops reads as "that is all of them". */
   truncated?: boolean;
+  /** Jira: only the backlog page was cut; the sprint's own cards are all here. */
+  backlogCut?: boolean;
   /** These rows are what we had; a fresh read is running behind them. The panel
    *  murmurs rather than blocks — see readView. */
   revalidating?: boolean;
@@ -1022,6 +1097,8 @@ export interface CardEvent {
   at: number;
   /** `change` and `worklog` are Jira's: one edit of one field by a named person, and one entry of time logged; both carry `who` and their sentence in `text`. */
   kind: "created" | "status" | "seen" | "change" | "worklog";
+  /** Jira's id for `who` on a `change` (account id, key or login), so a caller can tell whose edit it was. */
+  whoId?: string;
   /** Jira's work-log entry behind a `worklog` event: what is needed to change or delete it, and whether it is the connected account's own. */
   entry?: { id: string; /** The time as Jira wrote it, "1h 30m". */ time: string; /** When the work was done, as Jira wrote it. */ started: string; note: string; mine: boolean };
   /** The status this event put the card in. */
@@ -1052,6 +1129,8 @@ export interface CardEvent {
    * something the API reported.
    */
   text?: string;
+  /** The raw assignee or status edit behind a Jira `change`, with Jira's own ids, so a caller can undo it without parsing the sentence. */
+  edit?: { field: "assignee" | "status"; from: string; to: string; fromString: string; toString: string };
   /**
    * How long the card sat in the status this event LEFT, in minutes.
    *
@@ -1221,6 +1300,9 @@ export interface TaskDetail {
     resolved?: boolean;
     /** Jira: the comment was changed after it was written. */
     edited?: boolean;
+    /** Jira: when it was last changed (`updated`), and who changed it (`updateAuthor`), set only when `edited`. */
+    editedAt?: number;
+    editedBy?: string;
     /** Jira: who can see it, when it is not everybody (a role or group the site named). */
     restricted?: string;
     /** Jira: the people the comment names, as a write takes them back, so a changed comment keeps its mentions. */
@@ -1235,16 +1317,8 @@ export interface TaskDetail {
     avatar?: string;
     initials?: string;
     color?: string;
-    /**
-     * The replies themselves, fetched with the card rather than on demand.
-     *
-     * On demand was the obvious design and it is the wrong one here: the row
-     * shows the faces of whoever answered BEFORE anything is expanded, which is
-     * most of what the count is for — "did the person I asked reply, or was it
-     * the bot again". Fetching on click would leave that unanswerable until
-     * after the click that the faces exist to make unnecessary.
-     */
-    replyList?: TaskReply[];
+    /** ClickUp: the reactions on it, one chip per emoji. Jira has none to read. */
+    reactions?: import("./commentReactions.ts").ReactionChip[];
   }[];
 }
 
@@ -1281,6 +1355,17 @@ export interface CardPr {
   /** For a mention: the item the pull request was actually cut for, when it
    *  names one ("ORBIT-1043"). */
   belongsTo?: string;
+  /** The head branch, when the search returned it: a card key in it makes the pull request the card's own. */
+  branch?: string;
+  /** Base branch, from the batched rollup read. */
+  base?: string;
+  /** GitHub's review decision for an OPEN pull request, read with the project search (absent otherwise). */
+  reviewDecision?: string | null;
+  /** The checks of an OPEN pull request, from the project's one batched rollup read (absent otherwise). */
+  checks?: import("./types.ts").PrCheckRollup;
+  checksAt?: number;
+  /** GitHub's mergeable verdict of an OPEN pull request, from the same one batched read (absent otherwise). */
+  mergeable?: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
 }
 
 /** One reply in a comment thread. */
@@ -1297,4 +1382,5 @@ export interface TaskReply {
   avatar?: string;
   initials?: string;
   color?: string;
+  reactions?: import("./commentReactions.ts").ReactionChip[];
 }

@@ -54,7 +54,10 @@ Environment:
                           `browser {verb, args}`; verb "help" describes any verb)
 """
 import base64
+import hashlib
 import hmac
+import importlib.machinery
+import importlib.util
 import ipaddress
 import json
 import os
@@ -69,6 +72,19 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
+
+
+def _load_sibling(file, modname):
+    """A sibling bin file as a module — the same cross-load agentglass-ui-mcp
+    uses on this file, here to reach agentglass-browser's _ask_seat_credential
+    instead of keeping a second copy of it."""
+    path = os.path.join(os.path.dirname(os.path.realpath(__file__)), file)
+    loader = importlib.machinery.SourceFileLoader(modname, path)
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    mod = importlib.util.module_from_spec(spec)
+    sys.dont_write_bytecode = True
+    loader.exec_module(mod)
+    return mod
 
 
 def _server_or_die(url):
@@ -118,6 +134,28 @@ def _default_server(host):
     return f"http://{host}:{port}"
 
 
+def _port_override_note():
+    """AGENTGLASS_PORT set on purpose (an isolated server) loses to the port
+    file, by design: a pane can inherit a stale one. Say so once on stderr,
+    with the way out, instead of quietly reaching the live app."""
+    env = os.environ.get("AGENTGLASS_PORT", "").strip()
+    if not env or os.environ.get("AGENTGLASS_SERVER"):
+        return
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    path = os.path.join(base, "agentglass", "port")
+    try:
+        with open(path, encoding="utf-8") as f:
+            port = f.read().strip()
+    except OSError:
+        return
+    if port.isdigit() and 0 < int(port) < 65536 and port != env:
+        print(f"{os.path.basename(sys.argv[0]) or 'agentglass'}: using :{port} from {path}, not AGENTGLASS_PORT={env}. "
+              f"A pane can inherit a stale one, and then nothing is wrong. "
+              f"Only if you started a test server on :{env}, set AGENTGLASS_SERVER=http://127.0.0.1:{env}",
+              file=sys.stderr)
+
+
+_port_override_note()
 SERVER = _server_or_die((os.environ.get("AGENTGLASS_SERVER") or _default_server("localhost")).rstrip("/"))
 PROTOCOL = "2025-06-18"
 NAME = "agentglass-browser"
@@ -127,8 +165,38 @@ VERSION = "1.0.0"
 # reads the person's token file and drives as them; the marker is the whole
 # contract, and it carries no secret.
 BROWSER_OFF = (os.environ.get("AGENTGLASS_BROWSER_OFF") or "").strip().lower() not in ("", "0", "false")
-OFF_REFUSAL = ("browser access is off for this worker: the app handed it no credential, "
-               "and this server does not fall back to the person's")
+# The app computes WHY at mint time (server/src/browseraccess.ts, agentWindowEnv)
+# and hands it over here, naming the exact row of Settings > Browser that is
+# off, instead of a generic sentence that used to claim a "seat row" control
+# the UI did not have.
+OFF_REASON = (os.environ.get("AGENTGLASS_BROWSER_OFF_REASON") or "").strip()
+# Only when the app set the marker with no reason at all: there is no setting
+# to name, so this is the one case access may really be on and the credential
+# still missing — a bug, not a setting.
+BUG_REFUSAL = ("browser access is off for this worker, and the app gave no reason — if Settings > "
+               "Browser already allows it, the missing credential is a bug, not a setting. "
+               "Restart the tab, or Settings ▸ Browser ▸ \"Who may drive the browser\" can re-issue it.")
+
+_seat_cred_tried = False
+_seat_cred_ok = False
+
+
+# The one copy of the seat-credential ask, in agentglass-browser; loaded
+# rather than duplicated, same as agentglass-ui-mcp loads this file.
+_ask_seat_credential = _load_sibling("agentglass-browser", "agentglass_browser")._ask_seat_credential
+
+
+def _ensure_seat_credential():
+    """Asked at most once per process: a worker's sandbox refusal to even
+    connect() is immediate and will not change between calls, and a
+    granted token outlives this process's short life either way."""
+    global _seat_cred_tried, _seat_cred_ok
+    if not BROWSER_OFF:
+        return True
+    if not _seat_cred_tried:
+        _seat_cred_tried = True
+        _seat_cred_ok = _ask_seat_credential()
+    return _seat_cred_ok
 
 
 def _token_file():
@@ -179,8 +247,8 @@ def call(op, body, timeout=120):
     """One verb, through the app's relay. Every failure comes back as an answer
     rather than an exception: the caller is a model, and a stack trace on stdout
     would also break the transport."""
-    if BROWSER_OFF:
-        return {"ok": False, "error": OFF_REFUSAL}
+    if not _ensure_seat_credential():
+        return {"ok": False, "error": OFF_REASON or BUG_REFUSAL}
     req = urllib.request.Request(
         f"{SERVER}/browser/{op}",
         data=json.dumps(body).encode(),
@@ -203,6 +271,94 @@ def call(op, body, timeout=120):
     except urllib.error.URLError as e:
         return {"ok": False, "error": f"no agentglass at {SERVER} ({e.reason})"}
 
+
+# ── where the browser door may write ────────────────────────────────────────
+#
+# `record` and `download` do not write from here: the app's own process makes
+# the directory and writes the frames, the gif and the downloaded file
+# (browserdrive.ts `recordFrames` / `downloadFile`), outside the shell and so
+# outside the sandbox that shell runs in. The directory is the caller's, which
+# for a worker is a model's, so it is confined to the turn's own roots or a role
+# that may write one folder could put files in somebody's home.
+#
+# AGX_TURN_WRITE_ROOTS is set by the app on the turn it starts (headless.ts):
+# the worktree and the turn's run folder, `os.pathsep`-separated. Unset means
+# this server was not started by a turn, and the root is where it stands.
+def write_roots():
+    said = (os.environ.get("AGX_TURN_WRITE_ROOTS") or "").strip()
+    roots = [p for p in said.split(os.pathsep) if p] if said else [os.getcwd()]
+    return [os.path.realpath(p) for p in roots]
+
+
+def outside_roots(path):
+    """The refusal for a path this turn may not write, or "" when it may.
+
+    `realpath` on both sides, so a link inside the worktree that points at a
+    home directory is the home directory, not the worktree.
+
+    A root's own `.git` and `.claude` are inside it by prefix and are not the
+    worktree's to write: a hook there runs in the person's next unsandboxed
+    commit, and project settings are read by the next turn's CLI and by the
+    server it spawns.
+    """
+    roots = write_roots()
+    want = os.path.realpath(os.path.abspath(os.path.expanduser(str(path))))
+    for root in roots:
+        if want == root:
+            return ""
+        if not want.startswith(root.rstrip(os.sep) + os.sep):
+            continue
+        first = os.path.relpath(want, root).split(os.sep)[0]
+        if first in (".git", ".claude"):
+            return (f"refused: {want} is inside {first} of a writable root, and that "
+                    f"is what runs next: a git hook, or project settings. Pass a path "
+                    "elsewhere in the turn's worktree or its own run folder.")
+        return ""
+    return (f"refused: {want} is outside this turn's writable roots "
+            f"({', '.join(roots)}). The browser writes only inside the turn's "
+            "worktree or its own run folder; pass a path there.")
+
+
+# The two protocol methods that decide where a page's next file lands.
+DOWNLOAD_METHODS = ("Browser.setDownloadBehavior", "Page.setDownloadBehavior")
+
+
+def download_refusal(method, params):
+    """The refusal for a protocol call that arms a download, or "".
+
+    `Page.setDownloadBehavior` and its browser-wide twin reach the same power as
+    `download` without going through it: no selector, no click, just where the
+    next file a page offers lands. `behavior: "default"` and `"deny"` name no
+    directory and write nothing; an `allow` with no `downloadPath` puts the file
+    in the browser's own download folder, which is no turn root either.
+    """
+    if method not in DOWNLOAD_METHODS:
+        return ""
+    p = params if isinstance(params, dict) else {}
+    path = p.get("downloadPath")
+    if isinstance(path, str) and path:
+        # Chromium resolves a relative directory against the browser process,
+        # not this one: "assets" would be checked here as <cwd>/assets and land
+        # in the app's own working directory instead.
+        if not os.path.isabs(path):
+            return ("refused: the downloadPath must be an absolute path, because Chromium "
+                    "resolves a relative one against the browser's own working directory, not "
+                    "this process's.")
+        return outside_roots(path)
+    if str(p.get("behavior") or "allow") in ("default", "deny"):
+        return ""
+    return ("refused: arming a download with no downloadPath puts the next file in the "
+            "browser's own download folder, outside this turn's writable roots. Name a "
+            "directory inside the turn's worktree or its own run folder.")
+
+
+def batch_steps(body):
+    """Every step of a `do`, its lanes' steps included."""
+    steps = list(body.get("steps") or []) if isinstance(body.get("steps"), list) else []
+    for lane in body.get("lanes") or []:
+        if isinstance(lane, dict) and isinstance(lane.get("steps"), list):
+            steps.extend(lane["steps"])
+    return [s for s in steps if isinstance(s, dict)]
 
 
 # ── identity ────────────────────────────────────────────────────────────────
@@ -282,8 +438,24 @@ def _tabs_path():
     return os.path.join(STATE_DIR, "my-tabs.json")
 
 
+def _tab_key(name):
+    """The map key for `name`: the name, plus which worker credential holds it.
+
+    The relay forgets a name's pages when its credential ends, so a tab a
+    stopped worker left in the map is a page its successor under the same name
+    does not own. Keyed by a short digest of the worker credential (never the
+    credential), a restarted worker starts clean; the person's own token and no
+    token keep the bare name. Same rule as the CLI's.
+    """
+    tok = os.environ.get("AGENTGLASS_TOKEN", "").strip()
+    if name and tok.startswith("wk_"):
+        return f"{name}#{hashlib.sha256(tok.encode()).hexdigest()[:8]}"
+    return name
+
+
 def my_tab(name):
     """The tab this identity opened, if it still has one."""
+    name = _tab_key(name)
     try:
         with open(_tabs_path()) as f:
             return (json.load(f) or {}).get(name) or None
@@ -299,6 +471,7 @@ def remember_tab(name, tab_id):
     """
     if not name or not tab_id:
         return
+    name = _tab_key(name)
     try:
         os.makedirs(STATE_DIR, exist_ok=True)
         try:
@@ -317,6 +490,7 @@ def remember_tab(name, tab_id):
 
 def forget_tab(name):
     """After a tab is closed, or found to be gone."""
+    name = _tab_key(name)
     try:
         with open(_tabs_path()) as f:
             held = json.load(f) or {}
@@ -402,6 +576,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {"url": {"type": "string", "description": "http(s) address"},
+                           "vault": {"type": "string", "description": "The vault a first visit of this site signs your own container in from, when the answer said the site is in several: the name it listed."},
                            "waitSlot": {"type": "number", "description": "When 12 pages are already awake, queue this many seconds (max 120) for a free slot instead of being refused."}},
             "required": ["url"],
         },
@@ -1077,18 +1252,48 @@ TOOLS = [
             "person's own container instead (their logins — only on purpose); `profile: \"<name>\"` opens it in "
             "a container browser_profiles lists. Only a few lanes exist at once and one idle for 15 minutes "
             "is closed. A lane that is closed, or never was, is refused by name — it never falls back to the "
-            "person's tab."
+            "person's tab.\n\n"
+            "LOGIN VAULT: `ephemeral: true` opens an in-memory lane; then action \"vault\" with its `id` and "
+            "`site` signs that lane in to one site from the person's login vault. You get counts, never the "
+            "values. A sensitive site waits for the person's OK (5 minutes, then no). A site in several "
+            "vaults answers `ambiguous` with their names: ask the person, then pass `vault`. In a lane "
+            "signed in this way, eval, cookies, storage and other verbs that read the login back are refused."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["new", "list", "close"]},
-                "id": {"type": "string", "description": "The lane to close."},
+                "action": {"type": "string", "enum": ["new", "list", "close", "vault"]},
+                "id": {"type": "string", "description": "The lane to close, or to sign in from the vault."},
+                "ephemeral": {"type": "boolean", "description": "new: an in-memory lane, gone when it closes (needed for vault)."},
+                "site": {"type": "string", "description": "vault: the one site to sign in to, like acme.test."},
+                "vault": {"type": "string", "description": "vault: which vault, when the answer was ambiguous. new (with ephemeral): the vault a first visit of a site signs the lane in from."},
                 "profile": {"type": "string", "description": "new: a container by name, instead of a private one."},
                 "shared": {"type": "boolean", "description": "new: the person's own container."},
                 "force": {"type": "boolean", "description": "list every agent's lanes, or close one somebody else opened."},
             },
             "required": ["action"],
+        },
+    },
+    {
+        "name": "browser_vault",
+        "description": (
+            "SIGN YOUR LANE IN to one site from the person's login vault. Open an in-memory lane first "
+            "(browser_lane action \"new\" with `ephemeral: true`), then pass its id as `lane` and the "
+            "`site`. You get counts, never the cookie values. A site the person marked sensitive waits "
+            "for their OK on a card (5 minutes, then no). A site in several vaults answers `ambiguous` "
+            "with their names: ask the person which, then pass `vault`. In a lane signed in this way, "
+            "eval, cookies, storage and other verbs that read the login back are refused. Read-only "
+            "mode refuses every pull. Only the person fills the vault: you cannot refresh it. "
+            "`list: true` names the vaults and their site counts."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "lane": {"type": "string", "description": "Your ephemeral lane's id (from browser_lane new)."},
+                "site": {"type": "string", "description": "The one site to sign in to, like acme.test."},
+                "vault": {"type": "string", "description": "Which vault, when the answer was ambiguous: the name it listed (any case, - for the dash) or the id `list` gives."},
+                "list": {"type": "boolean", "description": "Only list the vault names and their site counts (never a cookie or a value). No lane or site needed."},
+            },
         },
     },
     {
@@ -1352,6 +1557,88 @@ TOOLS = [
                 "waitMs": {"type": "integer", "description": "with check: how long to wait, at most 25000"},
                 "cancel": {"type": "boolean"},
             },
+        },
+    },
+    {
+        "name": "browser_guide",
+        "description": (
+            "Guide mode: walk the person through a page step by step while THEY click — for a step that must be "
+            "done by the person's own hand, like a risky change on a production page. `action: start` with `why` "
+            "(one line) puts the tab in guide mode: every act on it (click, fill, type, press, open, eval…) is "
+            "then refused for every agent, you included; reading still works. Point at each step with "
+            "browser_point, then `action: next` waits for the person: it returns `event` (ok, back, stop, click, "
+            "navigated) or, after about 50 s with no answer, `pending: true` — call it again; silence is never an "
+            "answer. `action: end` lifts the lock and returns the audit (every step, what the person did and "
+            "when, and any act of yours that was refused)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["start", "say", "next", "end"], "description": "say: new words on the card on screen (with `say`). A whole plan: browser_guide_run"},
+                "why": {"type": "string", "description": "with start: what the person is being walked through, one line"},
+                "say": {"type": "string", "description": "with say: the card's new words"},
+                "page": {"type": "string", "description": "the tab to guide (an id from browser_tabs); default: your own tab, else the one in front"},
+            },
+            "required": ["action"],
+        },
+    },
+    {
+        "name": "browser_guide_run",
+        "description": (
+            "A whole guide at once: the server points each step of `plan` on the person's tab and moves on by "
+            "itself when the person does the step's `wait` (ok = the card's OK, click = their click on the target, "
+            "nav = the page navigating, input = the field holds text 1.5 s after their last key, submit = they "
+            "sent the form). Back goes one step back; Stop ends it; a Stop leaves Resume on their card for 10 "
+            "minutes. The step count is fixed. Then call browser_guide action next again and again: each returns "
+            "the run's next event in order (step, back, navigated, input, submit, lost, resumed, run-done with "
+            "the per-visit summary). browser_guide action end returns the audit. A plan only points and waits; it "
+            "never acts. The answer lists warnings for cards that do not stand on their own."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "page": {"type": "string", "description": "the person's tab to guide (an id from browser_tabs)"},
+                "why": {"type": "string", "description": "what the person is being walked through, one line"},
+                "plan": {
+                    "type": "array", "maxItems": 50,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "target": {"type": "string", "description": "a selector (CSS or a locator); never an observe id"},
+                            "text": {"type": "string", "description": "with several matches: the label of the one to point"},
+                            "say": {"type": "string", "description": "what the person should do there, standing on its own"},
+                            "wait": {"type": "string", "enum": ["ok", "click", "nav", "input", "submit"], "description": "default: click with a target, ok without"},
+                            "copy": {"type": "string", "description": "exact text the person will paste"},
+                        },
+                        "required": ["say"],
+                    },
+                },
+            },
+            "required": ["page", "why", "plan"],
+        },
+    },
+    {
+        "name": "browser_point",
+        "description": (
+            "One step of a guide (browser_guide): a ring on the element and a speech bubble under the agent's "
+            "pointer saying `say`, drawn over the page, never inside it. Without `waitClick` the person answers "
+            "with OK (or Back / Stop); with it, their click on the element is the answer. Then browser_guide "
+            "with action next. `step` is N/M, shown as Step N of M."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string", "description": "an id from browser_observe (e12), a locator or CSS"},
+                "say": {"type": "string", "description": "what the person should do there"},
+                "waitClick": {"type": "boolean", "description": "the person's click on the element is the answer"},
+                "wait": {"type": "string", "enum": ["ok", "click", "nav", "input", "submit"], "description": "what answers the step, instead of waitClick: nav = the page navigates, input = the field holds text 1.5 s after their last key, submit = they send the form"},
+                "text": {"type": "string", "description": "with several matches: point the one whose label holds this text"},
+                "step": {"type": "string", "description": "N/M, like 2/4"},
+                "copy": {"type": "string", "description": "exact text the person will paste (a command, a reply): the card shows it with a Copy button they click. At most 2000 characters, may be multi-line"},
+                "suggest": {"type": "string", "description": "a draft for the text field you point at (textarea, input or contenteditable): the card shows it with Insert suggestion, and only the person's click puts it in the field, never submitted. At most 2000 characters, may be multi-line"},
+                "page": {"type": "string"},
+            },
+            "required": ["selector", "say"],
         },
     },
     {
@@ -1741,7 +2028,7 @@ def _generic_call(args, raw=False):
 # is the hole reopened by hand. Caught here by REQ-11's own MCP test, which
 # asked `browser_whoami` with no tab and got the refusal sentence where it
 # expected JSON.
-TAB_OPS = {"tabs", "tab", "newtab", "closetab", "profiles", "whoami", "health", "settings", "scrape", "lane"}
+TAB_OPS = {"tabs", "tab", "newtab", "closetab", "profiles", "whoami", "health", "settings", "scrape", "lane", "vault"}
 
 # `profile` and `shared` say WHO, not WHAT: they choose which tab this call is
 # addressed to and never travel to the relay as part of the verb's body.
@@ -1992,6 +2279,18 @@ def run(name, args, raw=False):
     verb = VERB.get(name)
     if not verb:
         return {"content": [{"type": "text", "text": f"no such tool: {name}"}], "isError": True}
+    if verb == "vault":
+        # The same pull as `browser_lane action=vault`, under a name of its own.
+        if args.get("list") is True:
+            args = {"action": "vaults"}
+        elif not args.get("lane") or not args.get("site"):
+            return {"content": [{"type": "text", "text": "browser_vault needs `lane` and `site`, or `list: true`"}], "isError": True}
+        else:
+            args = {"action": "vault", "id": args.get("lane"), "site": args.get("site"), "vault": args.get("vault")}
+        verb = "lane"
+    if verb == "guide_run":
+        args = {**args, "action": "run"}
+        verb = "guide"
     if verb == "storage_state":
         return storage_state(args)
     if verb == "set_storage_state":
@@ -2056,6 +2355,8 @@ def run(name, args, raw=False):
         body = {"action": args.get("action", "start")}
     elif verb == "open":
         body = {"url": args.get("url", "")}
+        if isinstance(args.get("vault"), str) and args["vault"].strip():
+            body["vault"] = args["vault"].strip()
     elif verb in ("click", "wait", "text"):
         body = {"selector": args.get("selector", "")}
         if args.get("observe"):
@@ -2126,7 +2427,7 @@ def run(name, args, raw=False):
     if lane:
         body["lane"] = lane
     if verb == "lane":
-        for key in ("profile", "shared", "force"):
+        for key in ("profile", "shared", "force", "ephemeral", "site", "vault"):
             if args.get(key) is not None:
                 body[key] = args[key]
     who = "" if args.get("shared") and verb != "lane" else my_name(None if verb == "lane" and args.get("shared") else args.get("profile"))
@@ -2197,7 +2498,43 @@ def run(name, args, raw=False):
         else "own-tab" if sent_to
         else "own-container"))
 
+    # The verbs that write a path the caller names: the app's process would
+    # make the directory and write it there, outside this shell and its sandbox.
+    if verb in ("record", "download", "trace"):
+        for named in (body.get("dir"), body.get("gif") if verb == "record" else None,
+                      body.get("path") if verb == "trace" else None):
+            why = outside_roots(named) if named else ""
+            if why:
+                return {"content": [{"type": "text", "text": why}], "isError": True}
+    # The protocol reaches the same power: `Browser.setDownloadBehavior` puts
+    # the next file a page offers in a directory the caller names. A `do` or a
+    # lane carries its own verbs, so every step is read: the `cdp` branch below
+    # never runs for one, and it would otherwise reach `runSteps` unchecked here.
+    if verb == "cdp":
+        why = download_refusal(body.get("method"), body.get("params"))
+        if why:
+            return {"content": [{"type": "text", "text": why}], "isError": True}
+    if verb == "do":
+        for step in batch_steps(body):
+            if step.get("op") != "cdp":
+                continue
+            args = step.get("args") if isinstance(step.get("args"), dict) else {}
+            why = download_refusal(args.get("method"), args.get("params"))
+            if why:
+                return {"content": [{"type": "text", "text": why}], "isError": True}
+    # The route makes the same checks again with these, because the directory
+    # can be swapped for a link after this process looked at it, and because a
+    # step becomes an ask one layer down.
+    if (os.environ.get("AGX_TURN_WRITE_ROOTS") or "").strip():
+        body["roots"] = write_roots()
     res = call(verb, body)
+    # `guide next` waits for the person in 20 s calls, up to about 50 s here:
+    # past that it answers `pending` and the agent asks again, like `waitfor`,
+    # so no tool call is held open for minutes and nothing is guessed.
+    if verb == "guide" and body.get("action") == "next":
+        end = time.time() + 50
+        while res.get("ok") and isinstance(res.get("value"), dict) and res["value"].get("pending") and time.time() < end:
+            res = call(verb, {**body, "waitMs": int(max(200, min(20000, (end - time.time()) * 1000)))})
     # `waitSlot`: queue for a free tab instead of being refused at 12 awake.
     wait = args.get("waitSlot")
     if verb in ("open", "newtab") and isinstance(wait, (int, float)) and wait > 0:
