@@ -8,11 +8,12 @@ carries its own notes, the desktop installers and the phone's `.apk`.
 
 ## Released
 
+- **v1.1.0** — **A faster, calmer window, a rebuilt Settings and Jira board, and agents that guide you through a page.**
+  - **Settings and Jira.** One layout for every Settings page with per-project Claude accounts, and a Jira board that follows the workflow, shows each card's agent, and edits several cards at once.
+  - **Browser and workers.** Agents can guide you on your own tab under a per-site grant, and resumed workers keep their skills and MCP servers.
+  - **Performance and phone.** Boot answers /health in 0.85 s, idle CPU and stalls are down, and the phone raises alerts for watched pull requests and cards.
+  - **From outside.** PowerShell hook commands on Windows (#699) and symlinked roots in disk checks (#697).
 - **v1.0.0** — **The first stable release: a Starboard dashboard, agents that fly a plan, and a computer you can see and clean.**
-  - **Starboard and the Lantern.** A dashboard with a spend sparkline, a 5 h quota tile, a clock and life signs for subagents and background shells. The "Stalled?" tile and its limits (subagent 10 minutes, shell 30 minutes, stalled 20 minutes) are estimates shown as a hint, not a measurement.
-  - **Flight plan and Polaris.** Agents write, preflight and launch a plan with their own credential and a person says Go. Polaris keeps pull requests moving and is off until you turn it on.
-  - **Boards and the machine.** One card and one filter language across the Jira tree, GitHub and ClickUp, closed cards with Clean up and Clean up all, and Docker, disk and machine panels.
-  - **Smaller changes.** Automatic cleanup shows a "Cleaning 3 of 10" chip in the window bar, and the Finder replaces the Files view.
 - **v0.27.0** — **One Agents screen, one rule list per project, and no more chat view.**
 - **v0.26.0** — **The agent's clicks and typing count as a person's, and tmux tabs appear at once.**
   - **Real input in the built-in browser.** click, double-click, hover, type, press and fill reach the page as real input, so sites that ignore scripted events work, and the agent's keys never fire the app's own shortcuts. Right-click, drag and pinch-zoom are still scripted.
