@@ -31,7 +31,7 @@ const asked = (n: number): AskedAlert => ({
 });
 const card: CardNote = { kind: "mention", id: "86abc12", label: "ORBIT-1042", title: "Fix", status: "open", who: "Ada", said: "ping" };
 
-function rig(opts: { enabled?: boolean | null; foreground?: boolean; open?: AskedAlert[]; since?: number | null; rejectRaise?: boolean; slowEnabled?: boolean } = {}) {
+function rig(opts: { enabled?: boolean | null; foreground?: boolean; open?: AskedAlert[]; since?: number | null; rejectRaise?: boolean; slowEnabled?: boolean; dnd?: boolean } = {}) {
   const raised: { r: WatchRaise; hostId: string; title: string }[] = [];
   const dismissed: string[] = [];
   const sent: { path: string; init?: unknown }[] = [];
@@ -45,6 +45,7 @@ function rig(opts: { enabled?: boolean | null; foreground?: boolean; open?: Aske
     now: () => 1_000_000,
     since: { get: async (id) => store.get(id) ?? null, set: async (id, n) => { store.set(id, n); } },
     readEnabled: async () => { if (opts.slowEnabled) await new Promise((r) => setTimeout(r, 20)); return enabled; },
+    readDnd: async () => opts.dnd ?? false,
     ask: (async (_h: unknown, path: string, init?: unknown) => {
       sent.push({ path, init });
       return path === "/alerts/asked" ? { ok: true, value: { ok: true, open: opts.open ?? [] } } : { ok: true, value: { ok: true } };
@@ -53,6 +54,27 @@ function rig(opts: { enabled?: boolean | null; foreground?: boolean; open?: Aske
   return { w, raised, dismissed, sent, store, setEnabled: (v: boolean | null) => { enabled = v; } };
 }
 const plain = (t: string): string => t;
+
+describe("desktop Do Not Disturb", () => {
+  test("a fire while the desk is on DND draws nothing, and the reconnect does not replay it", async () => {
+    const t = rig({ dnd: true, since: 0 });
+    await t.w.onFire(host, fire(), plain);
+    expect(t.raised).toHaveLength(0);
+    const again = rig({ dnd: true, since: 0, open: [asked(1)] });
+    await again.w.catchUp(host, plain);
+    expect(again.raised).toHaveLength(0);
+  });
+  test("with DND off the same asked alert is raised by the reconnect", async () => {
+    const again = rig({ dnd: false, since: 0, open: [asked(1)] });
+    await again.w.catchUp(host, plain);
+    expect(again.raised).toHaveLength(1);
+  });
+  test("with DND off the same fire draws", async () => {
+    const t = rig({ dnd: false });
+    await t.w.onFire(host, fire(), plain);
+    expect(t.raised).toHaveLength(1);
+  });
+});
 
 describe("live", () => {
   test("a fire raises one notification tagged by its pull request", async () => {

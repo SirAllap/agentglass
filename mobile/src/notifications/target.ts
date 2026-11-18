@@ -11,7 +11,12 @@
  * the Terminal. A watch alert (`kind: "watch"`, watchAlerts.ts) names a pull
  * request or a card instead, and lands on that screen; one that names a pull
  * request without a usable checkout lands on the pull-request list, where the
- * person can find it. Jira cards have no phone screen, so they never get here.
+ * person can find it.
+ *
+ * A card's tracker decides its screen, and the alert says which (`jira: true`
+ * since Phase 4). It is NOT guessed from the id: a Jira key and a ClickUp
+ * custom id are the same shape (`ORBIT-1042`), and guessing sent Jira taps to
+ * `/card/[id]`, whose every call is `/clickup/*`.
  */
 
 export type AlertRoute =
@@ -23,6 +28,7 @@ export type AlertRoute =
     }
   | { pathname: "/pr/[number]"; params: { number: string; root: string } }
   | { pathname: "/card/[id]"; params: { id: string } }
+  | { pathname: "/jira/[key]"; params: { key: string } }
   | { pathname: "/prs" };
 
 /** tmux pane ids are `%` and digits. Anything else is not one. */
@@ -58,6 +64,9 @@ export const validAlertId = (id: unknown): id is string =>
 
 function watchRoute(d: Record<string, unknown>): AlertRoute | null {
   if (d.summary === true) return { pathname: "/prs" };
+  // The tracker first: both kinds of card pass `validCardId`, and only the
+  // alert knows which one it is about.
+  if (d.jira === true && validCardId(d.card)) return { pathname: "/jira/[key]", params: { key: d.card } };
   if (validCardId(d.card)) return { pathname: "/card/[id]", params: { id: d.card } };
   if (validPrNumber(d.pr)) {
     return validRoot(d.root)

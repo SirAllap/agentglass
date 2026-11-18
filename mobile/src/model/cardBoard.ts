@@ -26,13 +26,20 @@ export type BoardCard = Pick<ProviderTask, "id" | "title" | "status" | "statusKi
 export const UNASSIGNED = "none";
 
 export interface CardFilters {
-  /** Status names as the workspace spells them, OR-ed. */
+  /** Status names as the workspace spells them, OR-ed. Compared without case,
+   *  because one status may be spelled two ways across lists. */
   statuses: string[];
   /** `personKey`s, OR-ed, with `UNASSIGNED` for a card nobody is on. */
   people: string[];
   /** Section headers by status, like the desk's board. Not a narrowing. */
   group: boolean;
 }
+
+/** A status is the same status whatever its case: two projects of one site may
+ *  spell it "In review" and "In Review", and the desk merges them (web/src/lib/
+ *  boardGroups.ts). Every place here that compares or draws a status name uses
+ *  this, so one card cannot fall into a second header or a second checklist row. */
+const same = (name: string): string => name.trim().toLowerCase();
 
 export const NO_CARD_FILTERS: CardFilters = { statuses: [], people: [], group: true };
 
@@ -58,7 +65,7 @@ export function searchMatches(c: BoardCard, q: string): boolean {
 }
 
 export function matchesFacets(c: BoardCard, f: Pick<CardFilters, "statuses" | "people">): boolean {
-  if (f.statuses.length && !f.statuses.includes(c.status)) return false;
+  if (f.statuses.length && !f.statuses.some((s) => same(s) === same(c.status))) return false;
   if (f.people.length) {
     const on = peopleOf(c);
     const hit = on.length ? on.some((p) => f.people.includes(personKey(p))) : f.people.includes(UNASSIGNED);
@@ -67,17 +74,29 @@ export function matchesFacets(c: BoardCard, f: Pick<CardFilters, "statuses" | "p
   return true;
 }
 
+/**
+ * Whether a card is work you still owe.
+ *
+ * The card's own fold, and not the view's `ListStatus.type`: that list is
+ * deduped by NAME across the board's lists (server/src/clickup.ts
+ * `statusesSeen`), so one list's type would stand in for another's while the
+ * card carries its own list's fold in `statusKind`. The desk's Open filter is
+ * this same test (`t.statusKind !== "done"`, web/src/components/TasksPanel.tsx).
+ */
 const isOpen = (c: BoardCard): boolean => c.statusKind !== "done";
 
 /** What the list draws: the search, the facets, then Open or All. */
-export function narrowed<T extends BoardCard>(cards: readonly T[], q: string, f: CardFilters, openOnly: boolean): T[] {
+export function narrowed<T extends BoardCard>(
+  cards: readonly T[], q: string, f: CardFilters, openOnly: boolean,
+): T[] {
   return cards.filter((c) => searchMatches(c, q) && matchesFacets(c, f) && (!openOnly || isOpen(c)));
 }
 
 /** The cards the sheet's options are counted over: the search and Open/All, but
  *  not the facets — a count that shrank as you ticked would be a moving target. */
-export const scopeCards = <T extends BoardCard>(cards: readonly T[], q: string, openOnly: boolean): T[] =>
-  narrowed(cards, q, NO_CARD_FILTERS, openOnly);
+export const scopeCards = <T extends BoardCard>(
+  cards: readonly T[], q: string, openOnly: boolean,
+): T[] => narrowed(cards, q, NO_CARD_FILTERS, openOnly);
 
 /** What the list shows and the two numbers on the Open / All control (what
  *  each would show), from one pass over the cards. */
@@ -99,8 +118,9 @@ export const truncatedNote = (read: number, truncated: boolean): string | null =
   truncated ? `Showing the first ${read} cards; narrow the board to see the rest.` : null;
 
 /** "Show N cards": the draft filters over the same search and Open/All. */
-export const shownCount = (cards: readonly BoardCard[], draft: CardFilters, q: string, openOnly: boolean): number =>
-  narrowed(cards, q, draft, openOnly).length;
+export const shownCount = (
+  cards: readonly BoardCard[], draft: CardFilters, q: string, openOnly: boolean,
+): number => narrowed(cards, q, draft, openOnly).length;
 
 /** How many facets narrow the list, for the badge on the filter button. */
 export const activeFacets = (f: CardFilters): number => (f.statuses.length ? 1 : 0) + (f.people.length ? 1 : 0);
@@ -116,17 +136,18 @@ export interface StatusOption { status: string; color?: string; count: number }
 export function statusOptions(scope: readonly BoardCard[], order: readonly ListStatus[], keep: readonly string[] = []): StatusOption[] {
   const seen = new Map<string, StatusOption>();
   for (const c of scope) {
-    const at = seen.get(c.status) ?? { status: c.status, color: c.statusColor, count: 0 };
+    const k = same(c.status);
+    const at = seen.get(k) ?? { status: c.status, color: c.statusColor, count: 0 };
     at.count++;
-    seen.set(c.status, at);
+    seen.set(k, at);
   }
-  for (const k of keep) if (!seen.has(k)) seen.set(k, { status: k, count: 0 });
-  const rank = new Map([...order].sort((a, b) => a.orderindex - b.orderindex).map((s, i) => [s.status, i] as const));
-  const colour = new Map(order.map((s) => [s.status, s.color] as const));
+  for (const k of keep) if (!seen.has(same(k))) seen.set(same(k), { status: k, count: 0 });
+  const rank = new Map([...order].sort((a, b) => a.orderindex - b.orderindex).map((s, i) => [same(s.status), i] as const));
+  const colour = new Map(order.map((s) => [same(s.status), s.color] as const));
   return [...seen.values()]
-    .map((o, i) => ({ o, at: rank.get(o.status) ?? order.length + i }))
+    .map((o, i) => ({ o, at: rank.get(same(o.status)) ?? order.length + i }))
     .sort((a, b) => a.at - b.at)
-    .map(({ o }) => ({ ...o, color: colour.get(o.status) ?? o.color }));
+    .map(({ o }) => ({ ...o, color: colour.get(same(o.status)) ?? o.color }));
 }
 
 export interface PersonOption {
@@ -184,22 +205,25 @@ export interface CardSection<T extends BoardCard = BoardCard> {
 /**
  * The list's sections. Grouped: one per status present, in the list's order
  * (then any the list does not name, as met). Not grouped: one with no header,
- * in the order the board gave.
+ * in the order the board gave. A status spelled two ways is one section, which
+ * wears the view's spelling when it lists it.
  */
 export function cardSections<T extends BoardCard>(cards: readonly T[], order: readonly ListStatus[], group: boolean): CardSection<T>[] {
   if (!group) return [{ key: "all", label: null, cards: [...cards] }];
-  const by = new Map<string, { color?: string; cards: T[] }>();
+  const by = new Map<string, { name: string; color?: string; cards: T[] }>();
   for (const c of cards) {
-    const at = by.get(c.status) ?? { color: c.statusColor, cards: [] };
+    const k = same(c.status);
+    const at = by.get(k) ?? { name: c.status, color: c.statusColor, cards: [] };
     at.cards.push(c);
-    by.set(c.status, at);
+    by.set(k, at);
   }
-  const rank = new Map([...order].sort((a, b) => a.orderindex - b.orderindex).map((s, i) => [s.status, i] as const));
-  const colour = new Map(order.map((s) => [s.status, s.color] as const));
+  const rank = new Map([...order].sort((a, b) => a.orderindex - b.orderindex).map((s, i) => [same(s.status), i] as const));
+  const colour = new Map(order.map((s) => [same(s.status), s.color] as const));
+  const listed = new Map(order.map((s) => [same(s.status), s.status] as const));
   return [...by.entries()]
-    .map(([status, v], i) => ({ status, v, at: rank.get(status) ?? order.length + i }))
+    .map(([k, v], i) => ({ k, v, at: rank.get(k) ?? order.length + i }))
     .sort((a, b) => a.at - b.at)
-    .map(({ status, v }) => ({ key: status, label: status, color: colour.get(status) ?? v.color, cards: v.cards }));
+    .map(({ k, v }) => ({ key: k, label: listed.get(k) ?? v.name, color: colour.get(k) ?? v.color, cards: v.cards }));
 }
 
 export type BoardItem<T extends BoardCard = BoardCard> =
@@ -220,7 +244,9 @@ export type EmptyWhy = "none" | "search" | "filters" | "all-done";
 
 /** Why a list is empty, most specific first: what somebody typed, then what
  *  they ticked, then "everything here is finished" — and only then nothing. */
-export function whyEmpty(cards: readonly BoardCard[], q: string, f: CardFilters, openOnly: boolean): EmptyWhy | null {
+export function whyEmpty(
+  cards: readonly BoardCard[], q: string, f: CardFilters, openOnly: boolean,
+): EmptyWhy | null {
   if (narrowed(cards, q, f, openOnly).length) return null;
   if (!cards.length) return "none";
   if (q.trim()) return "search";

@@ -40,7 +40,7 @@ import { computerKey } from "../src/lib/hosts.ts";
 import { useKeyboardLift } from "../src/state/keyboard-lift.ts";
 import { usePaletteTick } from "../src/state/use-palette.ts";
 import {
-  START, SEARCH_MODES, backTarget, changedFiles, changedLine, changedNote, changedUnder, diffParams, dirOf,
+  START, SEARCH_MODES, backTarget, changedFiles, changedNote, changedUnder, diffParams, dirOf,
   findLabel, findMatches, groupHits, hitParts, hitSummary, matchesByLine, nameOf, nameResults, recentMatching, searchPlan,
   searching, sizeLabel, stepMatch, type Changed, type FilesState, type Hit,
 } from "../src/model/files.ts";
@@ -50,8 +50,8 @@ import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { BackIcon, ChevronIcon, ReposIcon } from "../src/nav/icons.tsx";
 import { Glyph, type GlyphName } from "../src/nav/glyphs.tsx";
-import { Card, Group, GroupTitle, Label, Note, Row, Segmented, Snack, TAP, useFlash } from "../src/ui.tsx";
-import { PullHint, StatusBadge } from "../src/git-ui.tsx";
+import { Card, Chip, Group, GroupTitle, Label, Note, Row, Segmented, Snack, TAP, useFlash } from "../src/ui.tsx";
+import { PullHint, mark } from "../src/git-ui.tsx";
 import { C, MONO, RADIUS, SPACE, T, tint } from "../src/theme.ts";
 
 /** One row of `/files/tree`. Declared here rather than in shared/ — it is this
@@ -350,11 +350,16 @@ export default function FilesScreen(): React.ReactNode {
       options={{
         headerTitle: () => (
           <View style={{ maxWidth: screenW - TAP * 2 - SPACE.xl }}>
-            <Text numberOfLines={1} style={{ color: C.text, fontSize: T.title, fontWeight: "600" }}>
+            <Text
+              numberOfLines={1}
+              style={{ color: C.text, fontSize: open ? 14 : T.title, fontWeight: "600", fontFamily: open ? MONO : undefined }}
+            >
               {open ? nameOf(open) : "Files"}
             </Text>
             <Text numberOfLines={1} ellipsizeMode="head" style={{ color: C.text3, fontSize: T.small, fontFamily: MONO }}>
-              {open ? [leaf, ...dirOf(open).split("/").filter(Boolean)].join("/") : leaf}
+              {open
+                ? `${open}${lines.length ? ` · ${lines.length} lines` : ""}`
+                : leaf}
             </Text>
           </View>
         ),
@@ -395,17 +400,36 @@ export default function FilesScreen(): React.ReactNode {
     return (
       <View ref={lifted.ref} style={{ flex: 1, backgroundColor: C.bg, paddingBottom: lifted.lift }}>
         {header}
-        {changedNote(here) ? (
-          <View style={{ paddingHorizontal: SPACE.lg, paddingBottom: SPACE.sm, flexDirection: "row" }}>
-            <View style={{
-              flexDirection: "row", alignItems: "center", gap: 6, height: 36, paddingHorizontal: SPACE.md,
-              borderRadius: RADIUS.pill, backgroundColor: tint(C.warning, 0.16),
-            }}>
-              <Glyph name="file" color={C.warning} size={14} />
-              <Text style={{ color: C.warning, fontSize: T.body, fontWeight: "600" }}>{changedNote(here)}</Text>
-            </View>
-          </View>
-        ) : null}
+        {/* The path, and the one control that changes how the file is drawn:
+            wrap on or off. It was a pill under the title and a button at the
+            foot, which made the same setting appear as two different things. */}
+        <View style={{
+          flexDirection: "row", alignItems: "center", gap: SPACE.sm,
+          paddingHorizontal: SPACE.lg, paddingBottom: SPACE.sm,
+        }}>
+          <Text numberOfLines={1} ellipsizeMode="head" style={{ flex: 1, color: C.text3, fontSize: T.small, fontFamily: MONO }}>
+            {open}
+          </Text>
+          {changedNote(here) ? (
+            <Chip label={changedNote(here) ?? ""} tone="warn" />
+          ) : null}
+          <Pressable
+            accessibilityRole="switch"
+            accessibilityState={{ checked: wrap }}
+            accessibilityLabel={`Wrap long lines: ${wrap ? "on" : "off"}`}
+            onPress={() => setWrap((w) => !w)}
+            style={({ pressed }) => ({
+              height: 30, paddingHorizontal: SPACE.md, borderRadius: 9,
+              alignItems: "center", justifyContent: "center",
+              backgroundColor: wrap ? tint(C.primary, 0.16) : C.bg3,
+              opacity: pressed ? 0.8 : 1,
+            })}
+          >
+            <Text style={{ color: wrap ? C.primary : C.text2, fontSize: T.small, fontWeight: "600" }}>
+              Wrap · {wrap ? "on" : "off"}
+            </Text>
+          </Pressable>
+        </View>
 
         {fileError ? <View style={{ padding: SPACE.lg }}><Card><Label text="Cannot read it" /><Note tone="bad">{fileError}</Note></Card></View> : null}
         {body === null && !fileError ? <View style={{ padding: SPACE.xl }}><ActivityIndicator color={C.text3} /></View> : null}
@@ -516,7 +540,6 @@ export default function FilesScreen(): React.ReactNode {
             on={s.finding}
             onPress={() => setS((was) => ({ ...was, finding: !was.finding }))}
           />
-          <BarBtn icon="wrap" label="Wrap" on={wrap} onPress={() => setWrap((w) => !w)} />
           {here && here.status !== "untracked" ? (
             <BarBtn icon="branch" label="See diff" tone="primary" onPress={() => router.push({ pathname: "/git-diff", params: diffParams(here) })} />
           ) : null}
@@ -698,21 +721,31 @@ export default function FilesScreen(): React.ReactNode {
 
             {inFolder.length ? (
               <>
-                <GroupTitle text="Changed on this branch" />
+                <GroupTitle text={`Changed on this branch · ${inFolder.length}`} />
                 <Group>
-                  {visibleChanged.map((c) => (
-                    <Row
-                      key={c.path}
-                      title={nameOf(c.path)}
-                      sub={changedLine(c)}
-                      lead={<StatusBadge status={c.status === "typechange" ? "type-changed" : c.status} />}
-                      chevron
-                      onPress={() => {
-                        if (c.status === "deleted") router.push({ pathname: "/git-diff", params: diffParams(c) });
-                        else openFile(c.path, false);
-                      }}
-                    />
-                  ))}
+                  {visibleChanged.map((c) => {
+                    const st = mark(c.status === "typechange" ? "type-changed" : c.status);
+                    return (
+                      <Row
+                        key={c.path}
+                        title={c.path}
+                        sub={dirOf(c.path) || "this folder"}
+                        mono
+                        trail={
+                          <Chip
+                            label={st.letter}
+                            tone={c.status === "deleted" ? "bad"
+                              : c.status === "modified" ? "warn" : "good"}
+                          />
+                        }
+                        chevron
+                        onPress={() => {
+                          if (c.status === "deleted") router.push({ pathname: "/git-diff", params: diffParams(c) });
+                          else openFile(c.path, false);
+                        }}
+                      />
+                    );
+                  })}
                 </Group>
                 {inFolder.length > CHANGED_FIRST ? (
                   <Pressable
@@ -728,7 +761,7 @@ export default function FilesScreen(): React.ReactNode {
               </>
             ) : null}
 
-            <GroupTitle text={s.rel || leaf} />
+            <GroupTitle text={s.rel ? `Folders · ${s.rel}` : "Folders"} />
             {entries === null && !error ? <View style={{ padding: SPACE.xl }}><ActivityIndicator color={C.text3} /></View> : null}
             {entries && !entries.length ? <Card><Note>This folder is empty.</Note></Card> : null}
             {sorted.length ? (
@@ -737,6 +770,7 @@ export default function FilesScreen(): React.ReactNode {
                   <Row
                     key={entry.rel}
                     title={entry.name}
+                    mono
                     lead={entry.dir
                       ? <View style={{ width: 32, alignItems: "center" }}><ReposIcon color={C.primary} size={20} /></View>
                       : <FileMark />}
@@ -750,6 +784,9 @@ export default function FilesScreen(): React.ReactNode {
               </Group>
             ) : null}
             <PullHint text="Pull down to refresh." />
+            <Text style={{ color: C.text3, fontSize: T.small, paddingHorizontal: SPACE.xs }}>
+              Read-only. Nothing on this screen writes.
+            </Text>
           </>
         )}
       </ScrollView>

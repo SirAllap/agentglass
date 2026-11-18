@@ -7,7 +7,9 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { GitBranch } from "../../shared/types.ts";
-import { keepOrder, newBranchProblem, orderBranches, scmSuccessText, stashTitle, trackWords, VIEWS } from "../src/model/scm.ts";
+import {
+  inMore, keepOrder, MORE_VIEWS, newBranchProblem, orderBranches, scmSuccessText, stashTitle, tabOf, trackWords, VIEWS,
+} from "../src/model/scm.ts";
 
 const repos = await Bun.file(new URL("../app/(tabs)/repos.tsx", import.meta.url)).text();
 
@@ -66,8 +68,17 @@ describe("stashTitle", () => {
 });
 
 describe("the views", () => {
-  test("five, in reading order", () => {
-    expect(VIEWS.map((v) => v.id)).toEqual(["changes", "log", "branches", "stash", "pr"]);
+  test("four segments, in reading order, with Stash and PR behind More", () => {
+    expect(VIEWS.map((v) => v.id)).toEqual(["changes", "log", "branches", "more"]);
+    expect(MORE_VIEWS).toEqual(["stash", "pr"]);
+  });
+
+  test("the two behind More keep More lit, and mean it", () => {
+    expect(tabOf("stash")).toBe("more");
+    expect(tabOf("pr")).toBe("more");
+    for (const tab of VIEWS) expect(tabOf(tab.id)).toBe(tab.id);
+    expect(inMore("pr")).toBe(true);
+    expect(inMore("branches")).toBe(false);
   });
 });
 

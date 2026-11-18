@@ -26,11 +26,11 @@
  * the tail is what is shown first, with the rest one tap behind it.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, AppState, Pressable, RefreshControl, ScrollView, Text, View } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import type { PrCheckJob } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
-import { byUrgency, foldJobLog, looksFailed, nextJobsPoll, ranFor, standingOf, tailOf } from "../../src/model/checkJobs.ts";
+import { byUrgency, foldJobLog, jobSquares, jobsLine, looksFailed, nextJobsPoll, ranFor, standingOf, tailOf } from "../../src/model/checkJobs.ts";
 import { useAgentglass } from "../../src/state/host-context.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
 import * as Clipboard from "expo-clipboard";
@@ -51,6 +51,13 @@ const TAIL = 120;
  *  so they are read from the live palette at render time. */
 const INK = { failed: () => C.error, running: () => C.warning, fine: () => C.success } as const;
 const MARK = { failed: "x_circle", running: "run_circle", fine: "ok_circle" } as const;
+/** The same four inks the pull request's Checks card draws. */
+const SQUARE = {
+  pass: () => C.success,
+  fail: () => C.error,
+  run: () => C.warning,
+  skip: () => "transparent",
+} as const;
 
 export default function ChecksScreen(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
@@ -90,8 +97,12 @@ export default function ChecksScreen(): React.ReactNode {
   useEffect(() => {
     const wait = nextJobsPoll(jobs);
     if (wait === null) return;
-    const timer = setTimeout(() => { void loadJobs(); }, wait);
-    return () => clearTimeout(timer);
+    /* A locked phone on this screen kept asking while a check ran. The tick
+       skips when the app is not active; coming back reads at once, and that
+       answer re-arms the timer. */
+    const timer = setTimeout(() => { if (AppState.currentState === "active") void loadJobs(); }, wait);
+    const sub = AppState.addEventListener("change", (s) => { if (s === "active") void loadJobs(); });
+    return () => { clearTimeout(timer); sub.remove(); };
   }, [jobs, loadJobs]);
 
   const [pulling, setPulling] = useState(false);
@@ -131,6 +142,35 @@ export default function ChecksScreen(): React.ReactNode {
     running: ordered.filter((j) => standingOf(j).standing === "running"),
     fine: ordered.filter((j) => standingOf(j).standing === "fine"),
   }), [ordered]);
+
+  /* Re-running the failed jobs (s34). A write, so only a full pairing is
+     offered it; a tap rather than a hold, because a re-run is safe to repeat
+     and the server refuses when there is no failed run to repeat. */
+  const [rerunBusy, setRerunBusy] = useState(false);
+  const [rerunErr, setRerunErr] = useState<string | null>(null);
+  const [rerunSaid, setRerunSaid] = useState<string | null>(null);
+  const rerun = useCallback(async (): Promise<void> => {
+    if (!host || !mayWrite || !root || !number) return;
+    setRerunBusy(true);
+    setRerunErr(null);
+    setRerunSaid(null);
+    const answer = await ask<{ ok: boolean; detail?: string; error?: string }>(host, "/prs/rerun", {
+      method: "POST",
+      body: { root, number: Number(number) },
+    });
+    if (!answer.ok) { setRerunBusy(false); setRerunErr(answer.error); return; }
+    if (!answer.value.ok) {
+      setRerunBusy(false);
+      setRerunErr(answer.value.error ?? "GitHub refused the re-run.");
+      return;
+    }
+    setRerunSaid(answer.value.detail ?? "Re-running the failed jobs.");
+    // GitHub takes a moment to publish the new attempt; one more read lands
+    // after it rather than drawing the same finished run under a success line.
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await loadJobs();
+    setRerunBusy(false);
+  }, [host, mayWrite, root, number, loadJobs]);
 
   const copyLog = useCallback((): void => {
     if (!log) return;
@@ -177,7 +217,7 @@ export default function ChecksScreen(): React.ReactNode {
     <View style={{ flex: 1, backgroundColor: C.bg }}>
       <Stack.Screen
         options={{
-          title: open ? open.name : `Checks · #${number}`,
+          title: open ? open.name : `Checks on #${number}`,
           headerRight: open && log ? () => (
             <Pressable
               accessibilityRole="button"
@@ -288,6 +328,41 @@ export default function ChecksScreen(): React.ReactNode {
             </View>
           ) : null}
 
+          {/* The mock's subtitle (34), as a line. A header cannot carry it — the
+              route's title is the pull request's — and this app has no job
+              grouping above a check, so it counts the checks it has. */}
+          {ordered.length ? (
+            <Text style={{ color: C.text3, fontSize: T.small, paddingHorizontal: SPACE.xs }}>
+              {`${ordered.length} check${ordered.length === 1 ? "" : "s"}${bands.running.length ? ` · ${bands.running.length} running` : ""}${bands.failed.length ? ` · ${bands.failed.length} failed` : ""}`}
+            </Text>
+          ) : null}
+
+          {/* The run as squares, above the bands (mock 34): one square per job,
+              red first, with the key under it. The bands below keep the same
+              order, so the square somebody is looking for is the row that
+              follows. */}
+          {ordered.length ? (
+            <Card style={{ gap: SPACE.sm }}>
+              <Text style={{ color: C.text, fontSize: T.small, fontWeight: "600" }}>{jobsLine(ordered)}</Text>
+              <View style={{ flexDirection: "row", gap: 3 }}>
+                {jobSquares(ordered).map((square, i) => (
+                  <View key={i} style={{
+                    flex: 1, height: 10, borderRadius: 2, backgroundColor: SQUARE[square](),
+                    borderWidth: square === "skip" ? 1 : 0, borderColor: C.border2,
+                  }} />
+                ))}
+              </View>
+              <View style={{ flexDirection: "row", gap: SPACE.md, flexWrap: "wrap" }}>
+                {(["pass", "fail", "run"] as const).map((k) => (
+                  <View key={k} style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                    <View style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: SQUARE[k]() }} />
+                    <Text style={{ color: C.text3, fontSize: T.eyebrow }}>{k === "pass" ? "passed" : k === "fail" ? "failed" : "running"}</Text>
+                  </View>
+                ))}
+              </View>
+            </Card>
+          ) : null}
+
           {bands.failed.length ? (
             <>
               <GroupTitle text="Failed" />
@@ -325,12 +400,32 @@ export default function ChecksScreen(): React.ReactNode {
           ) : null}
         </ScrollView>
       )}
-      {!open && mayWrite && bands.failed.length ? (
+      {!open && bands.failed.length ? (
         <View style={{
-          paddingHorizontal: SPACE.lg, paddingTop: SPACE.md, paddingBottom: SPACE.lg,
+          paddingHorizontal: SPACE.lg, paddingTop: SPACE.md, paddingBottom: SPACE.lg, gap: SPACE.sm,
           borderTopWidth: 1, borderTopColor: C.border, backgroundColor: C.bg2,
         }}>
-          <Btn label={bands.failed.length === 1 ? "Ask Claude about it" : "Ask Claude about them"} tone="primary" onPress={askClaude} />
+          {rerunErr ? <Note tone="bad">{rerunErr}</Note> : null}
+          {rerunSaid ? <Note>{rerunSaid}</Note> : null}
+          {mayWrite ? (
+            <View style={{ flexDirection: "row", gap: SPACE.sm }}>
+              <Btn
+                label="Re-run failed"
+                busy={rerunBusy}
+                disabled={rerunBusy}
+                onPress={() => { void rerun(); }}
+                style={{ flex: 1 }}
+              />
+              <Btn
+                label={bands.failed.length === 1 ? "Ask Claude about it" : "Ask Claude about them"}
+                tone="primary"
+                onPress={askClaude}
+                style={{ flex: 1 }}
+              />
+            </View>
+          ) : (
+            <Note>Re-running the checks needs a phone paired with Everything. Reading them does not.</Note>
+          )}
         </View>
       ) : null}
     </View>

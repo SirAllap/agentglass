@@ -14,7 +14,8 @@ import type { ColorValue } from "react-native";
 const SHAPES = {
   down: <><Path d="M6 9l6 6 6-6" /></>,
   plus: <><Path d="M12 5v14M5 12h14" /></>,
-  more: <><Circle cx="12" cy="5.5" r="1.5" fill="currentColor" stroke="none" /><Circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" /><Circle cx="12" cy="18.5" r="1.5" fill="currentColor" stroke="none" /></>,
+  more: <><Circle cx="5.5" cy="12" r="1.5" fill="currentColor" stroke="none" /><Circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" /><Circle cx="18.5" cy="12" r="1.5" fill="currentColor" stroke="none" /></>,
+  grid: <><Rect x="4" y="4" width="6.5" height="6.5" rx="1.6" /><Rect x="13.5" y="4" width="6.5" height="6.5" rx="1.6" /><Rect x="4" y="13.5" width="6.5" height="6.5" rx="1.6" /><Rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.6" /></>,
   close: <><Path d="M6 6l12 12M18 6L6 18" /></>,
   check: <><Path d="M5 12.5l4.5 4.5L19 7.5" /></>,
   spark: <><Path d="M11 3.5c.7 4.4 2.8 6.5 7.2 7.2-4.4.7-6.5 2.8-7.2 7.2-.7-4.4-2.8-6.5-7.2-7.2 4.4-.7 6.5-2.8 7.2-7.2z" /><Path d="M18.5 15.2c.3 1.6 1 2.3 2.6 2.6-1.6.3-2.3 1-2.6 2.6-.3-1.6-1-2.3-2.6-2.6 1.6-.3 2.3-1 2.6-2.6z" /></>,
@@ -37,7 +38,7 @@ const SHAPES = {
   qr: <><Rect x="4" y="4" width="6" height="6" rx="1" /><Rect x="14" y="4" width="6" height="6" rx="1" /><Rect x="4" y="14" width="6" height="6" rx="1" /><Path d="M14 14h2.5v2.5H14zM17.5 17.5H20V20h-2.5zM14 20h1.5M20 14v1.5" /></>,
   link: <><Path d="M10.3 13.7a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><Path d="M13.7 10.3a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>,
   grip: <><Circle cx="9" cy="7" r="1.3" fill="currentColor" stroke="none" /><Circle cx="15" cy="7" r="1.3" fill="currentColor" stroke="none" /><Circle cx="9" cy="12" r="1.3" fill="currentColor" stroke="none" /><Circle cx="15" cy="12" r="1.3" fill="currentColor" stroke="none" /><Circle cx="9" cy="17" r="1.3" fill="currentColor" stroke="none" /><Circle cx="15" cy="17" r="1.3" fill="currentColor" stroke="none" /></>,
-  filter: <><Path d="M4 5.5h16l-6.2 7.2v5.6l-3.6 1.7v-7.3z" /></>,
+  filter: <><Path d="M4 6h16M7 12h10M10 18h4" /></>,
   people: <><Circle cx="9" cy="8.5" r="3.2" /><Path d="M3.5 19.5c.4-3.3 2.7-5 5.5-5s5.1 1.7 5.5 5" /><Path d="M15.5 5.6a3.2 3.2 0 0 1 0 5.8M17.5 14.8c1.7.6 2.8 2.2 3 4.7" /></>,
   search: <><Circle cx="11" cy="11" r="6.5" /><Path d="M16 16l4.5 4.5" /></>,
   computer: <><Rect x="3" y="4.5" width="18" height="12" rx="2" /><Path d="M8.5 20h7M12 16.5V20" /></>,

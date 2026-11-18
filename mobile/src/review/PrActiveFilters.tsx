@@ -7,6 +7,7 @@ import { Pressable, Text, View } from "react-native";
 import { Glyph } from "../nav/glyphs.tsx";
 import { Note } from "../ui.tsx";
 import type { ActiveChip } from "../model/prFilters.ts";
+import { VIEW_ROW_H } from "../model/boardChrome.ts";
 import { C, RADIUS, SPACE, T, tint } from "../theme.ts";
 
 export function PrActiveFilters({ chips, onRemove, onClear, shown, total, more, hidden, onShowHidden }: {
@@ -34,7 +35,7 @@ export function PrActiveFilters({ chips, onRemove, onClear, shown, total, more, 
             accessibilityLabel={`Remove filter ${c.label}`}
             onPress={() => onRemove(c.id)}
             style={({ pressed }) => ({
-              minHeight: 48, flexDirection: "row", alignItems: "center", gap: SPACE.sm, paddingLeft: SPACE.md,
+              minHeight: VIEW_ROW_H, flexDirection: "row", alignItems: "center", gap: SPACE.sm, paddingLeft: SPACE.md,
               paddingRight: SPACE.sm, borderRadius: RADIUS.md, backgroundColor: tint(C.primary, 0.14), opacity: pressed ? 0.6 : 1,
               maxWidth: "100%",
             })}

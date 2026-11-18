@@ -19,6 +19,8 @@ import { ask } from "../lib/api.ts";
 import type { Host } from "../lib/host.ts";
 import type { HostEntry } from "../lib/hosts.ts";
 import { readPhoneAlerts } from "./phoneAlertsPref.ts";
+import { readDesktopDnd } from "./desktopDnd.ts";
+import { quietPref } from "./quietPref.ts";
 import { sinceStore, type SinceStore } from "./watchSince.ts";
 import { validAlertId } from "./target.ts";
 import {
@@ -39,13 +41,15 @@ export interface WatchDeps {
   /** The computer's switch. Null when it could not be asked. */
   readEnabled: (host: HostEntry) => Promise<boolean | null>;
   ask: typeof ask;
+  /** The computer's Do Not Disturb. False when it cannot be asked: a silent phone is the worse mistake. */
+  readDnd: (host: HostEntry) => Promise<boolean>;
 }
 
 /** What the app supplies; the rest default to the real thing. */
 type Needed = Pick<WatchDeps, "raise" | "dismissAlert" | "foreground">;
 
 export function createWatchAlerts(over: Needed & Partial<WatchDeps>) {
-  const d: WatchDeps = { now: Date.now, since: sinceStore, readEnabled: readPhoneAlerts, ask, ...over };
+  const d: WatchDeps = { now: Date.now, since: sinceStore, readEnabled: readPhoneAlerts, ask, readDnd: (h) => readDesktopDnd(h, ask), ...over };
   const handled = new Map<string, number>();
   /** The last answer per computer, kept for when it cannot be asked. */
   const enabledLast = new Map<string, boolean>();
@@ -59,9 +63,16 @@ export function createWatchAlerts(over: Needed & Partial<WatchDeps>) {
   const toldKey = (by: "watch" | "talk", hostId: string, repo: string, number: number): string => `${by}\0${hostId}\0${repo}#${number}`;
 
   async function context(host: HostEntry): Promise<WatchContext> {
-    const asked = await d.readEnabled(host);
+    const [asked, dnd] = await Promise.all([d.readEnabled(host), d.readDnd(host)]);
     if (asked !== null) enabledLast.set(host.id, asked);
-    return { enabled: asked ?? enabledLast.get(host.id) ?? true, foreground: d.foreground(host), handled, now: d.now() };
+    return {
+      enabled: asked ?? enabledLast.get(host.id) ?? true,
+      foreground: d.foreground(host),
+      handled,
+      now: d.now(),
+      quiet: quietPref(),
+      dnd,
+    };
   }
 
   async function draw(host: HostEntry, raise: WatchRaise, decorate: (t: string) => string): Promise<boolean> {
@@ -74,9 +85,10 @@ export function createWatchAlerts(over: Needed & Partial<WatchDeps>) {
     // Something else told the person while the switch was being read.
     if (vetoed?.()) return false;
     const v = decideLive(item, ctx);
-    // Told, whatever the verdict: a switch that is off or a screen that was open
-    // still counts, so the catch-up after a reconnect does not repeat it.
-    if (v.notify || v.because === "off" || v.because === "foreground") markHandled(handled, item.id, ctx.now);
+    // Told, whatever the verdict: a switch that is off, a screen that was open
+    // or a quiet night still counts, so the catch-up after a reconnect does not
+    // repeat it.
+    if (v.notify || v.because === "off" || v.because === "foreground" || v.because === "quiet" || v.because === "dnd") markHandled(handled, item.id, ctx.now);
     return v.notify ? draw(host, v.raise, decorate) : false;
   }
 

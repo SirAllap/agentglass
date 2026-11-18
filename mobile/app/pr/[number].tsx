@@ -24,10 +24,10 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { repoOf } from "../../src/model/prRef.ts";
-import { checksMoved, nextDetailPoll } from "../../src/model/checkJobs.ts";
+import { checksMoved, jobsPassedLine, nextDetailPoll, runLine, runSquares, runningCheckLine } from "../../src/model/checkJobs.ts";
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, Text, TextInput, View } from "react-native";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import type { PrCheckRollup, PrDetail, ReviewRecipe, ReviewRecipesResponse } from "../../../shared/types.ts";
+import type { PrCheckRollup, PrDetail, PrLocalHead, ReviewRecipe, ReviewRecipesResponse } from "../../../shared/types.ts";
 import { ask } from "../../src/lib/api.ts";
 import { Md, outline } from "../../src/md/Md.tsx";
 import { useAgentglass } from "../../src/state/host-context.tsx";
@@ -37,6 +37,7 @@ import { prMarkKey } from "../../../shared/prUnread.ts";
 import { usePrTalkTick, useReloadOnTick } from "../../src/state/pr-talk.ts";
 import { useReadOnOpen } from "../../src/state/read-marks.ts";
 import { useTaskProvider, useTracksWork } from "../../src/state/use-tracks-work.ts";
+import { useJiraReach } from "../../src/state/use-jira-reach.ts";
 import { TaskChip } from "../../src/review/TaskChip.tsx";
 import { FilesPane } from "../../src/review/FilesPane.tsx";
 import { ThreadsPane } from "../../src/review/ThreadsPane.tsx";
@@ -46,22 +47,42 @@ import { RECIPES_PATH, menuFor, situationOf } from "../../src/model/reviewMenu.t
 import { requestHandoff } from "../../src/terminal/handoff.ts";
 import { clearDraft, draft, forWire } from "../../src/model/reviewDraft.ts";
 import { since } from "../../src/lib/dates.ts";
+import { ago } from "../../src/model/cardStatus.ts";
 import { openHttp } from "../../src/lib/openHttp.ts";
 import { mergeVerdict } from "../../../shared/mergeReason.ts";
+import { mergeGate } from "../../src/model/prMergeGate.ts";
 import {
-  MERGE_LABEL, MERGE_OPTION, allowedMethods, mergeSubject, pickMergeMethod,
+  MERGE_OPTION, allowedMethods, mergeSubject, pickMergeMethod,
   type MergeMethod,
 } from "../../../shared/mergeMethod.ts";
-import { Btn, Card, Chip, Group, GroupTitle, Label, Note, Row, Segmented, Sheet, SheetRow, TAP, Toggle } from "../../src/ui.tsx";
+import { Btn, Card, Chip, Eyebrow, Group, GroupTitle, HoldButton, Label, LabelChip, Note, Row, Segmented, Sheet, SheetRow, Switch, TAP } from "../../src/ui.tsx";
 import { changesRequestedWarning, mergeObstacles } from "../../src/model/mergeObstacles.ts";
-import { mergeBanner, reviewerRows } from "../../src/model/prOverview.ts";
+import { mergeBanner, reviewerRows, lastSaid } from "../../src/model/prOverview.ts";
+import { labelsOf, reviewersOf, writeBlocked } from "../../src/model/prManage.ts";
+import { behindLine, type SyncTarget } from "../../src/model/prSync.ts";
+import { PrActionsSheet } from "../../src/review/PrActionsSheet.tsx";
+import { LabelsSheet } from "../../src/review/LabelsSheet.tsx";
+import { ReviewersSheet } from "../../src/review/ReviewersSheet.tsx";
+import { SyncSheet } from "../../src/review/SyncSheet.tsx";
+import { WatchRuleSheet } from "../../src/inbox/WatchRuleSheet.tsx";
+import { ChecksSheet } from "../../src/review/ChecksSheet.tsx";
 import { LinkedCard, MergeBannerCard, ReviewersCard } from "../../src/review/Overview.tsx";
 import { Glyph, type GlyphName } from "../../src/nav/glyphs.tsx";
 import { ChevronIcon } from "../../src/nav/icons.tsx";
-import { C, MONO, RADIUS, SPACE, T, ink } from "../../src/theme.ts";
+import { Avatar } from "../../src/Avatar.tsx";
+import { C, MONO, RADIUS, SPACE, T, ink, tint } from "../../src/theme.ts";
 
 /** How much of a description shows before the fold. */
 const BODY_BLOCKS = 6;
+
+/** One square of the checks strip, in the ink it is drawn with. The words and
+ *  the order are model/checkJobs.ts's. */
+const SQUARE = {
+  pass: () => C.success,
+  fail: () => C.error,
+  run: () => C.warning,
+  skip: () => "transparent",
+} as const;
 
 /** The rollup as one word and one colour. `pending` beats `failure` on purpose:
  *  a run still going has not failed yet, and calling it red is how a screen
@@ -104,9 +125,32 @@ function FileRow({ file, onOpen }: {
   );
 }
 
+/** The mock's section head (32): an uppercase eyebrow, and at most one text
+ *  button beside it. Uppercase rather than `Label`'s sentence case because on
+ *  this screen the head is a signpost, not a row of prose. */
+function Head({ text, action, onAction }: { text: string; action?: string; onAction?: () => void }): React.ReactNode {
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", paddingTop: SPACE.md, paddingHorizontal: 2 }}>
+      <Text accessibilityRole="header" style={{
+        flex: 1, color: C.text3, fontSize: 12, fontWeight: "700", letterSpacing: 0.8, textTransform: "uppercase",
+      }}>{text}</Text>
+      {action && onAction ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={onAction}
+          style={({ pressed }) => ({
+            minHeight: 44, justifyContent: "center", paddingHorizontal: 4, opacity: pressed ? 0.6 : 1,
+          })}
+        >
+          <Text style={{ color: C.primary, fontSize: 12, fontWeight: "600" }}>{action}</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
 /** The three verdicts, with what each one does — the words GitHub's own
- *  review form uses. */
-const VERDICTS: { id: "approve" | "request_changes" | "comment"; label: string; what: string }[] = [
+ *  review form uses. */const VERDICTS: { id: "approve" | "request_changes" | "comment"; label: string; what: string }[] = [
   { id: "comment", label: "Comment", what: "Feedback, without a verdict" },
   { id: "approve", label: "Approve", what: "Good to merge as it is" },
   { id: "request_changes", label: "Request changes", what: "Must be addressed before it merges" },
@@ -130,10 +174,13 @@ export default function PrScreen(): React.ReactNode {
      offered as something to look up; an address in the body opens either way. */
   const tracked = useTracksWork(host);
   const provider = useTaskProvider(host);
+  /* The connected Jira site's project keys: what turns `ORBIT-1042` in a branch
+     into that card rather than into a ClickUp id of the same shape. */
+  const jira = useJiraReach(host);
 
   const router = useRouter();
-  const { number, root, review, pane: wanted, ask: asked } = useLocalSearchParams<{
-    number: string; root: string; review?: string; pane?: string; ask?: string;
+  const { number, root, review, pane: wanted, ask: asked, merge: wantMerge, reviewers: wantReviewers } = useLocalSearchParams<{
+    number: string; root: string; review?: string; pane?: string; ask?: string; merge?: string; reviewers?: string;
   }>();
   /*
    * Which pane, and which file it was opened on.
@@ -154,6 +201,8 @@ export default function PrScreen(): React.ReactNode {
   }));
   /** The file the Files pane should land on, when it was opened by tapping one. */
   const [file, setFile] = useState<string | null>(null);
+  /** The files preview sheet (mock 35), before the diff pane. */
+  const [filesOpen, setFilesOpen] = useState(false);
 
   const setPane = useCallback((next: Pane): void => {
     setPaneState(next);
@@ -165,6 +214,24 @@ export default function PrScreen(): React.ReactNode {
      the rule repos.tsx set. Reading the diff and handing it to Claude both
      stay available, because neither writes anything. */
   const mayWrite = host?.scope === "full";
+  /** Why the manage sheet's rows are disabled, or null on a full pairing. */
+  const blocked = host ? writeBlocked(host.scope) : null;
+
+  /* The manage door and the three sheets it opens. One Modal visible at a
+     time: opening a child closes the menu first, because two presented at once
+     is the arrangement the review sheet's own comment says is unreliable. */
+  const [managing, setManaging] = useState(false);
+  /** The bell in the header: the rules that watch this run (mock 40). */
+  const [watching, setWatching] = useState(false);
+  const [labelsOpen, setLabelsOpen] = useState(false);
+  const [reviewersOpen, setReviewersOpen] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+
+  /* How far behind its base the branch is. Asked beside the detail rather than
+     inside it: the comparison costs a GitHub request the rest of the screen
+     does not need, and a branch that is closed has no answer to give. */
+  const [behind, setBehind] = useState<SyncTarget | null>(null);
+  const [behindErr, setBehindErr] = useState<string | null>(null);
 
   /* One read for the whole review — the two panes below are looking at the
      same pull request, and a write in either of them re-reads this. Before
@@ -174,6 +241,46 @@ export default function PrScreen(): React.ReactNode {
   /* Opening it is reading it: the mark moves to now, and what it was BEFORE is
      what the Talk pane draws its divider against. See state/read-marks.ts. */
   const lastLooked = useReadOnOpen(host, detail);
+
+  /* The behind row (s32): one comparison, re-asked when the head moves. Its
+     two numbers are the whole of "what main brings" — see model/prSync.ts. */
+  const headSha = detail?.headSha ?? "";
+  const detailState = detail?.state;
+  const headRef = detail?.headRefName;
+  const mergeable = detail?.mergeable;
+  useEffect(() => {
+    if (!host || !root || !number || detailState !== "OPEN") { setBehind(null); setBehindErr(null); return; }
+    let gone = false;
+    void (async () => {
+      const answer = await ask<{ ok: boolean; behind?: number; ahead?: number; local?: PrLocalHead; error?: string }>(
+        host, `/prs/behind?root=${encodeURIComponent(root)}&number=${encodeURIComponent(String(number))}`,
+      );
+      if (gone) return;
+      if (!answer.ok) { setBehindErr(answer.error); return; }
+      if (!answer.value.ok) { setBehindErr(answer.value.error ?? "GitHub would not compare the branches."); return; }
+      setBehindErr(null);
+      setBehind({
+        number: Number(number),
+        behind: Number(answer.value.behind ?? 0),
+        ahead: Number(answer.value.ahead ?? 0),
+        head: headRef,
+        conflict: mergeable === "CONFLICTING",
+        syncLocal: answer.value.local?.sync === "ff",
+      });
+    })();
+    return () => { gone = true; };
+  }, [host, root, number, detailState, headSha, headRef, mergeable]);
+
+  /* Stable identity for the sync sheet: its read runs when this list changes.
+     The number and the comparison are what matter; the branch name is a label. */
+  const syncTargets = useMemo<SyncTarget[]>(() => [{
+    number: Number(number),
+    behind: behind?.behind,
+    ahead: behind?.ahead,
+    head: headRef,
+    conflict: mergeable === "CONFLICTING",
+    syncLocal: behind?.syncLocal,
+  }], [number, behind?.behind, behind?.ahead, behind?.syncLocal, headRef, mergeable]);
 
   // A live comment or review on THIS pull request. The key comes off the
   // detail's own URL, as the read marks' does: the route only carries a
@@ -221,6 +328,22 @@ export default function PrScreen(): React.ReactNode {
     router.setParams({ ask: undefined });
     if (mayWrite) setHanding(true);
   }, [asked, mayWrite, router]);
+  /* A card's "Merge" press on the board lands here with the sheet already up:
+     the method, the arm and the hold all live on this screen, and a board card
+     is not the place to make a permanent commit from. Cleared once read, like
+     `ask` above, or the sheet would reopen on every later visit. */
+  useEffect(() => {
+    if (wantMerge !== "1") return;
+    router.setParams({ merge: undefined });
+    if (mayWrite) setMerging(true);
+  }, [wantMerge, mayWrite, router]);
+  /* A card's "Request a review…" on the board lands here with the reviewers
+     sheet up: it reads this screen's detail. Cleared once read, like `merge`. */
+  useEffect(() => {
+    if (wantReviewers !== "1") return;
+    router.setParams({ reviewers: undefined });
+    if (mayWrite) setReviewersOpen(true);
+  }, [wantReviewers, mayWrite, router]);
   const [allFiles, setAllFiles] = useState(false);
   /* The description folds after six blocks. Six is where this project's own
      template stops being the checklist and starts being the CU reference —
@@ -478,6 +601,12 @@ export default function PrScreen(): React.ReactNode {
     () => (detail ? mergeVerdict(detail.mergeState, detail.checks) : null),
     [detail],
   );
+  /** What GitHub's state cannot see (lock, draft, conflict, no rights), and
+   *  whether the arm is an honest offer — the desktop box's own two answers. */
+  const refusals = useMemo(() => (detail ? mergeGate(detail) : null), [detail]);
+  // The switch may still be on from before a refresh brought a conflict or a
+  // lock; what the gate refuses must not be armed by a stale tap.
+  const autoOn = auto && !refusals?.autoRefusal && !(detail?.mergePolicy && !detail.mergePolicy.auto);
 
   /**
    * The merge, with the commit it is allowed to land from.
@@ -502,7 +631,7 @@ export default function PrScreen(): React.ReactNode {
         number: detail.number,
         method,
         deleteBranch,
-        auto,
+        auto: autoOn,
         headSha: detail.headSha,
         // The subject GitHub itself would have written. Not editable here —
         // a permanent commit message is not a thing to compose with a thumb,
@@ -520,26 +649,84 @@ export default function PrScreen(): React.ReactNode {
     // Re-read rather than assume. With `auto` the pull request is still open
     // and now says so, and that is exactly the state somebody needs to see.
     void load();
-  }, [host, detail, root, method, deleteBranch, auto, load]);
+  }, [host, detail, root, method, deleteBranch, autoOn, load]);
 
   const now = Date.now();
-  const checks = detail ? checksLook(detail) : null;
+  /** The checkout's own name, for the terminal door the mock puts on the card:
+   *  "Open in the terminal · orbit-1042". */
+  const checkoutName = (root ?? "").split("/").filter(Boolean).pop() ?? "";
+  /** The Checks tab and the Checks card open the run's summary (mock 34), in
+   *  a sheet; the job list with its logs is one row down, unchanged. */
+  const [checksOpen, setChecksOpen] = useState(false);
+  const [checksBusy, setChecksBusy] = useState(false);
+  const [checksSaid, setChecksSaid] = useState<string | null>(null);
+  const openChecks = useCallback((): void => {
+    setChecksSaid(null);
+    setChecksOpen(true);
+  }, []);
+  const openRun = useCallback((_job?: string): void => {
+    setChecksOpen(false);
+    router.push({ pathname: "/pr/checks", params: { number: String(number), root: root ?? "" } });
+  }, [router, number, root]);
+  const rerunChecks = useCallback(async (): Promise<void> => {
+    if (!host || !root || checksBusy) return;
+    setChecksBusy(true);
+    setChecksSaid(null);
+    const answer = await ask<{ ok: boolean; detail?: string; error?: string }>(host, "/prs/rerun", {
+      method: "POST", body: { root, number: Number(number) },
+    });
+    setChecksBusy(false);
+    if (!answer.ok) { setChecksSaid(answer.error); return; }
+    if (!answer.value.ok) { setChecksSaid(answer.value.error ?? "GitHub refused the re-run."); return; }
+    setChecksOpen(false);
+    void load();
+  }, [host, root, number, checksBusy, load]);
+  /** What the Overview's Talk preview draws: the newest entry, and the count
+   *  behind "All N". Null when nobody has said anything. */
+  const talkCount = detail ? conversation(detail).length : 0;
+  const said = useMemo(() => (detail ? lastSaid(detail) : null), [detail]);
   /** What the Overview leads with: can it merge and whose move is it, and who
    *  has reviewed. See src/model/prOverview.ts. */
   const banner = useMemo(() => (detail ? mergeBanner(detail) : null), [detail]);
   const reviewers = useMemo(() => (detail ? reviewerRows(detail) : []), [detail]);
   const files = detail?.files ?? [];
-  const shownFiles = allFiles ? files : files.slice(0, 6);
   const openThreads = (detail?.threads ?? []).filter((t) => !t.isResolved).length;
-  /* The rollup's own list, not a second filter over `checksAll`. `failing` is
-     computed on the server and is what the list rows already draw from, so a
-     detail that disagreed with the row it was opened from would be this app
-     answering one question two ways. */
-  const failing = detail?.checks.failing ?? [];
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
-      <Stack.Screen options={{ title: `#${number}` }} />
+      <Stack.Screen
+        options={{
+          // The mock's header: the number and the title in one strong line,
+          // then the repository, who wrote it and when under it.
+          headerTitle: () => (
+            <View style={{ maxWidth: 278 }}>
+              <Text numberOfLines={1} style={{ color: C.text, fontSize: 17, fontWeight: "600" }}>
+                {pane === "conversation" ? `Talk on #${number}` : `#${number}${detail ? ` · ${detail.title}` : ""}`}
+              </Text>
+              {detail ? (
+                <Text numberOfLines={1} style={{ color: C.text3, fontSize: T.small }}>
+                  {pane === "conversation"
+                    ? `${detail.reviews?.length ?? 0} review${(detail.reviews?.length ?? 0) === 1 ? "" : "s"} · ${detail.comments?.length ?? 0} comment${(detail.comments?.length ?? 0) === 1 ? "" : "s"} · ${repoOf(detail.url) ?? detail.baseRefName}`
+                    : `${repoOf(detail.url) ?? detail.baseRefName} · ${detail.author} · ${since(detail.updatedAt, now)}`}
+                </Text>
+              ) : null}
+            </View>
+          ),
+          headerRight: detail ? () => (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Tell me when this run changes`}
+              onPress={() => setWatching(true)}
+              style={({ pressed }) => ({
+                width: TAP, height: TAP, borderRadius: TAP / 2, alignItems: "center", justifyContent: "center",
+                backgroundColor: pressed ? C.bg3 : "transparent",
+              })}
+            >
+              <Glyph name="bell" color={C.primary} size={20} />
+            </Pressable>
+          ) : undefined,
+        }}
+      />
 
       {/*
         One screen, three panes.
@@ -555,16 +742,22 @@ export default function PrScreen(): React.ReactNode {
         already moved past.
       */}
       {detail ? (
-        <View style={{ paddingHorizontal: SPACE.lg, paddingTop: SPACE.sm }}>
+        <View style={{ paddingHorizontal: 12, paddingTop: SPACE.sm }}>
           <Segmented
             options={[
               { id: "overview", label: "Overview" },
               { id: "conversation", label: "Talk", count: conversation(detail).length || undefined },
-              { id: "files", label: "Files", count: files.length },
-              { id: "threads", label: "Threads", count: openThreads || undefined },
+              // The mock's segment is a DOOR to the job list, not a fourth
+              // pane: the run is a screen of its own because a log is hundreds
+              // of lines somebody scrolls.
+              { id: "checks", label: "Checks", count: detail.checks.total || undefined },
+              { id: "files", label: "Files", count: files.length || undefined },
             ]}
             value={pane}
-            onChange={setPane}
+            onChange={(next) => {
+              if (next === "checks") { openChecks(); return; }
+              setPane(next as Pane);
+            }}
           />
         </View>
       ) : null}
@@ -580,7 +773,7 @@ export default function PrScreen(): React.ReactNode {
       */}
       <View style={{ flex: 1, display: pane === "overview" ? "flex" : "none" }}>
       <ScrollView
-        contentContainerStyle={{ padding: SPACE.lg, gap: SPACE.lg, paddingBottom: SPACE.xl }}
+        contentContainerStyle={{ padding: 12, gap: 12, paddingBottom: SPACE.xl }}
         refreshControl={<RefreshControl refreshing={pulling} onRefresh={pull} tintColor={C.text3} />}
       >
         {error ? (
@@ -594,36 +787,12 @@ export default function PrScreen(): React.ReactNode {
 
         {detail ? (
           <>
-            <View style={{ gap: SPACE.sm }}>
-              <Text style={{ color: C.text, fontSize: T.head, fontWeight: "700", lineHeight: 26 }}>
-                {detail.title}
-              </Text>
-              <Text
-                numberOfLines={1}
-                style={{ color: C.text3, fontSize: T.eyebrow, fontFamily: MONO }}
-              >{detail.headRefName} → {detail.baseRefName}</Text>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap" }}>
-                {/* First, because it is the only chip that says what this pull
-                    request is ABOUT — the rest say what state it is in. It
-                    draws nothing at all on a machine that tracks work nowhere,
-                    or on a pull request that names no item. */}
-                <TaskChip
-                  pr={detail}
-                  tracked={tracked}
-                  onFind={(query) => router.push({ pathname: "/(tabs)/tasks", params: { q: query } })}
-                  onOpenCard={provider?.id === "clickup"
-                    ? (id) => router.push({ pathname: "/card/[id]", params: { id } })
-                    : undefined}
-                />
-                {detail.isDraft ? <Chip label="Draft" /> : null}
-                <Text style={{ color: C.text3, fontSize: T.small }}>
-                  {detail.author} · {since(detail.updatedAt, now)}
-                </Text>
-              </View>
-              {detail.forcePushedSinceReview ? (
-                <Note>The author force-pushed after a review — anything already said may be stale.</Note>
-              ) : null}
-            </View>
+            {/* The title and its line live in the header (mock 32): "#184 · Add
+                dark mode" over "acme/orbit · ana · 2 h ago". The body starts on
+                the question the screen exists to answer — can this land. */}
+            {detail.forcePushedSinceReview ? (
+              <Note>The author force-pushed after a review — anything already said may be stale.</Note>
+            ) : null}
 
             {/*
               Can it merge, who has said what, what is it for.
@@ -637,83 +806,287 @@ export default function PrScreen(): React.ReactNode {
             */}
             {banner ? (
               <MergeBannerCard
-                banner={banner}
+                chip={{
+                  label: jobsPassedLine(detail.checks),
+                  tone: detail.checks.failure ? "bad" : detail.checks.total ? "good" : "neutral",
+                  icon: detail.checks.total ? (
+                    <View style={{
+                      width: 6, height: 6, borderRadius: 3,
+                      backgroundColor: detail.checks.failure ? C.error : C.success,
+                    }} />
+                  ) : undefined,
+                }}
+                when={runningCheckLine(detail.checksAll ?? [], now)}
+                text={banner.text}
                 onPress={banner.open && mayWrite ? () => { setMergeErr(null); setMerging(true); } : undefined}
               />
             ) : null}
-            <ReviewersCard rows={reviewers} />
-            {host && tracked !== false ? (
-              <LinkedCard
-                host={host} pr={detail} tracked={tracked}
-                onOpen={provider?.id === "clickup" ? (id) => router.push({ pathname: "/card/[id]", params: { id } }) : undefined}
-              />
-            ) : null}
-            <Group inset={52}>
-              <Row
-                title={checks?.word ?? "No checks"}
-                sub={failing.length
-                  ? failing.slice(0, 2).map((c) => c.name).join(", ") + (failing.length > 2 ? ` and ${failing.length - 2} more` : "")
-                  : detail.checks.pending ? "Still running" : detail.checks.total ? "Every check passed" : "This repository runs none here"}
-                lead={<Glyph name={checks?.mark ?? "circle"} color={checks?.ink ?? C.text4} size={22} weight={1.9} />}
-                chevron={detail.checks.total > 0}
-                /* Every failing check opens the same screen. The job list
-                   there is the whole run, not one check: a failing `test` is
-                   routinely a `build` that fell over first, and arriving
-                   filtered to one row hides the job that actually broke. */
-                onPress={detail.checks.total > 0 ? () => router.push({
-                  pathname: "/pr/checks",
-                  params: { number: String(number), root: root ?? "" },
-                }) : undefined}
-              />
-            </Group>
-
-            {detail.body.trim() ? (
-              <Card style={{ gap: SPACE.md }}>
-                {/* Rendered, and folded by BLOCKS rather than by characters.
-                    A cut at 1,200 characters landed mid-word and mid-checkbox;
-                    a cut after six blocks lands between two things somebody
-                    wrote, and the expander below can say what the rest is. */}
-                <Md text={detail.body.trim()} host={host} repo={repoOf(detail.url) ?? undefined} limit={bodyOpen ? undefined : BODY_BLOCKS} />
-                {rest.hidden ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={() => setBodyOpen((was) => !was)}
-                    style={{ minHeight: TAP, flexDirection: "row", alignItems: "center", gap: SPACE.sm }}
-                  >
-                    <Text style={{ color: C.primary, fontSize: T.body, fontWeight: "600" }}>
-                      {bodyOpen
-                        ? "Show less"
-                        : rest.nextHeading
-                          ? `${rest.nextHeading}${rest.hidden > 1 ? ` and ${rest.hidden - 1} more` : ""}`
-                          : `${rest.hidden} more`}
+            {/* The behind row (s32). Drawn only when there is something to
+                say: an "up to date" line on every pull request is a line
+                nobody reads. */}
+            {detail.state === "OPEN" && behind && (behind.behind ?? 0) > 0 ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`${behindLine(behind, detail.baseRefName)}. Opens the sync options.`}
+                onPress={() => setSyncing(true)}
+                style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
+              >
+                <Card style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 12, paddingHorizontal: 13 }}>
+                  <View style={{
+                    width: 30, height: 30, borderRadius: 9, alignItems: "center", justifyContent: "center",
+                    backgroundColor: tint(C.warning, 0.14),
+                  }}>
+                    <Glyph name="refresh" color={C.warning} size={16} weight={1.9} />
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                    <Text numberOfLines={1} style={{ color: C.text, fontSize: 13.5, fontWeight: "600" }}>
+                      {behindLine(behind, detail.baseRefName)}
                     </Text>
-                  </Pressable>
-                ) : null}
-              </Card>
+                    <Text numberOfLines={1} style={{ color: C.text3, fontSize: T.small }}>
+                      {detail.mergeable === "CONFLICTING" ? "Conflicts with the base"
+                        : detail.mergeable === "MERGEABLE" ? "No conflicts"
+                          : "Conflict state not known yet"} · {detail.headRefName}
+                    </Text>
+                  </View>
+                  <Chip label={`${behind.behind ?? 0} behind`} tone="warn" />
+                  <ChevronIcon color={C.text3} size={18} />
+                </Card>
+              </Pressable>
+            ) : detail.state === "OPEN" && behindErr ? (
+              <Note>{behindErr}</Note>
             ) : null}
-
-            <View style={{ gap: SPACE.sm }}>
-              <Label text={`Files · ${files.length}`} />
-              <Card style={{ gap: SPACE.xs, padding: SPACE.md }}>
-                {shownFiles.map((f) => (
-                  <FileRow
-                    key={f.path}
-                    file={f}
-                    // The segment, not a push. This is the back gesture the
-                    // whole rearrangement exists to remove.
-                    onOpen={() => { setFile(f.path); setPane("files"); }}
+            {/* The pull request itself: what it is, the branch, the card it
+                belongs to, its size, the description, and the door to a window
+                on the computer. The mock puts all of that in one card, and the
+                terminal door in it rather than in the bottom bar — so it moved
+                here rather than disappearing. */}
+            <View style={{ gap: 2 }}>
+              <Eyebrow text="The pull request" />
+              <Card style={{ gap: SPACE.sm, paddingVertical: 12, paddingHorizontal: 13 }}>
+                <Text style={{ color: C.text, fontSize: 16, fontWeight: "600", lineHeight: 21, letterSpacing: -0.2 }}>
+                  {detail.title}
+                </Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+                  <View style={{
+                    height: 24, justifyContent: "center", paddingHorizontal: 7, borderRadius: 7,
+                    borderWidth: 1, borderColor: C.border,
+                  }}>
+                    <Text numberOfLines={1} style={{ color: C.text2, fontSize: 11.5, fontWeight: "600", fontFamily: MONO }}>
+                      {detail.headRefName}
+                    </Text>
+                  </View>
+                  {/* The card it belongs to, where the mock draws it. It says
+                      nothing at all on a machine that tracks work nowhere. */}
+                  <TaskChip
+                    pr={detail}
+                    tracked={tracked}
+                    jira={jira}
+                    onFind={(query) => router.push({ pathname: "/(tabs)/tasks", params: { q: query } })}
+                    onOpenCard={provider?.id === "clickup"
+                      ? (id) => router.push({ pathname: "/card/[id]", params: { id } })
+                      : undefined}
+                    onOpenJira={jira
+                      ? (key) => router.push({ pathname: "/jira/[key]", params: { key } })
+                      : undefined}
                   />
-                ))}
-                {files.length > shownFiles.length ? (
-                  <Pressable onPress={() => setAllFiles(true)} style={{ minHeight: 44, justifyContent: "center" }}>
-                    <Text style={{ color: C.primary, fontSize: T.small, fontWeight: "600" }}>
-                      Show {files.length - shownFiles.length} more
-                    </Text>
-                  </Pressable>
+                  {detail.isDraft ? <Chip label="Draft" /> : null}
+                  <Text style={{ marginLeft: "auto", fontSize: T.small, fontFamily: MONO, color: C.text3 }}>
+                    +{detail.additions} −{detail.deletions}
+                  </Text>
+                </View>
+                {detail.body.trim() ? (
+                  <>
+                    {/* Rendered, and folded by BLOCKS rather than by characters.
+                        A cut at 1,200 characters landed mid-word and mid-checkbox;
+                        a cut after six blocks lands between two things somebody
+                        wrote, and the expander below can say what the rest is. */}
+                    <Md text={detail.body.trim()} host={host} repo={repoOf(detail.url) ?? undefined} limit={bodyOpen ? undefined : BODY_BLOCKS} />
+                    {rest.hidden ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={() => setBodyOpen((was) => !was)}
+                        style={{ minHeight: TAP, flexDirection: "row", alignItems: "center", gap: SPACE.sm }}
+                      >
+                        <Text style={{ color: C.primary, fontSize: T.body, fontWeight: "600" }}>
+                          {bodyOpen
+                            ? "Show less"
+                            : rest.nextHeading
+                              ? `${rest.nextHeading}${rest.hidden > 1 ? ` and ${rest.hidden - 1} more` : ""}`
+                              : `${rest.hidden} more`}
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                  </>
                 ) : null}
-                {files.length === 0 ? <Note>No files reported.</Note> : null}
+                {root ? (
+                  <Btn
+                    label={`Open in the terminal${checkoutName ? ` · ${checkoutName}` : ""}`}
+                    onPress={() => router.push({ pathname: "/(tabs)/terminal", params: { where: root } })}
+                  />
+                ) : mayWrite ? (
+                  <Btn
+                    label="Ask Claude · opens a window on the computer"
+                    onPress={() => setHanding(true)}
+                  />
+                ) : null}
               </Card>
             </View>
+
+            {/* Checks: the run in one line and a strip of its squares, opening
+                the job list. The mock's "All 3 jobs" is the same door, said
+                with the count. */}
+            <View style={{ gap: 2 }}>
+              <Head
+                text="Checks"
+                action={detail.checks.total ? `All ${detail.checks.total} jobs` : undefined}
+                onAction={detail.checks.total ? openChecks : undefined}
+              />
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Checks: ${runLine(detail.checks)}`}
+                disabled={!detail.checks.total}
+                onPress={openChecks}
+                style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
+              >
+                <Card style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 11, paddingHorizontal: 13 }}>
+                  <View style={{ flex: 1, minWidth: 0, gap: SPACE.sm }}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
+                      <View style={{
+                        width: 7, height: 7, borderRadius: 4,
+                        backgroundColor: detail.checks.failure ? C.error : detail.checks.pending ? C.warning : C.success,
+                      }} />
+                      <Text numberOfLines={1} style={{ color: C.text, fontSize: 12.5, fontWeight: "600" }}>
+                        {jobsPassedLine(detail.checks)}
+                        {detail.checks.pending ? <Text style={{ color: C.warning }}>{` · ${detail.checks.pending} running`}</Text> : null}
+                      </Text>
+                      {detail.checks.total ? (
+                        <Text style={{ marginLeft: "auto", color: C.text3, fontSize: T.small, fontVariant: ["tabular-nums"] }}>
+                          shown {Math.min(detail.checks.total, 10)}
+                        </Text>
+                      ) : null}
+                    </View>
+                    {detail.checks.total ? (
+                      <View style={{ flexDirection: "row", gap: 4, flexWrap: "wrap" }}>
+                        {runSquares(detail.checks).map((square, i) => (
+                          <View
+                            key={i}
+                            style={{
+                              width: 12, height: 12, borderRadius: 3,
+                              backgroundColor: SQUARE[square](),
+                              borderWidth: square === "skip" ? 1 : 0,
+                              borderColor: C.border2,
+                            }}
+                          />
+                        ))}
+                      </View>
+                    ) : null}
+                  </View>
+                  {detail.checks.total ? <ChevronIcon color={C.text3} size={18} /> : null}
+                </Card>
+              </Pressable>
+            </View>
+
+            {reviewers.length || mayWrite ? (
+              <View style={{ gap: 2 }}>
+                <Head
+                  text="Reviewers"
+                  action={mayWrite ? "Request" : undefined}
+                  onAction={mayWrite ? () => setReviewersOpen(true) : undefined}
+                />
+                {reviewers.length
+                  ? <ReviewersCard rows={reviewers} now={now} />
+                  : <Note>Nobody has been asked yet.</Note>}
+              </View>
+            ) : null}
+            {/* Labels, as the mock draws them: chips in a row, with the sheet
+                that writes them one press away. A read-only phone sees the
+                labels and no Edit, rather than a dead one. */}
+            <View style={{ gap: 2 }}>
+              <Head
+                text="Labels"
+                action={mayWrite ? "Edit" : undefined}
+                onAction={mayWrite ? () => setLabelsOpen(true) : undefined}
+              />
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, paddingHorizontal: 2 }}>
+                {detail.labels.length
+                  ? detail.labels.map((l) => <LabelChip key={l.name} name={l.name} color={l.color} />)
+                  : <Text style={{ color: C.text4, fontSize: T.small }}>No labels</Text>}
+              </View>
+            </View>
+            {/* The files, as one row: the mock's overview does not list them,
+                and the list is the Files segment's job — where every one of
+                them, with its own diff, already lives. The row opens the mock's
+                preview (35) first: three files fit in a sheet, and "Open the
+                diff" is the door that used to be the only one. */}
+            {files.length ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`${files.length} files changed. Opens the list.`}
+                onPress={() => setFilesOpen(true)}
+                style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
+              >
+                <Card style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 12, paddingHorizontal: 13 }}>
+                  <View style={{
+                    width: 30, height: 30, borderRadius: 9, alignItems: "center", justifyContent: "center",
+                    backgroundColor: C.bg3,
+                  }}>
+                    <Glyph name="file" color={C.text2} size={16} weight={1.8} />
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                    <Text style={{ color: C.text, fontSize: 13.5, fontWeight: "600" }}>
+                      {files.length} file{files.length === 1 ? "" : "s"} changed
+                    </Text>
+                    <Text numberOfLines={1} ellipsizeMode="head" style={{ color: C.text3, fontSize: T.small }}>
+                      {files[0]?.path}{files.length > 1 ? ` and ${files.length - 1} more` : ""}
+                    </Text>
+                  </View>
+                  <Text style={{ fontSize: T.small, fontFamily: MONO, color: C.text3 }}>+{detail.additions}</Text>
+                  <Text style={{ fontSize: T.small, fontFamily: MONO, color: C.error }}>−{detail.deletions}</Text>
+                  <ChevronIcon color={C.text3} size={18} />
+                </Card>
+              </Pressable>
+            ) : null}
+
+            {/* The last thing said, where the mock puts it: the newest entry,
+                with the count behind "All N" opening the conversation. */}
+            {said ? (
+              <View style={{ gap: 2 }}>
+                <Head
+                  text="Talk"
+                  action={`All ${talkCount}`}
+                  onAction={() => setPane("conversation")}
+                />
+                <Card style={{ gap: SPACE.sm, paddingVertical: 10, paddingHorizontal: 12 }}>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}>
+                    <Avatar name={said.who} login={said.who} size={22} />
+                    <Text style={{ color: C.text, fontSize: 12.5, fontWeight: "600" }}>{said.who}</Text>
+                    <View style={{ flex: 1 }} />
+                    <Text style={{ color: C.text3, fontSize: T.small }}>
+                      {ago(said.when, now).replace(/ ago$/, "")}
+                    </Text>
+                  </View>
+                  <Text numberOfLines={3} style={{ color: C.text2, fontSize: 13, lineHeight: 19 }}>
+                    {said.text}
+                  </Text>
+                </Card>
+              </View>
+            ) : null}
+
+            {/* The card this belongs to. The mock's overview draws no row for
+                it — its chip in the card above is the door — but the row says
+                whose card it is and how many people are on it, and a door the
+                mock does not have is kept rather than dropped: below the last
+                thing the mock does draw. */}
+            {host && tracked !== false ? (
+              <LinkedCard
+                host={host} pr={detail} tracked={tracked} jira={jira}
+                onOpen={provider?.id === "clickup" || jira
+                  ? (id, tracker) => router.push(tracker === "jira"
+                    ? { pathname: "/jira/[key]", params: { key: id } }
+                    : { pathname: "/card/[id]", params: { id } })
+                  : undefined}
+              />
+            ) : null}
 
             {(detail.threads ?? []).length ? (
               <View style={{ gap: SPACE.sm }}>
@@ -761,6 +1134,60 @@ export default function PrScreen(): React.ReactNode {
       {seen.conversation ? (
         <View style={{ flex: 1, display: pane === "conversation" ? "flex" : "none" }}>
           <Timeline number={String(number)} root={root ?? ""} since={lastLooked ?? 0} onOpenThreads={() => setPane("threads")} />
+          {/* The mock's Talk screen (33) ends on the verdict, not on a button
+              that opens a sheet: approve, request changes or comment, a note,
+              and one send. The note goes with the verdict in the same call. */}
+          {mayWrite && !detail?.viewerDidAuthor ? (
+            <View style={{
+              gap: SPACE.sm, paddingHorizontal: SPACE.lg, paddingTop: SPACE.sm, paddingBottom: SPACE.lg,
+              borderTopWidth: 1, borderTopColor: C.border, backgroundColor: C.bg2,
+            }}>
+              <Text style={{ color: C.text3, fontSize: T.small, lineHeight: 17 }}>
+                <Text style={{ fontWeight: "700", color: C.text2 }}>The phone can review.</Text>
+                {" "}Approve and Request changes are the same two writes the desktop makes; the note
+                goes with them.
+              </Text>
+              <Segmented
+                value={choice}
+                onChange={setChoice}
+                options={[
+                  { id: "approve", label: "Approve" },
+                  { id: "request_changes", label: "Request changes" },
+                  { id: "comment", label: "Comment" },
+                ]}
+              />
+              <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}>
+                <TextInput
+                  value={summary}
+                  onChangeText={setSummary}
+                  placeholder="A note with your review…"
+                  placeholderTextColor={C.text4}
+                  accessibilityLabel="A note with your review"
+                  style={{
+                    flex: 1, minHeight: TAP, borderWidth: 1, borderColor: C.border, borderRadius: TAP / 2,
+                    backgroundColor: C.bg, color: C.text, paddingHorizontal: SPACE.md, fontSize: T.body,
+                  }}
+                />
+                {/* The mock's send (33): one round button, the arrow already
+                    saying what it does. The verdict it carries is the segment
+                    above, so the button wears the same ink. */}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Send: ${choice === "approve" ? "approve" : choice === "request_changes" ? "request changes" : "comment"}`}
+                  disabled={!!verdict}
+                  onPress={() => { void send(choice); }}
+                  style={({ pressed }) => ({
+                    width: TAP, height: TAP, borderRadius: TAP / 2, alignItems: "center", justifyContent: "center",
+                    backgroundColor: choice === "request_changes" ? C.error : C.primary,
+                    opacity: verdict ? 0.5 : pressed ? 0.75 : 1,
+                  })}
+                >
+                  <Glyph name="up" color={ink(choice === "request_changes" ? C.error : C.primary)} size={20} weight={2.2} />
+                </Pressable>
+              </View>
+              {sent ? <Note tone="bad">{sent}</Note> : null}
+            </View>
+          ) : null}
         </View>
       ) : null}
 
@@ -792,22 +1219,23 @@ export default function PrScreen(): React.ReactNode {
       */}
       {detail && mayWrite ? (
         <View style={{
-          flexDirection: "row", gap: SPACE.sm,
+          flexDirection: "row", gap: SPACE.sm, alignItems: "center",
           paddingHorizontal: SPACE.lg, paddingTop: SPACE.md, paddingBottom: SPACE.lg,
           borderTopWidth: 1, borderTopColor: C.border, backgroundColor: C.bg2,
         }}>
+          {/* The mock's bar (32): More, Review, Merge. "Ask Claude" moved into
+              the pull request card above, which is where the mock puts the door
+              to a window on the computer — moved, not dropped. */}
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`Ask Claude about #${number}`}
-            onPress={() => setHanding(true)}
+            accessibilityLabel={`More on #${number}: labels, reviewers, edit, draft, close`}
+            onPress={() => setManaging(true)}
             style={({ pressed }) => ({
-              flex: 1.3, minHeight: 48, borderRadius: RADIUS.pill, flexDirection: "row", gap: SPACE.sm,
-              alignItems: "center", justifyContent: "center", backgroundColor: C.primary,
-              transform: [{ scale: pressed ? 0.97 : 1 }],
+              width: TAP, height: TAP, borderRadius: RADIUS.md, alignItems: "center", justifyContent: "center",
+              borderWidth: 1, borderColor: C.border, opacity: pressed ? 0.6 : 1,
             })}
           >
-            <Glyph name="spark" color={ink(C.primary)} size={18} />
-            <Text style={{ color: ink(C.primary), fontSize: T.body, fontWeight: "600" }}>Ask Claude</Text>
+            <Glyph name="more" color={C.text2} size={20} weight={2} />
           </Pressable>
           {detail.viewerDidAuthor ? (
             <Btn label="Comment" style={{ flex: 1 }} onPress={() => { setCommentErr(null); setCommenting(true); }} />
@@ -828,11 +1256,66 @@ export default function PrScreen(): React.ReactNode {
           <Btn
             label="Merge"
             tone={gate && !gate.blocked ? "good" : "plain"}
-            style={{ flex: 1 }}
+            style={{ flex: 1.2 }}
             disabled={detail.state !== "OPEN"}
             onPress={() => { setMergeErr(null); setMerging(true); }}
           />
         </View>
+      ) : null}
+
+      <ChecksSheet
+        open={checksOpen}
+        onClose={() => setChecksOpen(false)}
+        number={Number(number)}
+        checks={detail?.checksAll ?? []}
+        mayWrite={mayWrite}
+        busy={checksBusy}
+        said={checksSaid}
+        onRerun={() => { void rerunChecks(); }}
+        onOpenRun={openRun}
+      />
+
+      {/* The files, before the diff (mock 35): three rows with their own +/−,
+          and one door into the pane that draws them. */}
+      {detail && files.length ? (
+        <Sheet
+          open={filesOpen}
+          onClose={() => setFilesOpen(false)}
+          title={`${files.length} file${files.length === 1 ? "" : "s"} changed`}
+          subtitle={`+${detail.additions} −${detail.deletions} · ${files[0]?.path?.split("/").slice(0, -1).join("/") || "the root"}${detail.headSha ? ` · ${detail.headSha.slice(0, 7)}` : ""}.`}
+          footer={<Btn label="Open the diff" onPress={() => { setFilesOpen(false); setPane("files"); }} style={{ flex: 1 }} />}
+        >
+          <View style={{ paddingTop: SPACE.sm }}>
+            {files.map((f) => (
+              <Pressable
+                key={f.path}
+                accessibilityRole="button"
+                accessibilityLabel={`${f.path}. Opens it in the diff.`}
+                onPress={() => { setFilesOpen(false); setFile(f.path); setPane("files"); }}
+                style={({ pressed }) => ({
+                  minHeight: 58, flexDirection: "row", alignItems: "center", gap: SPACE.md,
+                  paddingVertical: SPACE.sm, opacity: pressed ? 0.6 : 1,
+                })}
+              >
+                <View style={{ width: 30, height: 30, borderRadius: 10, backgroundColor: C.bg3, alignItems: "center", justifyContent: "center" }}>
+                  <Glyph name="file" color={C.text2} size={16} weight={1.8} />
+                </View>
+                <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                  <Text numberOfLines={1} style={{ color: C.text, fontSize: 12.5, fontWeight: "600", fontFamily: MONO }}>
+                    {f.path.split("/").pop()}
+                  </Text>
+                  <Text numberOfLines={1} ellipsizeMode="head" style={{ color: C.text3, fontSize: T.small }}>{f.path}</Text>
+                </View>
+                <Text style={{ color: C.success, fontSize: T.small, fontWeight: "700", fontVariant: ["tabular-nums"] }}>+{f.additions}</Text>
+                <Text style={{ color: C.error, fontSize: T.small, fontWeight: "700", fontVariant: ["tabular-nums"] }}>−{f.deletions}</Text>
+              </Pressable>
+            ))}
+          </View>
+          <Note>
+            <Text style={{ fontWeight: "700", color: C.text2 }}>One row is one file.</Text>
+            {" "}Test files stay where the diff puts them; the pane folds nothing away.
+          </Note>
+        </Sheet>
       ) : null}
 
       <Sheet open={reviewing} onClose={() => setReviewing(false)} title="Send your review">
@@ -986,7 +1469,12 @@ export default function PrScreen(): React.ReactNode {
         </View>
       </Sheet>
 
-      <Sheet open={merging} onClose={() => setMerging(false)} title={`Merge #${number}`}>
+      <Sheet
+        open={merging}
+        onClose={() => setMerging(false)}
+        title={`Merge #${number}`}
+        subtitle={detail ? `${detail.headRefName} into ${detail.baseRefName} · ${detail.checks.success} of ${detail.checks.total} check${detail.checks.total === 1 ? "" : "s"} passed.` : undefined}
+      >
         {detail ? (
           <View style={{ gap: SPACE.md, paddingBottom: SPACE.md }}>
             {/* The verdict first, in both directions. "Ready to merge" is worth
@@ -994,14 +1482,6 @@ export default function PrScreen(): React.ReactNode {
                 has already decided to press the button, and this is the last
                 place to tell them the branch is behind. */}
             <Note tone={gate?.blocked ? "bad" : "quiet"}>{gate?.line ?? ""}</Note>
-
-            {/* GitHub's verdict above is about whether it will TAKE the merge,
-                not about the review sitting under it — a required approval is
-                the only kind `gate` refuses over, and branch protection can
-                leave a CHANGES_REQUESTED review mergeable anyway. Said here so
-                the button one screen down does not contradict the green line
-                above it. */}
-            {changesRequested ? <Note tone="bad">{changesRequested.note}</Note> : null}
 
             {/* Then the parts of it, when it is blocked: the line above names
                 the first problem, and a pull request that is red, behind and
@@ -1028,40 +1508,61 @@ export default function PrScreen(): React.ReactNode {
               </View>
             ) : null}
 
-            {/* Only what the repository permits. A repository that forbids
-                squash used to be offered it anyway, which is a button that
-                fails after you have chosen. */}
-            {methods.map((m) => (
-              <SheetRow
-                key={m}
-                label={MERGE_OPTION[m].label}
-                sub={MERGE_OPTION[m].hint}
-                on={m === method}
-                onPress={() => setMethod(m)}
-              />
-            ))}
-
-            <Toggle
-              on={auto}
-              label="Merge when it goes green"
+            {/* The arm comes first (mock 36): "merge when it passes" is the
+                question somebody opening this sheet has already answered. */}
+            <Row
+              title={detail.checks.pending ? "Merge when the run passes" : "Merge when it goes green"}
               sub={
                 detail.mergePolicy && !detail.mergePolicy.auto
                   ? "This repository does not allow auto-merge."
-                  : "GitHub holds it and lands it once the checks pass."
+                  : refusals?.autoRefusal
+                  ? `${refusals.autoRefusal}.`
+                  : `${detail.checks.pending ? "A check is still running. " : ""}Off merges now, without waiting.`
               }
-              disabled={!!detail.mergePolicy && !detail.mergePolicy.auto}
+              checked={autoOn}
+              trail={<Switch on={autoOn} disabled={(!!detail.mergePolicy && !detail.mergePolicy.auto) || !!refusals?.autoRefusal} />}
+              disabled={(!!detail.mergePolicy && !detail.mergePolicy.auto) || !!refusals?.autoRefusal}
               onPress={() => setAuto((v) => !v)}
             />
-            <Toggle
-              on={deleteBranch}
-              label="Delete the branch after"
+
+            {/* Only what the repository permits. A repository that forbids
+                squash used to be offered it anyway, which is a button that
+                fails after you have chosen. */}
+            <View style={{ gap: SPACE.sm }}>
+              <Label text="How it lands" />
+              <Segmented
+                value={method ?? methods[0]!}
+                onChange={(m) => setMethod(m)}
+                options={methods.map((m) => ({ id: m, label: MERGE_OPTION[m].label }))}
+              />
+              {method ? <Note>{MERGE_OPTION[method].hint}</Note> : null}
+            </View>
+            <Row
+              title="Delete the branch after it lands"
               sub={
                 detail.mergePolicy?.deletesBranch
                   ? "This repository already does it — leave it off."
-                  : "The head branch goes with it."
+                  : `${detail.headRefName} is only this pull request.`
               }
+              checked={deleteBranch}
+              trail={<Switch on={deleteBranch} />}
               onPress={() => setDeleteBranch((v) => !v)}
             />
+
+            {/* GitHub's verdict above is about whether it will TAKE the merge,
+                not about the review sitting under it — a required approval is
+                the only kind `gate` refuses over, and branch protection can
+                leave a CHANGES_REQUESTED review mergeable anyway. Said here so
+                the button one screen down does not contradict the green line
+                above it. */}
+            {changesRequested ? (
+              <Row
+                title={changesRequested.who ? `${changesRequested.who} asked for changes` : "Changes were requested"}
+                sub={`${changesRequested.at ? `${ago(changesRequested.at, now)}. ` : ""}GitHub still allows the merge.`}
+                lead={<Glyph name="comment" color={C.error} size={16} weight={1.9} />}
+                trail={<Chip label={changesRequested.threads ? `${changesRequested.threads} change${changesRequested.threads === 1 ? "" : "s"}` : "changes"} tone="bad" />}
+              />
+            ) : null}
 
             {detail.headSha ? (
               <Note>
@@ -1077,20 +1578,30 @@ export default function PrScreen(): React.ReactNode {
               </Note>
             )}
 
+            {refusals?.refusal ? <Note tone="bad">{refusals.refusal}</Note> : null}
             {mergeErr ? <Note tone="bad">{mergeErr}</Note> : null}
 
-            <Btn
-              label={auto ? "Arm it" : method ? MERGE_LABEL[method] : "Merge"}
-              tone={changesRequested ? changesRequested.buttonTone : "good"}
-              busy={mergeBusy}
-              // Blocked is not disabled. GitHub is the authority on whether it
-              // will take it, `mergeState` can be stale by minutes, and a
-              // BLOCKED that is really "a required reviewer approved thirty
-              // seconds ago" would leave the only way through on the desktop.
-              // It refuses on the server if it must, and the reason lands above.
-              disabled={!method || detail.state !== "OPEN"}
-              onPress={() => { void doMerge(); }}
+            {/* Blocked is not disabled. GitHub is the authority on whether it
+                will take it, `mergeState` can be stale by minutes, and a
+                BLOCKED that is really "a required reviewer approved thirty
+                seconds ago" would leave the only way through on the desktop.
+                It refuses on the server if it must, and the reason lands above.
+
+                The press holds (model/confirmPolicy.ts): a merge writes a
+                permanent commit on somebody's base branch, and it is the one
+                write on this screen a second tap cannot undo. */}
+            <HoldButton
+              action="pr.merge"
+              label={autoOn ? "Merge when green" : "Merge"}
+              onConfirm={() => { void doMerge(); }}
+              onRelease={(line) => setMergeErr(line)}
+              disabled={!method || detail.state !== "OPEN" || mergeBusy || !!refusals?.refusal}
             />
+            <Note>
+              <Text style={{ fontWeight: "700", color: C.text2 }}>One write, the same one the desktop makes.</Text>
+              {" "}The method is the one this repository allows, and the arm waits on the computer if this
+              phone goes to sleep.
+            </Note>
           </View>
         ) : null}
       </Sheet>
@@ -1180,6 +1691,78 @@ export default function PrScreen(): React.ReactNode {
           </View>
         ) : null}
       </Sheet>
+
+      {detail ? (
+        <>
+          <PrActionsSheet
+            open={managing}
+            onClose={() => setManaging(false)}
+            host={host}
+            root={root ?? ""}
+            pr={detail}
+            detail={detail}
+            forMe={false}
+            mayWrite={mayWrite}
+            blocked={blocked}
+            onSync={() => { setManaging(false); setSyncing(true); }}
+            onWatch={() => { setManaging(false); setWatching(true); }}
+            onMerge={() => { setManaging(false); setMergeErr(null); setMerging(true); }}
+            onLabels={() => { setManaging(false); setLabelsOpen(true); }}
+            onReviewers={() => { setManaging(false); setReviewersOpen(true); }}
+            onAskClaude={() => { setManaging(false); setHanding(true); }}
+            onChanged={() => { void refresh(); }}
+          />
+          <LabelsSheet
+            open={labelsOpen}
+            onClose={() => setLabelsOpen(false)}
+            host={host}
+            root={root ?? ""}
+            number={detail.number}
+            current={labelsOf(detail)}
+            mayWrite={mayWrite}
+            blocked={blocked}
+            onSaved={() => { void refresh(); }}
+          />
+          <ReviewersSheet
+            open={reviewersOpen}
+            onClose={() => setReviewersOpen(false)}
+            host={host}
+            root={root ?? ""}
+            detail={detail}
+            mayWrite={mayWrite}
+            blocked={blocked}
+            onSaved={() => { void refresh(); }}
+          />
+          {host && detail ? (
+          <WatchRuleSheet
+            open={watching}
+            onClose={() => setWatching(false)}
+            host={host}
+            pr={{
+              root: root ?? "",
+              repo: repoOf(detail.url) ?? detail.baseRefName,
+              number: detail.number,
+              title: detail.title,
+            }}
+            mayWrite={mayWrite}
+            checks={detail.checksAll ?? []}
+            onArmed={() => { void refresh(); }}
+          />
+          ) : null}
+          <SyncSheet
+            open={syncing}
+            onClose={() => setSyncing(false)}
+            host={host}
+            root={root ?? ""}
+            base={detail.baseRefName}
+            targets={syncTargets}
+            mayWrite={mayWrite}
+            blocked={blocked}
+            onDone={() => { void refresh(); }}
+            onAgent={() => setHanding(true)}
+          />
+        </>
+      ) : null}
     </View>
   );
 }

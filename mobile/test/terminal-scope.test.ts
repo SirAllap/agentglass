@@ -44,6 +44,8 @@ describe("the screens, read", () => {
     expect(gate).toBeGreaterThan(-1);
     expect(pane).toBeGreaterThan(gate);
     // The default export is the gate: it reads the scope and never the socket.
+    // Bounded at the pane, because the refused screen (its own file now) and
+    // the pane are allowed hooks — this one is the decision, and it must stay hookless.
     const body = src.slice(gate, pane);
     expect(body).toContain("canRunAgents(host.scope)");
     expect(body).not.toContain("TerminalView");
@@ -51,11 +53,10 @@ describe("the screens, read", () => {
   });
 
   test("a phone that may answer gets the gates waiting on you where the pane would be", async () => {
-    const src = await read("../app/(tabs)/terminal.tsx");
+    const src = await read("../src/terminal/TerminalRefused.tsx");
     const start = src.indexOf("function TerminalRefused(");
-    const end = src.indexOf("function TerminalPane(");
     expect(start).toBeGreaterThan(-1);
-    const body = src.slice(start, end);
+    const body = src.slice(start);
     expect(body).toContain('scope === "answer"');
     expect(body).toContain("<GateCard");
     // And never the socket.

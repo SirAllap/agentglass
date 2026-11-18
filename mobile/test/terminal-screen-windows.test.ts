@@ -12,6 +12,7 @@ const code = (path: string): string =>
   readFileSync(new URL(path, import.meta.url), "utf8")
     .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
 const screen = code("../app/(tabs)/terminal.tsx");
+const windowSheets = code("../src/terminal/WindowSheets.tsx");
 
 describe("the window strip", () => {
   test("names a window without tmux's index, and is 52 tall", () => {
@@ -27,16 +28,21 @@ describe("the window strip", () => {
     expect(screen).not.toMatch(/t\.session === session/);
   });
 
-  test("has Files and Source control fixed beside it, and a dot for a dirty checkout", () => {
+  test("the doors under the strip are Files, Source control and the work", () => {
     expect(screen).toMatch(/pathname: "\/files", params: \{ root: open\.where \}/);
     expect(screen).toMatch(/pathname: "\/repos", params: \{ root: open\.where \}/);
-    expect(screen).toMatch(/\{dirty \? \(/);
+    // The dirty marker is a dot on the Source control door, not a second icon.
+    expect(screen).toMatch(/dot: dirty/);
     expect(screen).toMatch(/"\/git\/status"/);
   });
 
-  test("the title is the project and the line under it counts windows and needs-you", () => {
-    expect(screen).toMatch(/\{open \? groupOf\(open\) : "Terminal"\}/);
-    expect(screen).toMatch(/subline\(tabs, asking\)/);
+  test("the title is the project, with the computer's own dot beside it", () => {
+    expect(screen).toMatch(/\{open \? groupOf\(open\) : emptyRepos\?\.\[0\]\?\.name \?\? "Terminal"\}/);
+    // The mock puts the COMPUTER's state on the project name. The name itself
+    // moved to the ··· sheet (see the header comment): a long press on the
+    // title opens the same sheet, so the door did not go away.
+    expect(screen).toMatch(/<ComputerDot status=\{computerStatus\(host, true, linkState\)\} colors=\{K\} \/>/);
+    expect(screen).toContain("onLongPress={() => setComputersOpen(true)}");
   });
 
   test("the title opens the grouped switcher, not a flat list of sessions", () => {
@@ -72,8 +78,8 @@ describe("when the computer has nothing, or does not answer", () => {
 
   test("the new-window picker says when /terminal/agents failed, and can ask again", () => {
     expect(screen).toMatch(/setAgentsFailed\(true\)/);
-    expect(screen).toMatch(/label="Try again"/);
+    expect(windowSheets).toMatch(/label="Try again"/);
     // The Shell row needs no agent list, so it is not behind one.
-    expect(screen).not.toMatch(/agents === null \? \(\s*<Note>Asking the computer which agents it has…<\/Note>\s*\) : \(/);
+    expect(windowSheets).not.toMatch(/agents === null \? \(\s*<Note>Asking the computer which agents it has…<\/Note>\s*\) : \(/);
   });
 });

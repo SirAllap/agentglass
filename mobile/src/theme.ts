@@ -56,15 +56,20 @@ export type { AccentId, Look, Palette, Polarity, ThemeMode };
 export { PHONE_ACCENTS as ACCENTS };
 
 /*
- * "Match the computer", in teal.
+ * "Match the computer", in the brand's violet.
  *
  * Desk is the default for a NEW install: the phone wears the theme the computer
  * is on, and its own system-following look until the computer has answered.
  * Anybody who pinned Light or Dark, or chose an accent, keeps it —
  * `sanitizeLook` reads what was stored and this is only the fallback, so the
  * default never repaints a phone that already made a choice.
+ *
+ * Violet rather than a phone-only purple: it is the accent the picker already
+ * offers, the colour of the mark and the favicon, and the one the walk in
+ * shared/palettes.ts already takes to #a78bfa on dark and a readable shade on
+ * light — so the default needs no hex that lives nowhere else.
  */
-const SHIPPED: Look = { mode: "desk", accent: "teal" };
+const SHIPPED: Look = { mode: "desk", accent: "violet" };
 
 /** The live palette. Read it at render time — never destructure it into a
  *  module-level constant, which would freeze a screen in the palette that was

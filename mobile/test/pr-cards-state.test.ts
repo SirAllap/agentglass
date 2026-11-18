@@ -11,12 +11,16 @@ describe("the card lookup tables", () => {
     expect(lookupsFor(host("new"))).not.toBe(lookupsFor(host("old")));
   });
 
-  test("forgetting clears the table of that host's token", () => {
-    const l = lookupsFor(host("t1"));
+  test("forgetting clears both trackers' tables, not only ClickUp's", () => {
+    const clickup = lookupsFor(host("t1"));
+    const jira = lookupsFor(host("t1"), "jira");
+    expect(jira).not.toBe(clickup);
     let cleared = 0;
-    const was = l.clear;
-    l.clear = () => { cleared++; was.call(l); };
+    for (const l of [clickup, jira]) {
+      const was = l.clear;
+      l.clear = () => { cleared++; was.call(l); };
+    }
     forgetPrCards(host("t1"));
-    expect(cleared).toBe(1);
+    expect(cleared).toBe(2);
   });
 });

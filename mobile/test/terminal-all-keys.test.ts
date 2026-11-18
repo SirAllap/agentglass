@@ -20,7 +20,7 @@ describe("the sheet's keys", () => {
   test("are the four groups of the mock, in order", () => {
     expect(ALL_KEYS.map((g) => g.title)).toEqual(["Control", "Move", "Symbols", "Function"]);
     expect(ALL_KEYS[0]!.keys.map((k) => k.label)).toEqual(["^C", "^D", "^Z", "^L", "^R", "^A", "^E", "^W"]);
-    expect(ALL_KEYS[1]!.keys.map((k) => k.label)).toEqual(["Home", "End", "PgUp", "PgDn", "⇧Tab", "Del", "Ins", "⏎"]);
+    expect(ALL_KEYS[1]!.keys.map((k) => k.label)).toEqual(["Home", "End", "PgUp", "PgDn", "⇧Tab", "Del", "↑", "↓"]);
     expect(ALL_KEYS[2]!.keys.map((k) => k.label)).toEqual(["|", "~", "/", "\\", "-", "_", "`", "$"]);
     expect(ALL_KEYS[3]!.keys.map((k) => k.label)).toEqual(Array.from({ length: 12 }, (_, i) => `F${i + 1}`));
   });
@@ -44,11 +44,11 @@ describe("the sheet's keys", () => {
     expect(bytes("PgDn")).toBe("\x1b[6~");
     expect(bytes("⇧Tab")).toBe("\x1b[Z");
     expect(bytes("Del")).toBe("\x1b[3~");
-    expect(bytes("⏎")).toBe("\r");
+    expect(bytes("↑")).toBe("\x1b[A");
+    expect(bytes("↓")).toBe("\x1b[B");
   });
 
   test("the keys the bar never had are the terminal's own sequences", () => {
-    expect(bytes("Ins")).toBe("\x1b[2~");
     expect(bytes("F1")).toBe("\x1bOP");
     expect(bytes("F4")).toBe("\x1bOS");
     expect(bytes("F5")).toBe("\x1b[15~");
@@ -77,9 +77,10 @@ describe("the bar sends what it always sent", () => {
   // The lock. The bar was made bigger, not different: these are the catalogue's
   // bytes, key by key, and a change to one is a change to what a press does.
   const GOLDEN: Record<string, string | undefined> = {
-    escape: "\x1b", ctrlC: "\x03", up: "\x1b[A", down: "\x1b[B", tab: "\t", shiftTab: "\x1b[Z",
-    ctrl: undefined, alt: undefined, shift: undefined,
-    left: "\x1b[D", right: "\x1b[C", ctrlD: "\x04", ctrlZ: "\x1a", ctrlL: "\x0c", ctrlR: "\x12",
+    escape: "\x1b", tab: "\t", ctrl: undefined,
+    left: "\x1b[D", up: "\x1b[A", down: "\x1b[B", right: "\x1b[C", pipe: "|",
+    ctrlC: "\x03", shiftTab: "\x1b[Z", alt: undefined, shift: undefined,
+    ctrlD: "\x04", ctrlZ: "\x1a", ctrlL: "\x0c", ctrlR: "\x12",
     ctrlA: "\x01", ctrlE: "\x05", ctrlW: "\x17", ctrlU: "\x15", ctrlK: "\x0b",
     backspace: "\x7f", delete: "\x1b[3~", home: "\x1b[H", end: "\x1b[F",
     pageUp: "\x1b[5~", pageDown: "\x1b[6~", enter: "\r",

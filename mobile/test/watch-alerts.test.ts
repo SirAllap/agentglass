@@ -86,8 +86,23 @@ describe("what a card becomes", () => {
     expect(itemFromCard(card({ kind: "status", who: undefined, status: "done" }))).toBeNull();
   });
 
-  test("a Jira card has no screen on the phone, and an id that is not an id makes nothing", () => {
-    expect(itemFromCard(card({ tracker: "jira" }))).toBeNull();
+  test("a move somebody else made is told, with who and where it went; mine or unknown is not", () => {
+    const moved = card({ kind: "status", who: "Grace", byMe: false, status: "in review" });
+    expect(itemFromCard(moved)).toMatchObject({ title: "Grace moved ORBIT-1042 to in review", body: "Fix the thing", urgent: false, group: "card:86abc12" });
+    expect(itemFromCard({ ...moved, byMe: true })).toBeNull();
+    expect(itemFromCard({ ...moved, byMe: undefined })).toBeNull();
+    expect(itemFromCard({ ...moved, who: undefined })).toBeNull();
+  });
+
+  test("a moved card goes through the same gate: the switch and quiet hours hold it", () => {
+    const item = itemFromCard(card({ kind: "status", who: "Grace", byMe: false }));
+    expect(decideLive(item, ctx())).toMatchObject({ notify: true });
+    expect(decideLive(item, ctx({ enabled: false }))).toEqual({ notify: false, because: "off" });
+  });
+
+  test("a Jira card keeps its tracker, and an id that is not an id makes nothing", () => {
+    // A Jira card rides with its tracker, so its tap can go to the Jira screen.
+    expect(itemFromCard(card({ tracker: "jira" }))).toMatchObject({ card: { id: "86abc12", jira: true } });
     for (const id of ["", "../x", "a b", "a/b", "x".repeat(65)]) expect(itemFromCard(card({ id }))).toBeNull();
   });
 });
@@ -215,5 +230,12 @@ describe("the cursor", () => {
     expect(mergeCursor({ at: 5, ids: ["x"] }, { at: 5, ids: ["y"] })).toEqual({ at: 5, ids: ["x", "y"] });
     expect(mergeCursor({ at: 5, ids: ["x"] }, { at: 9, ids: ["z"] })).toEqual({ at: 9, ids: ["z"] });
     expect(mergeCursor({ at: 9, ids: ["z"] }, { at: 5, ids: ["x"] })).toEqual({ at: 9, ids: ["z"] });
+  });
+});
+
+describe("desktop Do Not Disturb", () => {
+  test("holds a live fire, a card and nothing else", () => {
+    expect(decideLive(itemFromFire(fire()), ctx({ dnd: true }))).toEqual({ notify: false, because: "dnd" });
+    expect(decideLive(itemFromFire(fire()), ctx({ dnd: false })).notify).toBe(true);
   });
 });

@@ -73,6 +73,82 @@ export const DOT_WORDS: Record<Dot, string> = {
   none: "no agent",
 };
 
+/**
+ * The one word a tab strip has room for.
+ *
+ * `waiting` and `finished`, not `needs you` and `hit an error`: a tab is a
+ * label, and the sentence around it is the switcher's row. The dot is the same
+ * fact for a thumb; the word is the same fact for everybody else.
+ */
+export const TAB_WORDS: Record<Dot, string> = {
+  needs: "waiting",
+  error: "error",
+  working: "working",
+  done: "finished",
+  idle: "idle",
+  none: "idle",
+};
+
+/** What a tab says about its window right now. */
+export function tabWord(tab: Tab, asking: ReadonlySet<string>): string {
+  return TAB_WORDS[dotOf(statusOf(tab, asking))];
+}
+
+/**
+ * What has been looked at, per pane: the state its tab was in when it was last
+ * tapped. Kept on the screen, because it is the person's memory and nothing on
+ * the wire carries it.
+ */
+export type Seen = Readonly<Record<string, string>>;
+
+/** The dot is unread news, not the state: working and idle are not news, and
+ *  a window that finished or started waiting since you last looked is. */
+export function unread(tab: Tab, asking: ReadonlySet<string>, seen: Seen): boolean {
+  const dot = dotOf(statusOf(tab, asking));
+  const news = dot === "needs" || dot === "done" || dot === "error";
+  return news && seen[tab.paneId] !== dot;
+}
+
+/** The same record with this tab's current state marked as read. */
+export function seeTab(seen: Seen, tab: Tab, asking: ReadonlySet<string>): Seen {
+  return { ...seen, [tab.paneId]: dotOf(statusOf(tab, asking)) };
+}
+
+/** A window that has just stopped working, as the finished banner says it. */
+export interface FinishNotice {
+  paneId: string;
+  /** The window's name when it finished — tmux reuses names, which is why the
+   *  pane is what this is keyed on. */
+  name: string;
+  at: number;
+}
+
+/**
+ * The banner's trigger: a window that was not finished and now is.
+ *
+ * `before` null is the first read of a screen, and it announces nothing —
+ * opening the terminal must not light up for builds that finished last night.
+ * One notice at a time: a poll that catches two finishes shows the first in
+ * strip order, and the strip's own dot carries the other one.
+ */
+export function finishedNotice(
+  before: readonly Tab[] | null, after: readonly Tab[], now: number,
+): FinishNotice | null {
+  if (!before) return null;
+  const was = new Map(before.map((tab) => [tab.paneId, dotOf(tab.status)]));
+  for (const tab of after) {
+    if (dotOf(tab.status) !== "done" || was.get(tab.paneId) === "done") continue;
+    return { paneId: tab.paneId, name: tab.name, at: now };
+  }
+  return null;
+}
+
+/** Keep the banner only while the strip still lists the pane it named. A name
+ *  is not enough: tmux hands a closed window's name to the next one. */
+export function keepNotice(notice: FinishNotice | null, tabs: readonly Tab[]): FinishNotice | null {
+  return notice && tabs.some((tab) => tab.paneId === notice.paneId) ? notice : null;
+}
+
 /** Pinned first, then whatever `then` ranks higher, and otherwise the order
  *  the answer came in — tmux's own (the sort is stable). */
 function pinnedFirst(tabs: readonly Tab[], then: (t: Tab) => number = () => 0): Tab[] {

@@ -24,6 +24,7 @@ import { b64Encode } from "../lib/b64.ts";
 import type { Host } from "../lib/host.ts";
 import { C, type Palette } from "../theme.ts";
 import { redialIn, STABLE_MS } from "./redial.ts";
+import { onTermPrefs, termCursor } from "./termPrefs.ts";
 import { terminalDocument, terminalTheme } from "./terminal-html.ts";
 import { createCoalescer, type Coalescer } from "./writeCoalescer.ts";
 
@@ -42,6 +43,19 @@ export interface TerminalHandle {
    */
   command: (frame: PtyClientFrame) => void;
   focus: () => void;
+  /** Ask the page for everything it still holds. The answer arrives later, as
+   *  `onBack` — injection cannot return a value. */
+  scrollback: () => void;
+  /** Paint these buffer lines; `at` is the one to draw as the current hit.
+   *  Painting only: the jump is `goto`, and it is the person's. */
+  marks: (lines: number[], at?: number) => void;
+  /** Scroll to a buffer line and leave the marks where they are. */
+  goto: (line: number) => void;
+  /** Paint the lines picked in select mode. */
+  picks: (lines: number[]) => void;
+  /** Select mode: a tap on the pane names a line instead of opening the
+   *  keyboard. See `onPick`. */
+  select: (on: boolean) => void;
 }
 
 interface Props {
@@ -120,6 +134,16 @@ interface Props {
    * strictly the same resize plus somebody mid-command left on "Disconnected".
    */
   onPane?: (pane: { cols: number; rows: number; fit: boolean; by?: string }) => void;
+  /**
+   * Everything the page still holds, oldest first, after `scrollback()`.
+   *
+   * One entry per buffer row, blank where the pane printed nothing — so the
+   * length is the number of lines the search had, and it is an answer rather
+   * than "unknown": an empty pane answers with blank rows.
+   */
+  onBack?: (lines: string[]) => void;
+  /** A line somebody tapped in select mode. See `TerminalHandle.select`. */
+  onPick?: (line: number) => void;
 }
 
 /** A client frame out, as a string. The client half of this protocol had no
@@ -128,7 +152,7 @@ interface Props {
 const ptyFrame = (frame: PtyClientFrame): string => JSON.stringify(frame);
 
 export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalView(
-  { host, pane, root, fit, columns, palette, onState, onTmux, onLine, onGrid, onPane, onOpened, onTap }, ref,
+  { host, pane, root, fit, columns, palette, onState, onTmux, onLine, onGrid, onPane, onOpened, onTap, onBack, onPick }, ref,
 ) {
   const webview = useRef<WebView>(null);
   const socket = useRef<WebSocket | null>(null);
@@ -154,7 +178,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
    * measure, and it buys a first frame that is already the right shape.
    */
   const [measured, setMeasured] = useState(false);
-  const [doc] = useState(() => terminalDocument({ palette, columns }));
+  const [doc] = useState(() => terminalDocument({ palette, columns, cursor: termCursor() }));
   /*
    * Bumped to open a new socket on the same pane.
    *
@@ -202,8 +226,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
    * none of them, which is the shape this needs: the socket's lifetime belongs
    * to the pane, not to whoever happens to be listening.
    */
-  const handlers = useRef({ onState, onTmux, onLine, onGrid, onPane, onOpened, onTap });
-  handlers.current = { onState, onTmux, onLine, onGrid, onPane, onOpened, onTap };
+  const handlers = useRef({ onState, onTmux, onLine, onGrid, onPane, onOpened, onTap, onBack, onPick });
+  handlers.current = { onState, onTmux, onLine, onGrid, onPane, onOpened, onTap, onBack, onPick };
 
   const inject = useCallback((js: string): void => {
     webview.current?.injectJavaScript(`${js};true;`);
@@ -246,6 +270,20 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       if (ws && ws.readyState === 1) ws.send(ptyFrame(frame));
     },
     focus: (): void => inject("window.AGX.focus()"),
+    // `window.AGX &&` on the four below: the handle exists from the first
+    // render, and these are called from effects and sheets that can beat the
+    // page's own script. Same guard, same reason, as the theme injection.
+    scrollback: (): void => inject("window.AGX && window.AGX.scrollback()"),
+    marks: (lines: number[], at?: number): void => {
+      inject(`window.AGX && window.AGX.marks(${JSON.stringify(lines.map((n) => Math.max(0, Math.floor(n))))},${typeof at === "number" ? Math.max(0, Math.floor(at)) : -1})`);
+    },
+    goto: (line: number): void => {
+      inject(`window.AGX && window.AGX.goto(${Math.max(0, Math.floor(line))})`);
+    },
+    picks: (lines: number[]): void => {
+      inject(`window.AGX && window.AGX.picks(${JSON.stringify(lines.map((n) => Math.max(0, Math.floor(n))))})`);
+    },
+    select: (on: boolean): void => inject(`window.AGX && window.AGX.select(${on ? "true" : "false"})`),
   }), [inject]);
 
   // One socket per pane. Re-opening on a width change would drop the session,
@@ -436,7 +474,13 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
   }, []);
 
   const onMessage = useCallback((event: WebViewMessageEvent): void => {
-    let message: { t?: string; d?: string; cols?: number; rows?: number; text?: string | null; exact?: boolean; lines?: number };
+    let message: {
+      t?: string; d?: string; cols?: number; rows?: number; text?: string | null; exact?: boolean;
+      /** A scroll's line count, or a scrollback's lines: two frames, one field
+       *  name, told apart by their `t`. */
+      lines?: number | string[];
+      line?: number;
+    };
     try { message = JSON.parse(event.nativeEvent.data) as typeof message; } catch { return; }
     const ws = socket.current;
 
@@ -446,6 +490,8 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       // in the wrong ones: a WebView reload replays the document this component
       // was built with, whose palette is whatever was current at mount.
       if (painted.current !== baked.current) inject(`window.AGX.theme(${painted.current})`);
+      // Same for the cursor shape: the reloaded page has the one from build time.
+      inject(`window.AGX.cursor(${JSON.stringify(termCursor())})`);
       const waiting = pending.current.splice(0);
       // Everything held while the page booted, in one crossing. This is the
       // biggest single batch the bridge ever carries — a pane with scrollback
@@ -454,6 +500,17 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       return;
     }
     if (message.t === "tap") { handlers.current.onTap?.(); return; }
+    // The scrollback, after `scrollback()`. Its own shape and not a `screen`
+    // frame: those are the rows on screen and this is the whole buffer.
+    if (message.t === "back") {
+      handlers.current.onBack?.(Array.isArray(message.lines) ? message.lines.map(String) : []);
+      return;
+    }
+    // A tap in select mode names a line; the screen decides what that means.
+    if (message.t === "pick" && typeof message.line === "number") {
+      handlers.current.onPick?.(message.line);
+      return;
+    }
     if (message.t === "in" && typeof message.d === "string") {
       if (ws && ws.readyState === 1) ws.send(ptyFrame({ t: "in", d: message.d }));
       return;
@@ -521,6 +578,18 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
     painted.current = themeJson;
     inject(`window.AGX && window.AGX.theme(${themeJson})`);
   }, [themeJson, inject]);
+
+  // A cursor chosen in Settings reaches panes that are already open; the
+  // document only carries the one that was current when it was built.
+  useEffect(() => {
+    let last = termCursor();
+    return onTermPrefs(() => {
+      const now = termCursor();
+      if (now === last) return;
+      last = now;
+      inject(`window.AGX && window.AGX.cursor(${JSON.stringify(now)})`);
+    });
+  }, [inject]);
 
   const source = useMemo(() => ({ html: doc, baseUrl: "about:blank" }), [doc]);
 

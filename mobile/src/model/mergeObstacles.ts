@@ -88,11 +88,18 @@ export function mergeObstacles(pr: MergeFacts): Obstacle[] {
 export interface ChangesRequestedFacts {
   reviewDecision: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
   openThreads?: { open: number; more: boolean };
-  humanReview?: { who: string[] } | null;
+  humanReview?: { who: string[]; at?: string | number } | null;
 }
 
 export interface ChangesRequestedWarning {
   note: string;
+  /** Who asked, and how many open threads they left, for the row the mock
+   *  draws above the button (36). Absent means the review said so with no
+   *  name attached, and the row falls back to the sentence alone. */
+  who?: string;
+  /** When they asked, in ms, when the detail carries it. */
+  at?: number;
+  threads: number;
   /** The bottom Merge button's tone. Green reads as "go ahead" — GitHub will
    *  take a CHANGES_REQUESTED pull request when branch protection does not
    *  require review, and `mergeVerdict` (mergeReason.ts) says "Ready to
@@ -123,6 +130,9 @@ export function changesRequestedWarning(pr: ChangesRequestedFacts): ChangesReque
   ];
   return {
     note: `${parts.join(" · ")} — merging lands it over that review.`,
+    who,
+    at: pr.humanReview?.at === undefined ? undefined : typeof pr.humanReview.at === "number" ? pr.humanReview.at : Date.parse(pr.humanReview.at),
+    threads,
     buttonTone: "plain",
   };
 }

@@ -60,6 +60,7 @@ describe("the card's words", () => {
 
 const card = await Bun.file(new URL("../src/terminal/SettingsRequestCard.tsx", import.meta.url)).text();
 const terminal = await Bun.file(new URL("../app/(tabs)/terminal.tsx", import.meta.url)).text();
+const refused = await Bun.file(new URL("../src/terminal/TerminalRefused.tsx", import.meta.url)).text();
 
 describe("the screen and the card use it", () => {
   test("the card draws the title and the diff lines from the model, not its own copy", () => {
@@ -75,10 +76,13 @@ describe("the screen and the card use it", () => {
   });
 
   test("the terminal draws it for a phone that answers, and over the pane", () => {
-    const mounts = terminal.match(/<SettingsRequestList\b/g) ?? [];
+    // One mount in the answer-scope screen (its own file), one over the pane.
+    const mounts = (terminal + refused).match(/<SettingsRequestList\b/g) ?? [];
     expect(mounts.length).toBe(2);
+    expect(refused).toContain("<SettingsRequestList");
     // The answer-scope screen and the pane both hand it the fleet's clock, so a
     // request raised while the screen is open shows up without a poll of its own.
     expect(terminal).toContain("tick={fleet.at}");
+    expect(refused).toContain("tick={fleet.at}");
   });
 });

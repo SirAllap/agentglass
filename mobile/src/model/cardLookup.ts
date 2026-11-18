@@ -10,23 +10,28 @@
  *
  * Injected I/O, so the limits are held by a test rather than by a screen.
  */
-import { cardLineOf, type CardLine, type Looked } from "./prCard.ts";
+import { CARD_FRESH_MS, cardLineOf, type CardLine, type Looked } from "./prCard.ts";
 import type { ProviderTask } from "../../../shared/providers.ts";
 
 export interface LookupIo {
   /** The cached boards' answer: a task, or null for "not that we know of". */
   where(id: string): Promise<ProviderTask | null>;
-  /** ClickUp's own answer for one id. */
+  /** The tracker's own answer for one id. */
   find(id: string): Promise<{ task?: ProviderTask | null; error?: string }>;
 }
+
+/** Whose card a table draws: the card a row shows opens that tracker's screen. */
+type Tracker = "clickup" | "jira";
 
 /** Enough to keep the list moving; `where` is local, so it is not the scarce one. */
 const WHERE_AT_ONCE = 4;
 /** The budget: see the header. */
 const FIND_AT_ONCE = 2;
 
-export function createCardLookups(io: LookupIo) {
+export function createCardLookups(io: LookupIo, tracker: Tracker = "clickup", freshMs = CARD_FRESH_MS) {
   const held = new Map<string, Looked>();
+  /** When a reading was last asked of the tracker itself, per id. */
+  const refreshedAt = new Map<string, number>();
   const whereQ: string[] = [];
   const findQ: string[] = [];
   const listeners = new Set<() => void>();
@@ -43,7 +48,7 @@ export function createCardLookups(io: LookupIo) {
       const id = whereQ.shift()!;
       whereRunning++;
       io.where(id)
-        .then((t) => set(id, t ? { phase: "card", card: cardLineOf(t) } : { phase: "missed" }))
+        .then((t) => set(id, t ? { phase: "card", card: cardLineOf(t, tracker) } : { phase: "missed" }))
         .catch(() => set(id, { phase: "missed" }))
         .finally(() => { whereRunning--; pumpWhere(); });
     }
@@ -54,7 +59,7 @@ export function createCardLookups(io: LookupIo) {
       const id = findQ.shift()!;
       findRunning++;
       io.find(id)
-        .then((r) => set(id, r.task ? { phase: "card", card: cardLineOf(r.task) } : { phase: "failed" }))
+        .then((r) => set(id, r.task ? { phase: "card", card: cardLineOf(r.task, tracker) } : { phase: "failed" }))
         .catch(() => set(id, { phase: "failed" }))
         .finally(() => { findRunning--; pumpFind(); });
     }
@@ -78,8 +83,34 @@ export function createCardLookups(io: LookupIo) {
       findQ.push(id);
       pumpFind();
     },
+    /**
+     * Ask the tracker for a card the row already names, because what the row
+     * carries is older than a few minutes — the server fills it from a board
+     * cached on disk and accepts a day-old one, so a card moved this morning
+     * drew its old status all day (the desktop re-asks at five minutes, see
+     * prCardStore). Once per TTL: every render calls this.
+     *
+     * A failure leaves what is on screen alone rather than blanking it to "not
+     * found": the old status is wrong-ish, an empty card is wrong.
+     */
+    refresh(id: string): void {
+      if (!id) return;
+      const now = Date.now();
+      const asked = refreshedAt.get(id);
+      if (asked !== undefined && now - asked < freshMs) return;
+      refreshedAt.set(id, now);
+      set(id, { phase: "finding" });
+      findQ.push(id);
+      pumpFind();
+    },
     /** A reading is not forever: a refresh asks again. */
-    clear(): void { held.clear(); whereQ.length = 0; findQ.length = 0; for (const l of listeners) l(); },
+    clear(): void {
+      held.clear();
+      refreshedAt.clear();
+      whereQ.length = 0;
+      findQ.length = 0;
+      for (const l of listeners) l();
+    },
     subscribe(fn: () => void): () => void { listeners.add(fn); return () => { listeners.delete(fn); }; },
   };
 }

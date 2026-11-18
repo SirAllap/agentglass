@@ -1,17 +1,23 @@
 /*
- * The navigator: four destinations in the bar, two screens that are not.
+ * The navigator: three destinations in the bar, three screens that are not.
  *
  * Source control and Settings are tabs with no tab rather than screens pushed
  * on the root stack, because a push hides the bar for as long as you are in
  * one — and both are screens people leave open and come back from.
  *
  * The bar is src/nav/TabBar.tsx and which destinations it offers is
- * src/nav/bar.ts, which also says why the Inbox, Now and the More sheet that
- * held Now, Source control and Settings are gone.
+ * src/nav/bar.ts, which also says why Now and the More sheet that held it are
+ * gone, and why the bar carries no numbers.
  *
  * ── the header ───────────────────────────────────────────────────────────
  * The computer's name, with a way to another, where the title was; and on the
- * right of every destination, the usage chip and the gear.
+ * right of every destination, the usage chip, the Inbox bell and the gear.
+ *
+ * The bell carries the ONE count in the app: the rows the Inbox lists. It sits
+ * here rather than in the bar so that a gate, a review request, a settings
+ * request, a stopped agent and a waiting plan are counted together — they come
+ * from five routes, and a bar item can only count its own screen's list. The
+ * terminal draws its own header and mounts the same bell (src/nav/InboxBell.tsx).
  * Settings used to sit behind a `···` sheet with two other screens, which was
  * three taps to a switch and a menu whose name said nothing about what was in
  * it. Everything that belongs to one screen stays on that screen, the way the
@@ -21,6 +27,7 @@ import { Pressable, View } from "react-native";
 import { Tabs, useRouter } from "expo-router";
 import { TabBar } from "../../src/nav/TabBar.tsx";
 import { BackIcon, SettingsIcon } from "../../src/nav/icons.tsx";
+import { InboxBell } from "../../src/nav/InboxBell.tsx";
 import { usePaletteTick } from "../../src/state/use-palette.ts";
 import { C, SPACE, T } from "../../src/theme.ts";
 import { TAP } from "../../src/ui.tsx";
@@ -57,12 +64,14 @@ export default function TabsLayout(): React.ReactNode {
   usePaletteTick(); // a scene repaints only if it asks — see use-palette.ts
   const router = useRouter();
 
-  /* What is left of the plan, then the gear. The chip is on every
-     destination because the question it answers is asked right before starting
-     something long, from wherever that is — see src/usage/Usage.tsx. */
+  /* What is left of the plan, then what is waiting, then the gear. The usage
+     chip is on every destination because the question it answers is asked right
+     before starting something long, from wherever that is — see
+     src/usage/Usage.tsx. */
   const trailing = (
     <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.xs }}>
       <UsageChip />
+      <InboxBell />
       <HeaderButton label="Settings" side="right" onPress={() => router.push("/settings")}>
         <SettingsIcon color={C.text2} size={22} />
       </HeaderButton>
@@ -102,9 +111,17 @@ export default function TabsLayout(): React.ReactNode {
       {/* The terminal draws its own header — it is the one screen that gives
           the pane every point it can, and its header is about the pane. */}
       <Tabs.Screen name="terminal" options={{ title: "Terminal", headerShown: false }} />
-      <Tabs.Screen name="prs" options={{ title: "Pull requests", ...destination }} />
-      <Tabs.Screen name="issues" options={{ title: "Issues", ...destination }} />
-      <Tabs.Screen name="tasks" options={{ title: "Cards", ...destination }} />
+      {/* The board draws its own too (mock 28): the repository, not the
+          computer, is what that header is for, and its menu holds the
+          computer's name and the usage. */}
+      <Tabs.Screen name="prs" options={{ title: "Pull requests", headerShown: false }} />
+      {/* A redirect into Tasks under the GitHub issues source. The route is
+          kept because links and notifications land on it. */}
+      <Tabs.Screen name="issues" options={{ title: "Issues", headerShown: false }} />
+      {/* Tasks draws its own header (src/tasks/TasksTop): the mock puts the
+          search, the filter and the source menu over the board, and a second
+          header above that one is a third of the screen spent on chrome. */}
+      <Tabs.Screen name="tasks" options={{ title: "Tasks", headerShown: false }} />
       <Tabs.Screen name="repos" options={{ title: "Source control", headerLeft: () => back }} />
       <Tabs.Screen name="settings" options={{ title: "Settings", headerLeft: () => back }} />
     </Tabs>

@@ -11,6 +11,7 @@
  */
 import type { PrDetail, PrReview } from "../../../shared/types.ts";
 import { mergeVerdict } from "../../../shared/mergeReason.ts";
+import { conversation } from "../../../shared/prConversation.ts";
 import { askedAtOf, buildRoster, type ReviewerState } from "../../../shared/reviewRoster.ts";
 import { mergeObstacles } from "./mergeObstacles.ts";
 import type { Mark, Tone } from "./talk.ts";
@@ -21,23 +22,30 @@ export interface ReviewerRow {
   bot: boolean;
   team: boolean;
   word: string;
+  /** The one word the trailing chip carries (mock 32): "approved", "changes". */
+  chip: string;
+  /** What they did, for the line under the name: "approved 1 h ago". */
+  said: string;
   tone: Tone;
   glyph: Mark;
+  /** When their last review landed, in ms. Absent for a request nobody has
+   *  answered yet, which is the line that has no time to print. */
+  at?: number;
 }
 
-const STATE: Record<ReviewerState, { word: string; tone: Tone; glyph: Mark }> = {
-  approved: { word: "Approved", tone: "good", glyph: "ok_circle" },
-  "approved-old": { word: "Approved earlier", tone: "good", glyph: "ok_circle" },
-  "approved-void": { word: "Approval out of date", tone: "warn", glyph: "alert" },
-  changes: { word: "Changes requested", tone: "bad", glyph: "x_circle" },
-  "changes-again": { word: "Asked again", tone: "bad", glyph: "x_circle" },
-  commented: { word: "Commented", tone: "neutral", glyph: "comment" },
-  requested: { word: "Pending", tone: "neutral", glyph: "circle" },
-  dismissed: { word: "Dismissed", tone: "neutral", glyph: "draft_circle" },
-  team: { word: "Team pending", tone: "neutral", glyph: "people" },
+const STATE: Record<ReviewerState, { word: string; chip: string; said: string; tone: Tone; glyph: Mark }> = {
+  approved: { word: "Approved", chip: "approved", said: "approved", tone: "good", glyph: "ok_circle" },
+  "approved-old": { word: "Approved earlier", chip: "approved", said: "approved", tone: "good", glyph: "ok_circle" },
+  "approved-void": { word: "Approval out of date", chip: "out of date", said: "approval out of date", tone: "warn", glyph: "alert" },
+  changes: { word: "Changes requested", chip: "changes", said: "asked for changes", tone: "bad", glyph: "x_circle" },
+  "changes-again": { word: "Asked again", chip: "changes", said: "asked again", tone: "bad", glyph: "x_circle" },
+  commented: { word: "Commented", chip: "commented", said: "commented", tone: "neutral", glyph: "comment" },
+  requested: { word: "Pending", chip: "waiting", said: "was asked", tone: "neutral", glyph: "circle" },
+  dismissed: { word: "Dismissed", chip: "dismissed", said: "was dismissed", tone: "neutral", glyph: "draft_circle" },
+  team: { word: "Team pending", chip: "waiting", said: "was asked", tone: "neutral", glyph: "people" },
 };
 
-const BOT_STATE: Partial<Record<PrReview["state"], { word: string; tone: Tone; glyph: Mark }>> = {
+const BOT_STATE: Partial<Record<PrReview["state"], { word: string; chip: string; said: string; tone: Tone; glyph: Mark }>> = {
   APPROVED: STATE.approved,
   CHANGES_REQUESTED: STATE.changes,
   COMMENTED: STATE.commented,
@@ -59,8 +67,19 @@ export function reviewerRows(d: ReviewFacts): ReviewerRow[] {
     threadAuthors: (d.threads ?? []).filter((t) => !t.isResolved).map((t) => t.comments[0]?.author ?? ""),
     askedAt,
   });
+  /* The date under each name is the last time that person said something about
+     the code, not the roster's verdict time: "changes 40 min ago" answers what
+     happened, and a dismissed old review is still when they last spoke. */
+  const lastAt = new Map<string, number>();
+  for (const r of d.reviews ?? []) {
+    const at = r.submittedAt ? Date.parse(r.submittedAt) : NaN;
+    if (!Number.isFinite(at)) continue;
+    const key = r.author.toLowerCase();
+    if (!(lastAt.get(key)! >= at)) lastAt.set(key, at);
+  }
   const out: ReviewerRow[] = roster.entries.map((e) => ({
-    key: e.login, login: e.login, bot: false, team: e.state === "team", ...STATE[e.state],
+    key: e.login, login: e.login, bot: false, team: e.state === "team",
+    at: lastAt.get(e.login.toLowerCase()), ...STATE[e.state],
   }));
 
   const latest = new Map<string, PrReview>();
@@ -68,9 +87,28 @@ export function reviewerRows(d: ReviewFacts): ReviewerRow[] {
     if (r.isBot && BOT_STATE[r.state]) latest.set(r.author.toLowerCase(), r);
   }
   for (const r of latest.values()) {
-    out.push({ key: `bot-${r.author}`, login: r.author, bot: true, team: false, ...BOT_STATE[r.state]! });
+    out.push({
+      key: `bot-${r.author}`, login: r.author, bot: true, team: false,
+      at: lastAt.get(r.author.toLowerCase()), ...BOT_STATE[r.state]!,
+    });
   }
   return out;
+}
+
+/** The last thing said, for the Overview's Talk preview (mock 32).
+ *
+ *  A thread is dated by its first remark and its text is that remark: the
+ *  preview answers "what is the newest thing somebody wrote", and a resolved
+ *  thread's latest reply is not news. Null when nobody has said anything, which
+ *  the section then does not draw at all. */
+export function lastSaid(d: Pick<PrDetail, "comments" | "reviews" | "threads">): { who: string; when: number; text: string } | null {
+  const entries = conversation(d);
+  const last = entries[entries.length - 1];
+  if (!last) return null;
+  if (last.kind === "comment") return { who: last.comment.author, when: last.at, text: last.comment.body };
+  if (last.kind === "review") return { who: last.review.author, when: last.at, text: last.review.body };
+  const first = last.thread.comments[0];
+  return { who: first?.author ?? "someone", when: last.at, text: first?.body ?? "" };
 }
 
 export interface MergeBanner {

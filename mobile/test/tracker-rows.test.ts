@@ -23,8 +23,8 @@ describe("task tracker rows", () => {
     expect(by.clickup).toMatchObject({ badge: "off" });
     expect(by.clickup!.reason).toContain("Connect it on the computer");
     expect(by.taskwarrior).toMatchObject({ badge: "off", reason: "The task tool is not installed on the computer." });
-    expect(by.jira).toMatchObject({ badge: "soon" });
-    expect(by.jira!.reason).toContain("Not supported");
+    expect(by.jira).toMatchObject({ badge: "off" });
+    expect(by.jira!.reason).toContain("Connect it on the computer");
     expect(trackersSummary(none)).toBe("None connected · Cards tab hidden");
   });
 
@@ -49,7 +49,7 @@ describe("task tracker rows", () => {
 describe("the ways into the list", () => {
   const read = (p: string): string => readFileSync(join(import.meta.dir, "..", p), "utf8");
   test("Settings has the row and the empty Cards screen links to it", () => {
-    expect(read("app/(tabs)/settings.tsx")).toMatch(/title="Task trackers"[\s\S]{0,300}?push\("\/trackers"\)/);
+    expect(read("app/(tabs)/settings.tsx")).toMatch(/title="Task sources"[\s\S]{0,300}?push\("\/trackers"\)/);
     expect(read("app/(tabs)/tasks.tsx")).toMatch(/provider === null[\s\S]{0,900}?push\("\/trackers"\)/);
   });
   test("the route exists", () => {

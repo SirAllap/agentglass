@@ -8,8 +8,8 @@
  * ordinary row.
  */
 import { describe, expect, test } from "bun:test";
-import { DETAIL_POLL_MS, JOBS_POLL_MS, byUrgency, foldJobLog, looksFailed, checksMoved, nextDetailPoll, nextJobsPoll, standingOf, tailOf } from "../src/model/checkJobs.ts";
-import type { PrCheckJob, PrCheckRollup } from "../../shared/types.ts";
+import { DETAIL_POLL_MS, JOBS_POLL_MS, byUrgency, foldJobLog, jobSquares, jobsLine, jobsPassedLine, looksFailed, checksMoved, nextDetailPoll, nextJobsPoll, runLine, runGroups, greenMeansLine, runSquares, runningCheckLine, standingOf, tailOf } from "../src/model/checkJobs.ts";
+import type { PrCheck, PrCheckJob, PrCheckRollup } from "../../shared/types.ts";
 
 const job = (over: Partial<PrCheckJob> = {}): PrCheckJob => ({
   id: "1", runId: "9", name: "test", status: "completed", conclusion: "success",
@@ -190,5 +190,119 @@ describe("did the checks move", () => {
     expect(checksMoved(roll(), roll({ pending: 1, success: 6 }))).toBe(true);
     expect(checksMoved(roll(), roll({ pending: 1, failure: 1 }))).toBe(true);
     expect(checksMoved(roll(), roll({ total: 8 }))).toBe(true);
+  });
+});
+
+/* The run as the mock draws it (screens 32 and 34). */
+const roll = (over: Partial<PrCheckRollup> = {}): PrCheckRollup => ({
+  total: 6, success: 6, failure: 0, skipped: 0, pending: 0, allDone: true, verdict: "green", failing: [], ...over,
+});
+
+describe("the run's own line", () => {
+  test("the denominator is the number a reader cannot get elsewhere", () => {
+    expect(runLine(roll({ total: 49, success: 48, pending: 1 }))).toBe("48 of 49 passed · 1 running");
+  });
+  test("a failure is named before the ones still going", () => {
+    expect(runLine(roll({ total: 4, success: 2, failure: 1, pending: 1 }))).toBe("2 of 4 passed · 1 failed · 1 running");
+  });
+  test("no checks at all is not zero of zero", () => {
+    expect(runLine(roll({ total: 0, success: 0 }))).toBe("No checks on this pull request");
+  });
+});
+
+describe("the Overview's strip (mock 32)", () => {
+  const check = (over: Partial<PrCheck>): PrCheck => ({
+    name: "test", workflow: "ci", state: "pending", done: false, ...over,
+  });
+
+  test("the chip counts what is not failing, over the whole run", () => {
+    expect(jobsPassedLine(roll({ total: 3, success: 2, pending: 1 }))).toBe("2 of 3 jobs passed");
+    // A skipped check is not a failure, so it counts as passed here as it
+    // does on the board's bar.
+    expect(jobsPassedLine(roll({ total: 2, success: 1, skipped: 1 }))).toBe("2 of 2 jobs passed");
+    expect(jobsPassedLine(roll({ total: 0, success: 0 }))).toBe("No checks");
+  });
+
+  test("the running line names the oldest job and how long it has been", () => {
+    const now = Date.parse("2026-11-04T12:04:00Z");
+    const line = runningCheckLine([
+      check({ name: "web", startedAt: "2026-11-04T12:03:00Z" }),
+      check({ name: "server tests", startedAt: "2026-11-04T12:00:00Z" }),
+      check({ name: "lint", state: "success", done: true, startedAt: "2026-11-04T11:00:00Z" }),
+    ], now);
+    expect(line).toBe("server tests · 4 min in");
+  });
+
+  test("nothing running is no line, not a stale one", () => {
+    expect(runningCheckLine([check({ state: "success", done: true, startedAt: "2026-11-04T11:00:00Z" })], 0)).toBeNull();
+    // A queued job has no start time: the name is all that can be said.
+    expect(runningCheckLine([check({ name: "web" })], 0)).toBe("web");
+  });
+});
+
+describe("the squares", () => {
+  test("red first, then running, then the rest, capped", () => {
+    expect(runSquares(roll({ total: 4, success: 1, failure: 2, pending: 1 }))).toEqual(["fail", "fail", "run", "pass"]);
+    expect(runSquares(roll({ total: 49, success: 49 }), 10).length).toBe(10);
+  });
+  test("a skipped check is not painted green", () => {
+    expect(runSquares(roll({ total: 2, success: 0, skipped: 2 }))).toEqual(["skip", "skip"]);
+  });
+  test("one square per job, and never more squares than jobs", () => {
+    const jobs = [
+      job({ id: "a", name: "build", conclusion: "failure" }),
+      job({ id: "b", name: "test", status: "in_progress", conclusion: null }),
+      job({ id: "c", name: "web" }),
+    ];
+    expect(jobSquares(jobs)).toEqual(["fail", "run", "pass"]);
+  });
+  test("the job line counts what is there", () => {
+    expect(jobsLine([
+      job({ id: "a", conclusion: "failure" }),
+      job({ id: "b", status: "in_progress", conclusion: null }),
+      job({ id: "c" }),
+    ])).toBe("3 jobs · 1 failed · 1 running · 1 passed");
+  });
+});
+
+describe("the run grouped by workflow (mock 41)", () => {
+  const check = (over: Partial<PrCheck>): PrCheck => ({
+    name: "test", workflow: "build", state: "success", done: true, ...over,
+  });
+
+  test("one row per workflow, in GitHub's order, with its own squares", () => {
+    const rows = runGroups([
+      check({ workflow: "build" }),
+      check({ workflow: "server", state: "pending" }),
+      check({ workflow: "build" }),
+    ]);
+    expect(rows.map((r) => r.name)).toEqual(["build", "server"]);
+    expect(rows[0]!.squares).toEqual(["pass", "pass"]);
+    expect(rows[0]!.word).toBe("passed");
+    expect(rows[1]!.word).toBe("1 running");
+  });
+
+  test("a failure is the word, even with a job still running", () => {
+    const rows = runGroups([
+      check({ workflow: "server", state: "pending" }),
+      check({ workflow: "server", state: "failure" }),
+    ]);
+    expect(rows[0]!.word).toBe("1 failed");
+    expect(rows[0]!.tone).toBe("failed");
+  });
+
+  test("a workflow whose checks were all skipped does not read as passed", () => {
+    const rows = runGroups([check({ workflow: "labels", state: "skipped" })]);
+    expect(rows[0]!.word).toBe("does not run");
+    expect(rows[0]!.squares).toEqual(["skip"]);
+  });
+
+  test("a check with no workflow stands under its own name", () => {
+    expect(runGroups([check({ workflow: "", name: "commit-lint" })])[0]!.name).toBe("commit-lint");
+  });
+
+  test("the skip line counts checks, not words", () => {
+    expect(greenMeansLine(49, 4)).toBe("Green means 45 checks, not 49");
+    expect(greenMeansLine(49, 0)).toBe("Green means all 49 checks");
   });
 });

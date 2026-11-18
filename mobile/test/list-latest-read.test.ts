@@ -11,7 +11,7 @@ import { describe, expect, test } from "bun:test";
 
 const screens = {
   prs: await Bun.file(new URL("../app/(tabs)/prs.tsx", import.meta.url)).text(),
-  issues: await Bun.file(new URL("../app/(tabs)/issues.tsx", import.meta.url)).text(),
+  issues: await Bun.file(new URL("../src/issues/IssueList.tsx", import.meta.url)).text(),
 };
 
 function loadBody(src: string): string {

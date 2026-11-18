@@ -355,11 +355,15 @@ describe("match the computer", () => {
   });
 
   test("it is what a new install gets, and what was stored stays", () => {
-    // Nothing is stored in a test process, so this is the shipped look.
-    expect(currentLook().mode).toBe("desk");
-    const fallback = { mode: "desk", accent: "teal" } as const;
+    // Nothing is stored in a test process, so this is the shipped look: the
+    // brand's violet, not the teal the app used to wear.
+    expect(currentLook()).toEqual({ mode: "desk", accent: "violet", polarity: "dark" });
+    const fallback = { mode: "desk", accent: "violet" } as const;
+    // A phone that chose its accent before the default moved keeps it — teal
+    // included, which is the whole point of shipping the change to NEW installs.
+    expect(sanitizeLook({ accent: "teal" }, fallback)).toEqual({ mode: "desk", accent: "teal" });
     expect(sanitizeLook({ mode: "dark", accent: "rose" }, fallback)).toEqual({ mode: "dark", accent: "rose" });
-    expect(sanitizeLook({ mode: "light" }, fallback)).toEqual({ mode: "light", accent: "teal" });
+    expect(sanitizeLook({ mode: "light" }, fallback)).toEqual({ mode: "light", accent: "violet" });
     expect(sanitizeLook({ mode: "desk", accent: "blue" }, fallback)).toEqual({ mode: "desk", accent: "blue" });
   });
 });

@@ -29,6 +29,8 @@ import { contrastRatio, deriveAnsi } from "../../../shared/termPalette.ts";
 
 export interface TerminalDocOptions {
   palette: Palette;
+  /** The cursor the phone chose in Settings; anything else draws a block. */
+  cursor?: "block" | "bar" | "underline";
   /**
    * How many COLUMNS to show, not how big the text is.
    *
@@ -127,7 +129,7 @@ export function counterTheme(palette: Palette): Record<string, string> {
  * backticks — not even in a comment. One in a prose aside closed the string and
  * produced a syntax error thirty lines further down, in code that was fine.
  */
-export function terminalDocument({ palette, columns }: TerminalDocOptions): string {
+export function terminalDocument({ palette, columns, cursor = "block" }: TerminalDocOptions): string {
   // Serialised rather than interpolated field by field, so a colour that is
   // somehow not a colour cannot become script.
   const theme = JSON.stringify(terminalTheme(palette));
@@ -297,6 +299,7 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
     fontFamily: FONT_STACK,
     theme: ${theme},
     cursorBlink: true,
+    cursorStyle: ${JSON.stringify(cursor === "bar" || cursor === "underline" ? cursor : "block")},
     // A phone scrolls with a thumb and the desk's own scrollback is right
     // there in tmux, so this is for the last few screens rather than history.
     scrollback: 2000,
@@ -493,10 +496,66 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
     if (term.cols !== wanted || term.rows !== rows) {
       try { term.resize(wanted, rows); } catch (e) { /* mid-teardown */ }
     }
+    // The cell may have moved under whatever this page painted; the boxes are
+    // positioned by row height, so a new size is a new layout for them too.
+    if (typeof paint === 'function') paint();
     if (term.cols === lastCols && term.rows === lastRows) return;
     lastCols = term.cols;
     lastRows = term.rows;
     post({ t: 'size', cols: term.cols, rows: term.rows });
+  };
+
+  /*
+   * ── lines this page painted itself ───────────────────────────────────────
+   *
+   * Search hits and the lines somebody picked to copy are both SETS, spread
+   * through the buffer: xterm's own selection is one contiguous range, which is
+   * the wrong shape for either. They also have to survive the WebGL renderer,
+   * which has no row elements to style — so they are absolutely positioned
+   * boxes over the grid, laid out again whenever the viewport or the cell moves.
+   *
+   * The colours are the page's own furniture rather than the pane's: the pane
+   * did not draw these, and the selection colour is already this client's.
+   */
+  var layer = document.createElement('div');
+  layer.id = 'agx-paint';
+  layer.style.cssText =
+    'position:absolute;left:8px;right:8px;top:0;bottom:0;z-index:4;pointer-events:none;overflow:hidden';
+  document.body.appendChild(layer);
+  var marksOn = [], markAt = -1, picked = [], selecting = false;
+  var paint = function () {
+    var cell = cellOf();
+    if (!cell || !cell.height) return;
+    var theme = term.options.theme || {};
+    var soft = theme.selectionBackground || 'rgba(128,128,128,0.25)';
+    var edge = theme.cursor || theme.foreground || '#888888';
+    var top = term.buffer.active.viewportY;
+    var rows = '';
+    var box = function (line, strong) {
+      var at = line - top;
+      if (at < 0 || at >= term.rows) return;
+      rows += '<div style="position:absolute;left:0;right:0;top:' + (at * cell.height)
+        + 'px;height:' + cell.height + 'px;background:' + soft
+        + (strong ? ';box-shadow:inset 3px 0 0 ' + edge : '') + '"></div>';
+    };
+    for (var i = 0; i < marksOn.length; i++) box(marksOn[i], marksOn[i] === markAt);
+    for (var j = 0; j < picked.length; j++) box(picked[j], true);
+    layer.innerHTML = rows;
+  };
+  // A thumb moving the pane moves the lines under these boxes. onScroll is
+  // xterm's own notification, so this follows every route the viewport moves by.
+  try { term.onScroll(function () { paint(); }); } catch (e) { /* older engine */ }
+
+  /** The buffer line under a finger, or -1 when the touch is not over a row. */
+  var lineAt = function (clientY) {
+    var cell = cellOf();
+    var element = term.element;
+    if (!cell || !cell.height || !element || typeof clientY !== 'number') return -1;
+    var box = element.getBoundingClientRect();
+    if (!box.height) return -1;
+    var row = Math.floor((clientY - box.top) / cell.height);
+    if (row < 0 || row >= term.rows) return -1;
+    return term.buffer.active.viewportY + row;
   };
 
   // Decode without TextDecoder: it is absent on some older WebViews and this
@@ -828,7 +887,10 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
   // And a slow backstop, for the one case neither of those covers: a pane that
   // changed while this page was asleep. Reading a buffer row costs nothing and
   // posting only happens when the text is actually different.
-  setInterval(reportLine, 1000);
+  // Not while the page is hidden: a locked phone left this tab mounted and the
+  // timer woke the WebView once a second for nothing (RN pauses JS; the page's
+  // own timers are not measured to pause).
+  setInterval(function () { if (!document.hidden) reportLine(); }, 1000);
 
   /*
    * A finger, turned into wheels, at the rate the PANE answers — but only when
@@ -1249,8 +1311,19 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
     lastY = null;
     if (Math.abs(vel) > FLICK) coast(vel);
     vel = 0;
-    // Short and still: somebody meant to touch the pane, not move it.
-    if (tapT && tapMoved <= TAP_SLOP && clockOf(e) - tapT <= TAP_MS) post({ t: 'tap' });
+    // Short and still: somebody meant to touch the pane, not move it. In select
+    // mode that touch names a LINE instead — the sheet above is asking which
+    // ones to copy, and opening the keyboard there would be answering a
+    // question nobody asked.
+    if (tapT && tapMoved <= TAP_SLOP && clockOf(e) - tapT <= TAP_MS) {
+      if (selecting) {
+        var touch = e.changedTouches && e.changedTouches[0];
+        var at = lineAt(touch ? touch.clientY : null);
+        if (at >= 0) post({ t: 'pick', line: at });
+      } else {
+        post({ t: 'tap' });
+      }
+    }
     tapT = 0;
   }, { passive: true });
   // Cancelled is the gesture being taken away, not released: no coast.
@@ -1367,7 +1440,8 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
     // that intermediate frame is a flash of the wrong palette.
     dressTimer = setTimeout(function () { dressTimer = null; dress(); }, 400);
   };
-  setInterval(dress, 1000);
+  // Same gate as the line backstop above: nothing to repaint behind a locked phone.
+  setInterval(function () { if (!document.hidden) dress(); }, 1000);
 
   // Four things wait on bytes: the typed line, a scroll probe wanting to know
   // what its notch did, a scroll request wanting to know the pane has answered,
@@ -1435,6 +1509,9 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
      * Then the pane is measured again, because whether the new set is the one
      * that goes on is a question about the pane and not about the phone.
      */
+    cursor: function (shape) {
+      term.options.cursorStyle = shape === 'bar' || shape === 'underline' ? shape : 'block';
+    },
     theme: function (next) {
       if (!next || !next.background) return;
       if ((lumOf(next.background) > LIGHT) !== (lumOf(OWN.background) > LIGHT)) ALT = OWN;
@@ -1444,6 +1521,9 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
       document.documentElement.style.background = next.background;
       document.body.style.background = next.background;
       dress();
+      // The marks are drawn in the theme's own selection colour, so they follow
+      // a colour change too.
+      paint();
     },
     /*
      * The numbers this page is drawing with, for something outside it to read.
@@ -1463,6 +1543,54 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
        xterm knows; the rows are only how one of its two renderers happens to
        draw it, and under WebGL they are not there at all. */
     screen: function () { return screenRows(); },
+
+    /*
+     * Everything this pane still holds, oldest first — the text a search reads.
+     *
+     * Answered as a message rather than a return value: the phone reaches this
+     * page by injection, which has no way to hand a value back, and the whole
+     * bridge already speaks one way for this (postMessage). The cap is a
+     * ceiling for a page configured with more scrollback than this app asks
+     * for (2000, plus the rows on screen); older lines live on the computer.
+     */
+    scrollback: function () {
+      var buffer = term.buffer.active;
+      var lines = [];
+      var limit = Math.min(buffer.length, 4000);
+      for (var i = 0; i < limit; i++) {
+        var line = buffer.getLine(i);
+        lines.push(line ? line.translateToString(true) : '');
+      }
+      post({ t: 'back', lines: lines });
+    },
+    /* Paint these buffer lines; "at" is the one the search is standing on.
+       Painting only, deliberately: a list that scrolled on every keystroke would
+       move the pane out from under somebody still typing the query. The jump is
+       theirs to make, and it is AGX.goto. */
+    marks: function (list, at) {
+      marksOn = [];
+      for (var i = 0; Array.isArray(list) && i < list.length; i++) {
+        if (typeof list[i] === 'number' && list[i] >= 0) marksOn.push(list[i]);
+      }
+      markAt = typeof at === 'number' ? at : -1;
+      paint();
+    },
+    /** Paint the lines picked in select mode. */
+    picks: function (list) {
+      picked = [];
+      for (var i = 0; Array.isArray(list) && i < list.length; i++) {
+        if (typeof list[i] === 'number' && list[i] >= 0) picked.push(list[i]);
+      }
+      paint();
+    },
+    /** Put the viewport on a buffer line, without marking it. */
+    goto: function (line) {
+      if (typeof line !== 'number' || line < 0) return;
+      try { term.scrollToLine(line); } catch (e) { /* mid-teardown */ }
+      paint();
+    },
+    /** Whether a tap on the pane picks a line or asks for the keyboard. */
+    select: function (on) { selecting = !!on; },
 
     metrics: function () {
       var cell = cellOf();

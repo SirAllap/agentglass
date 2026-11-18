@@ -1,13 +1,13 @@
 /*
  * One read of `/providers`, shared by everything that asks it a question —
- * "does this machine track work anywhere" (the bar) and "which tracker does
- * the Cards tab read" (the tab). Two hooks, one cache, because the second
- * question used to be answered by assuming ClickUp.
+ * "does this machine track work anywhere" (the pull-request screens) and
+ * "which sources does the Tasks pill offer" (the tab). Two hooks, one cache,
+ * because the second question used to be answered by assuming ClickUp.
  *
- * The bar mounts on every screen in the app, so this cannot be a fetch inside
- * a component: that would be one request per navigation, forever, for an
- * answer that changes when somebody connects a provider at their computer —
- * which is to say, about twice.
+ * The tab and the tab bar mount on every screen in the app, so this cannot be
+ * a fetch inside a component: that would be one request per navigation,
+ * forever, for an answer that changes when somebody connects a provider at
+ * their computer — which is to say, about twice.
  *
  * So it is a module-level cache with a hook over it, the shape
  * `web/src/lib/taskConnected.ts` already uses at the desk. Held for a minute
@@ -78,7 +78,7 @@ export function useTracksWork(host: Host | null): boolean | null {
 }
 
 /**
- * Which tracker the Cards tab reads from — see `taskProvider` for the rule.
+ * Which tracker the Tasks tab reads from — see `taskProvider` for the rule.
  *
  * `undefined` while nobody knows, so the tab can draw a spinner rather than
  * the wrong provider's empty state for a second; `null` when nothing is set up.

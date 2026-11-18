@@ -11,6 +11,8 @@
  * next "Load more", and a list that shrank under the loaded tail keeps the
  * tail. Both are cheaper than keeping a pull request that has left the list.
  */
+import { keepLoadedChecks } from "../../../shared/prMerge.ts";
+
 export interface PagedGroup<T extends { number: number }> {
   items: T[];
   total?: number;
@@ -19,22 +21,28 @@ export interface PagedGroup<T extends { number: number }> {
 }
 
 export function mergeFreshGroup<T extends { number: number }, G extends PagedGroup<T>>(was: G | undefined, fresh: G): G {
+  /* A refresh may add and it may correct, but it may not un-know: the second
+     pass fields the answer on screen already had (checks, size, review, the
+     tracker card) survive the fast pass that starts every read. The desktop
+     carries them the same way — see shared/prMerge.ts. */
+  const items = keepLoadedChecks(was?.items ?? [], fresh.items);
+  const next = items === fresh.items ? fresh : { ...fresh, items };
   // Same end-of-page cursor: nothing beyond page one was loaded.
-  if (!was || (was.cursor ?? null) === (fresh.cursor ?? null)) return fresh;
+  if (!was || (was.cursor ?? null) === (fresh.cursor ?? null)) return next;
   // No more rows than the fresh page: no later page was appended, so what was
   // known about paging is only what the first answer guessed. A cold list is
   // answered before GitHub has said whether a second page exists (no cursor),
   // and keeping that hid "Load more" for good. The reverse holds too: a fresh
   // answer that is itself cold (no total) knows nothing about paging, and does
   // not get to erase a cursor that was known.
-  if (was.items.length <= fresh.items.length && fresh.total !== undefined) return fresh;
-  const now = new Map(fresh.items.map((p) => [p.number, p] as const));
+  if (was.items.length <= fresh.items.length && fresh.total !== undefined) return next;
+  const now = new Map(next.items.map((p) => [p.number, p] as const));
   const had = new Set(was.items.map((p) => p.number));
-  const items = [
-    ...fresh.items.filter((p) => !had.has(p.number)),
+  const merged = [
+    ...next.items.filter((p) => !had.has(p.number)),
     ...was.items.flatMap((p, i) => (now.has(p.number) ? [now.get(p.number)!] : i >= fresh.items.length ? [p] : [])),
   ];
-  return { ...fresh, items, total: fresh.total ?? was.total, hasNext: was.hasNext, cursor: was.cursor };
+  return { ...next, items: merged, total: fresh.total ?? was.total, hasNext: was.hasNext, cursor: was.cursor };
 }
 
 /** Each fresh repository merged with the same repository as it was loaded. */

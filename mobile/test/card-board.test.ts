@@ -100,6 +100,66 @@ describe("Open / All and the counts", () => {
   });
 });
 
+describe("done-ness is the card's own fold, as on the desk", () => {
+  /* The view's `statuses` arrive deduped by NAME across the board's lists
+     (server/src/clickup.ts `statusesSeen`), so one list's type cannot stand in
+     for another's; the card carries its own list's fold. The desk's Open filter
+     is the same test: `t.statusKind !== "done"`
+     (web/src/components/TasksPanel.tsx). */
+  const rows = [
+    card({ id: "review", status: "Review", statusKind: "done" }),
+    card({ id: "todo", status: "To Do", statusKind: "open" }),
+  ];
+
+  test("a card whose own list calls its status done is not work you owe", () => {
+    expect(narrowed(rows, "", NO_CARD_FILTERS, true).map((c) => c.id)).toEqual(["todo"]);
+    expect(openAllView(rows, "", NO_CARD_FILTERS, false).counts).toEqual({ open: 1, all: 2 });
+  });
+
+  test("an unfinished card stays open even where another list calls that status closed", () => {
+    // "Shipped" is closed on one list and `other` on this card's own. The desk
+    // lists it under Open; hiding it behind "all done" is the failure.
+    const shipped = [
+      card({ id: "shipped", status: "Shipped", statusKind: "other" }),
+      card({ id: "todo", status: "To Do", statusKind: "open" }),
+    ];
+    expect(narrowed(shipped, "", NO_CARD_FILTERS, true).map((c) => c.id)).toEqual(["shipped", "todo"]);
+    expect(openAllView(shipped, "", NO_CARD_FILTERS, false).counts).toEqual({ open: 2, all: 2 });
+    expect(whyEmpty(shipped.slice(0, 1), "", NO_CARD_FILTERS, true)).toBeNull();
+  });
+
+  test("the sheet counts the same set, so its footer cannot disagree with the list", () => {
+    expect(scopeCards(rows, "", true).map((c) => c.id)).toEqual(["todo"]);
+    expect(shownCount(rows, f({ statuses: ["Review"] }), "", true)).toBe(0);
+  });
+});
+
+describe("a status spelled two ways is one status", () => {
+  /* One site may spell it "In Review" and another "In review". The desk merges
+     the two (web/src/lib/boardGroups.ts, `lower()`); so does every place here
+     that draws or compares the name, so a tick cannot drop the other card. */
+  const rows = [
+    card({ id: "1", status: "In Review" }),
+    card({ id: "2", status: "In review" }),
+  ];
+  const view: ListStatus[] = [{ status: "In Review", type: "custom", orderindex: 0, color: "#f0f" }];
+
+  test("one section, wearing the view's spelling and colour", () => {
+    const sections = cardSections(rows, view, true);
+    expect(sections).toHaveLength(1);
+    expect(sections[0]!.label).toBe("In Review");
+    expect(sections[0]!.color).toBe("#f0f");
+    expect(sections[0]!.cards.map((c) => c.id)).toEqual(["1", "2"]);
+  });
+
+  test("one checklist row counting both, so ticking it keeps both cards", () => {
+    expect(statusOptions(rows, view).map((s) => [s.status, s.count])).toEqual([["In Review", 2]]);
+    expect(narrowed(rows, "", f({ statuses: ["In Review"] }), false)).toHaveLength(2);
+    expect(narrowed(rows, "", f({ statuses: ["In review"] }), false)).toHaveLength(2);
+    expect(shownCount(rows, f({ statuses: ["In Review"] }), "", false)).toBe(2);
+  });
+});
+
 describe("the sheet's options", () => {
   test("statuses follow the list's own order, each with its count, and skip the empty ones", () => {
     const scope = scopeCards(cards, "", true);

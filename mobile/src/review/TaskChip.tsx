@@ -8,6 +8,10 @@
  * Every other chip on this row is a fact about the pull request; this one is a
  * door, and a door that looks like a label is a tap nobody makes.
  *
+ * Two doors stay in the app, and `model/cardDoor.ts` is what says whose the
+ * item is: a Jira key opens the Jira card, a ClickUp id the ClickUp one. An
+ * item named by an address the phone cannot draw is the one that leaves.
+ *
  * On a machine that tracks work nowhere, and on a pull request that names
  * nothing, this renders null — no chip, no gap, no placeholder. That case is
  * the majority and it has to feel deliberate rather than broken.
@@ -15,40 +19,50 @@
 import { useMemo } from "react";
 import { Pressable, Text } from "react-native";
 import { openHttp } from "../lib/openHttp.ts";
-import { chipFor, readTaskRef } from "../../../shared/taskref.ts";
+import { chipFor, readTaskRef, type JiraReach } from "../../../shared/taskref.ts";
 import { cardIdFromUrl } from "../model/cardFromUrl.ts";
+import { jiraKeyOf } from "../model/cardDoor.ts";
 import { C, RADIUS, SPACE, T } from "../theme.ts";
 
-export function TaskChip({ pr, tracked, onFind, onOpenCard }: {
+export function TaskChip({ pr, tracked, jira, onFind, onOpenCard, onOpenJira }: {
   pr: { headRefName?: string; title?: string; body?: string; url?: string };
   /** Whether anything is connected that could resolve a bare id — from the
    *  provider catalogue, never from a product name. Null while unknown. */
   tracked: boolean | null;
+  /** The connected Jira site's project keys, so a key can be read exactly.
+   *  Null when no site is connected: then a bare id is not Jira's. */
+  jira?: JiraReach | null;
   onFind: (query: string, label: string) => void;
   /** Given only when the connected board can draw a card itself: a link to one
    *  then opens here, with the way back to this pull request kept. */
   onOpenCard?: (id: string) => void;
+  /** The same for a Jira card, which the phone draws at `/jira/[key]`. */
+  onOpenJira?: (key: string) => void;
 }): React.ReactNode {
   const ref = useMemo(
-    () => readTaskRef(pr),
-    [pr.headRefName, pr.title, pr.body, pr.url],
+    () => readTaskRef(pr, jira ?? undefined),
+    [pr.headRefName, pr.title, pr.body, pr.url, jira],
   );
   const go = useMemo(() => chipFor(ref, tracked), [ref, tracked]);
   if (!ref || !go) return null;
 
+  const jiraKey = onOpenJira ? jiraKeyOf(ref, jira) : null;
   const cardId = "open" in go && onOpenCard ? cardIdFromUrl(go.open) : null;
   // A door that stays in the app carries no "leaves the app" mark.
-  const away = "open" in go && !cardId;
+  const away = "open" in go && !cardId && !jiraKey;
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={cardId
-        ? `Open card ${ref.label}, the item this pull request came from`
-        : away
-          ? `Open ${ref.label}, the item this pull request came from`
-          : `Find ${ref.label} in the cards on this machine`}
+      accessibilityLabel={jiraKey
+        ? `Open Jira card ${ref.label}, the item this pull request came from`
+        : cardId
+          ? `Open card ${ref.label}, the item this pull request came from`
+          : away
+            ? `Open ${ref.label}, the item this pull request came from`
+            : `Find ${ref.label} in the cards on this machine`}
       onPress={() => {
-        if (cardId) onOpenCard?.(cardId);
+        if (jiraKey) onOpenJira?.(jiraKey);
+        else if (cardId) onOpenCard?.(cardId);
         else if ("open" in go) openHttp(go.open);
         else onFind(go.find, ref.label);
       }}

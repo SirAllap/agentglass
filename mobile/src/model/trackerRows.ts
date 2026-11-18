@@ -5,13 +5,13 @@
  * The phone cannot connect a tracker (see use-tracks-work.ts), so this list is
  * a diagnosis and never a setup: each row says what the computer told us, in
  * words, because a missing Cards tab with no explanation reads as a bug in the
- * app. Jira is listed on purpose — somebody who uses it is looking for it, and
- * "not supported yet" is a better answer than a screen that never mentions it.
+ * app. Jira is a full row since Phase 4: the phone reads its board and cards,
+ * so "not supported yet" would now be a lie.
  */
 import { PROVIDERS, type ProviderStatus } from "../../../shared/providers.ts";
 import { setUp } from "./taskProviders.ts";
 
-export type TrackerBadge = "on" | "off" | "soon";
+export type TrackerBadge = "on" | "off";
 
 export interface TrackerRow {
   id: string;
@@ -25,7 +25,7 @@ const WHERE = "Connect it on the computer (Settings › Integrations).";
 export function trackerRows(statuses: ProviderStatus[] | null | undefined): TrackerRow[] {
   // ClickUp first: it is the one with a board, and the order the mocks show.
   const order = (id: string): number => (id === "clickup" ? 0 : 1);
-  const specs = PROVIDERS.filter((p) => p.kind === "task" && p.id !== "jira").sort((a, b) => order(a.id) - order(b.id));
+  const specs = PROVIDERS.filter((p) => p.kind === "task").sort((a, b) => order(a.id) - order(b.id));
   const rows: TrackerRow[] = specs.map((spec) => {
     const row = (badge: TrackerBadge, reason: string): TrackerRow => ({ id: spec.id, title: spec.title, badge, reason });
     const s = statuses?.find((p) => p.id === spec.id);
@@ -36,10 +36,6 @@ export function trackerRows(statuses: ProviderStatus[] | null | undefined): Trac
     }
     if (s.state === "missing-tool") return row("off", `The ${spec.dep ?? spec.id} tool is not installed on the computer.`);
     return row("off", `Not connected. ${WHERE}`);
-  });
-  rows.push({
-    id: "jira", title: "Jira", badge: "soon",
-    reason: "Not supported by agentglass yet, so there is no Cards tab for it.",
   });
   return rows;
 }
